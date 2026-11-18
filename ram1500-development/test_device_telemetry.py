@@ -54,5 +54,48 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     with self.assertRaises(ValueError):
       mod.RotatingWriter(Path("ignored"),max_bytes=10,keep=2)
 
+  # --- guards added in the Claude review (msgq slot eviction, parked-only, overhead) ---
+  def _fake_shm(self, folder, counts, prefix=None):
+    import struct
+    for service, n in counts.items():
+      p = mod.msgq_path(service, folder, prefix)
+      p.parent.mkdir(parents=True, exist_ok=True)
+      p.write_bytes(struct.pack("<Q", n) + b"\x00" * 64)  # header starts with uint64 num_readers
+
+  def test_reader_counts_read_only_and_missing_queue(self):
+    with tempfile.TemporaryDirectory() as folder:
+      self._fake_shm(folder, {"carState": 9, "can": 3})
+      before = {p: p.read_bytes() for p in Path(folder).iterdir()}
+      counts = mod.msgq_reader_counts(("carState", "can", "drivingModelData"), shm_dir=folder)
+      self.assertEqual(counts, {"carState": 9, "can": 3, "drivingModelData": None})
+      self.assertEqual(before, {p: p.read_bytes() for p in Path(folder).iterdir()})  # nothing written
+
+  def test_slot_preflight_blocks_eviction(self):
+    self.assertEqual(mod.slot_problems({"carState": 14, "can": 15, "x": None}), {"can": 15})
+    self.assertEqual(mod.slot_problems({"carState": 14}), {})  # 15th reader still fits
+
+  def test_openpilot_prefix_path(self):
+    self.assertEqual(mod.msgq_path("can", "/dev/shm", "abc").as_posix(), "/dev/shm/msgq_abc/can")
+    self.assertEqual(mod.msgq_path("can", "/dev/shm").as_posix(), "/dev/shm/msgq_can")
+
+  def test_parked_guard(self):
+    moving = {"service": "carState", "vEgo": 1.2}
+    self.assertIn("moving", mod.motion_stop_reason(moving))
+    self.assertIsNone(mod.motion_stop_reason(moving, allow_moving=True))
+    self.assertIsNone(mod.motion_stop_reason({"service": "carState", "vEgo": 0.0}))
+    self.assertIsNone(mod.motion_stop_reason({"service": "carState", "vEgo": None}))
+    self.assertIsNone(mod.motion_stop_reason({"service": "can", "vEgo": 9.0}))
+
+  def test_health_row_reports_own_overhead(self):
+    import time
+    row = mod.health_row(time.monotonic() - 1.0, time.process_time(), {"can": 5})
+    self.assertEqual(row["service"], "sidecar_health")
+    self.assertIsNotNone(row["cpuPercentOneCore"])
+    self.assertEqual(row["rows"], {"can": 5})
+
+  def test_gear_enum_recorded_as_text(self):
+    r = mod.record_for_message(event("carState", NS(vEgo=0.0, gearShifter="park", cruiseState=None)), "carState")
+    self.assertEqual(r["gearShifter"], "park")
+
 if __name__=="__main__":
   unittest.main()
