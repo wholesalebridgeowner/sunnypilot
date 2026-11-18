@@ -34,7 +34,7 @@ class AnalyzerTests(unittest.TestCase):
       FakeMessage(2_500_000_000,"onroadEvents",[NS(name="steerSaturated")]),
       FakeMessage(4_100_000_000,"onroadEvents",[NS(name="steerSaturated")]),
       FakeMessage(4_200_000_000,"controlsState",NS(desiredCurvature=.02,lateralControlState=FakeLateral())),
-      FakeMessage(4_300_000_000,"carOutput",NS(actuators=NS(steer=.4,steeringAngleDeg=2.0,torqueOutputCan=120))),
+      FakeMessage(4_300_000_000,"carOutput",NS(actuatorsOutput=NS(torque=.4,steeringAngleDeg=2.0,torqueOutputCan=120))),
     ]
   def test_sample_counts_distinct_from_episodes(self):
     result=module.analyze([Path("0/qlog.zst")],lambda _:self.messages,2,3)
