@@ -42,6 +42,9 @@ def describe(records, normal, parking):
             raise ValueError("records must be chronological")
         last_time = t
         if anchor is None:
+            # Same anchor as park_assist_phase_windows: the first valid CAN event.
+            if service not in ("can", "sendcan"):
+                continue
             anchor = t
         seconds = (t - anchor) / NS
         if a <= seconds < b:
@@ -111,10 +114,9 @@ def iter_scalar_events(files, schema):
             elif svc == "carOutput":
                 x = e.carOutput
                 yield int(e.logMonoTime),svc,{"torqueOutputCan":x.actuatorsOutput.torqueOutputCan}
-            else:
-                # Monotonic anchor must be shared with the CAN analysis; do not
-                # reset it to first carState message, as those can arrive later.
-                yield int(e.logMonoTime),"ignored",{}
+            elif svc in ("can", "sendcan") and len(getattr(e,svc)):
+                # Anchor both analysis tools to the first valid CAN-bearing event.
+                yield int(e.logMonoTime),svc,{}
 
 
 def main():
