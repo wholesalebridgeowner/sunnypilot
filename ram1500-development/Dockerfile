@@ -38,7 +38,8 @@ RUN ls -la /opt/sunnypilot/cereal/ && test -s /opt/sunnypilot/cereal/car.capnp &
 WORKDIR /opt/ram
 COPY . /opt/ram/
 RUN python -m unittest discover -s /opt/ram -p 'test_private_route_probe.py' -v \
-    && python -m unittest discover -s /opt/ram -p 'test_torque_limit_coverage.py' -v
+    && python -m unittest discover -s /opt/ram -p 'test_torque_limit_coverage.py' -v \
+    && python -m unittest discover -s /opt/ram -p 'test_torque_command_replay.py' -v
 
 # No daemon, HTTP port, uploads, or privileged device access.
 CMD ["python", "-u", "/opt/ram/private_route_probe.py"]
