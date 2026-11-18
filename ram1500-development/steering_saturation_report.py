@@ -158,6 +158,22 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
     episodes = grouped_episodes(event_ns)
     event_rows = []
     controller_times = source_times["controlsState"]
+
+    def source_at_event(kind, field_name, event_time):
+        """Most recent *source* sample at/before alert, with age checked at alert.
+
+        Do not reuse a source value already up to max_age_ms old when attached
+        to a controller record: the alert can occur another max_age_ms later.
+        Also do not ignore a fresh source recorded between controller and alert.
+        """
+        ix = bisect_right(source_times[kind], event_time) - 1
+        if ix < 0:
+            return None, None
+        source_time, source_row = streams[kind][ix]
+        age_ms = (event_time - source_time) / 1e6
+        return (number(source_row.get(field_name)) if age_ms <= max_age_ms else None,
+                round(age_ms, 3))
+
     for ep in episodes:
         # A future controller record may look closer to the alert than the
         # controlling state actually available at alert time. Never use it.
@@ -165,6 +181,10 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
         preceding = samples[ix] if ix >= 0 else None
         age_ms = (ep["startNs"] - preceding["monoTimeNs"])/1e6 if preceding is not None else None
         matched = age_ms is not None and age_ms <= max_age_ms
+        # Sensor and commanded-output freshness is measured at alert time,
+        # independently of the controller sample's age and sampling frequency.
+        alert_output, alert_output_age_ms = source_at_event("carOutput", "outputTorqueCan", ep["startNs"])
+        alert_eps, alert_eps_age_ms = source_at_event("carState", "steeringTorqueEps", ep["startNs"])
         window_ns = int(pre_event_window_ms * 1e6)
         start_ix = bisect_right(controller_times, ep["startNs"] - window_ns - 1)
         window = samples[start_ix:ix + 1] if ix >= start_ix else []
@@ -176,8 +196,12 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
             "precedingControllerAgeMs": round(age_ms, 3) if age_ms is not None else None,
             "controllerMatched": matched,
             "nearestControllerSaturated": preceding["lateralSaturated"] if matched else None,
-            "nearestOutputTorqueCan": preceding["outputTorqueCan"] if matched else None,
-            "nearestSteeringTorqueEps": preceding["steeringTorqueEps"] if matched else None,
+            # Legacy field names retained, but values now come from direct
+            # bounded, past-only source joins at the alert timestamp.
+            "nearestOutputTorqueCan": alert_output,
+            "nearestSteeringTorqueEps": alert_eps,
+            "outputTorqueCanAgeAtEventMs": alert_output_age_ms,
+            "steeringTorqueEpsAgeAtEventMs": alert_eps_age_ms,
             "precedingWindowMs": pre_event_window_ms,
             "precedingWindowControllerSamples": len(window),
             "precedingWindowSaturatedSamples": sum(s["lateralSaturated"] is True for s in window),
@@ -196,7 +220,8 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
                 "outputTorqueCan and steeringTorqueEps may have different scaling/calibration; DO NOT subtract or equate them.",
                 "A past-sample match within the specified age is not guaranteed to represent simultaneous ECU behavior.",
                 "Near limit refers to commanded LKAS CAN units, not actual steering motor capacity.",
-                "Event snapshots use the latest controller record at or before the event, never a future record; empty data is not interpreted as zero.",
+                "Event controller state uses the latest controller record at or before the event; steering command and EPS motor feedback are independently as-of joined at event time with freshness capped by maxAgeMs.",
+                "A present sensor age with a null value means the latest prior source observation is too old or invalid; source values after the event are never used.",
                 "The preceding event window counts observed controller samples; a missing sample is not interpreted as an unsaturated controller.",
             ]}
 
