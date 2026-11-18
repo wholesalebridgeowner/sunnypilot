@@ -164,6 +164,30 @@ def summarize(records: list[dict], read_results) -> dict:
     }
 
 
+def private_decode_failure_kind(path: Path, schema, *, segment: int) -> dict:
+    """Classify first failure without serializing any private event or exception."""
+    from ramtools.logio import event_to_record, read_log_bytes
+    data, decompress_error = read_log_bytes(path)
+    if decompress_error:
+        return {"context": "decompression", "failureType": "CompressedStreamError"}
+    count = 0
+    try:
+        for evt in schema.Event.read_multiple_bytes(data):
+            count += 1
+            if count > 5000:
+                return {"context": "not_reproduced_in_first_5000", "failureType": "unknown"}
+            try:
+                name = evt.which()
+                event_to_record(evt, segment)
+            except Exception as e:
+                safe = name if "name" in locals() and re.fullmatch(r"[A-Za-z0-9_]{1,48}", name) else "unknown"
+                return {"context": "event_field_decoding",
+                        "service": safe, "failureType": type(e).__name__}
+    except Exception as e:
+        return {"context": "capnp_event_framing", "failureType": type(e).__name__}
+    return {"context": "no_reproduced_failure", "failureType": "unknown"}
+
+
 def main() -> None:
     import boto3
     from botocore.config import Config
@@ -219,9 +243,11 @@ def main() -> None:
                     "zstd" if f.error and "zstd:" in f.error else
                     "other" if f.error else "none"),
             } for i, f in enumerate(read_results)]
+            diagnosis = private_decode_failure_kind(paths[0], schema, segment=segments[0])
             print("RAM_PRIVATE_COMFORT " + json.dumps({
                 "status": "incomplete_private_decode",
                 "files": health,
+                "firstFileFailure": diagnosis,
             }, sort_keys=True), flush=True)
             raise RuntimeError("private R-log decode incomplete")
         stage("summary")
