@@ -42,10 +42,10 @@ The opt-in script `device_telemetry.py` subscribes (never publishes) to existing
 Copy the two scripts to `/data/ram-diag/` — **not** into `/data/openpilot`, which would dirty the installed git tree
 and can be cleaned by the updater. Run them against the device's own `cereal`:
 ```bash
-cd /data/openpilot && PYTHONPATH=/data/openpilot python3 /data/ram-diag/device_telemetry.py --check-slots
-cd /data/openpilot && PYTHONPATH=/data/openpilot timeout 150 python3 /data/ram-diag/device_telemetry.py \
+cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py --check-slots
+cd /data/openpilot && PYTHONPATH=/data/openpilot timeout 150 /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py \
   --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
-python3 /data/ram-diag/summarize_can_capture.py /data/ram-telemetry/ram-telemetry-*.jsonl \
+/usr/local/venv/bin/python3 /data/ram-diag/summarize_can_capture.py /data/ram-telemetry/ram-telemetry-*.jsonl \
   --output /data/ram-telemetry/summary.json
 ```
 
@@ -118,6 +118,25 @@ Consequences for G3:
   subscribe to it; keep it that way.
 - Memory and disk headroom are adequate for a 2-minute, 8 MB-capped capture. CPU is already busy onroad, which is why the
   pass criterion caps the sidecar at 15 % of one core and it runs at `nice +10` below the real-time controls processes.
+
+## G3 run 1 (2026-11-17, parked, onroad) — stopped at start by a sidecar bug; no impact on driving processes
+- Pre-checks passed after one correction: the system `/usr/bin/python3` has no `capnp`; openpilot runs from
+  **`/usr/local/venv/bin/python3`** (3.12.3). All run commands must use that interpreter.
+- Scripts copied to `/data/ram-diag/` (mode 700), SHA-256 verified against the PR branch. Nothing under `/data/openpilot` touched.
+- `--check-slots` on the device read the real queue files (`/dev/shm/<service>`): `carState` 14/15, nothing to evict.
+- The capture then exited within its first poll: `KeyError` on `subs[sock]`. msgq's `Poller.poll()` returns **new**
+  socket wrapper objects, so the original loop (present since the first version of this script; missed in review) could
+  never find them. **Fixed:** poll as a wait, then drain every subscribed socket; regression test reproduces the device
+  error against the old loop. `--check-slots` no longer requires `--output-dir`; an exception now records its reason.
+- Watchdog result: `pandad`, `card`, `controlsd`, `selfdrived`, `loggerd` kept the **same PIDs** before/after. Reader
+  counts rose by exactly 1 on each of the 11 services (no eviction). `carState` is now 15/15, so the preflight correctly
+  blocks a second run until the Comma reboots.
+- Retry needs: a Comma reboot while parked (clears `/dev/shm`), ignition on until it is onroad again, then the same commands:
+```bash
+cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py --check-slots
+cd /data/openpilot && PYTHONPATH=/data/openpilot timeout 150 /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py \
+  --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
+```
 
 ## Next diagnostics improvements
 - Build DBC-backed offline decoding and compare raw-frame interpretations to `carState.steeringTorqueEps`, `carState.vEgo`, `carOutput.actuatorsOutput.torqueOutputCan`.
