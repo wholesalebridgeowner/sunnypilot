@@ -46,3 +46,29 @@ The source-pinned manifest is `ram1500-development/proposed_parameters.json`. Th
 No modification of active truck files, steering/braking/acceleration control code, EPS firmware, OEM ParkSense authorization, Comma/Panda safety model, CAN injection, speed-limit/gear-lockout behavior or hidden autonomous control from this proposal. No onroad diagnostics while the vehicle is moving.
 
 **Status:** Baseline and evaluation infrastructure implemented; **no numeric improvement claim or vehicle-writable candidate exists yet**. Next deliverable is an independently measured *offline* trial grid and comparison scores from eligible routes.
+
+
+## First concrete offline sensitivity trials — latency only
+
+The new `ramtools/parameter_experiments.py` generator takes the **configured 0.20-second steering actuator delay** and the separately observed **0.32-second learned lateral delay** and constructs a *noninstallable* sensitivity grid:
+
+| Hypothesis (seconds) | Provenance |
+|---|---|
+| **0.20** | Source-pinned configured baseline |
+| 0.23 | Interpolated sensitivity test |
+| 0.26 | Interpolated sensitivity test |
+| 0.29 | Interpolated sensitivity test |
+| **0.32** | Source-pinned observed learned value, **not** a validated actuator setting |
+
+**These are five hypotheses for isolated offline model replay, not five calibrated steering parameters and not a proposed road-use change.** They are NOT yet ranked by performance. This grid does not automatically fit route logs or validate steering stability; it provides deterministic input candidates for the next analysis.
+
+The tool revalidates `proposed_parameters.json` on each invocation, rejects changed EPS firmware or installed-source identity, refuses modified baseline authority, and emits `OFFLINE_HYPOTHESIS_NOT_INSTALLABLE` with `release=false`. The tool does **not** write a vehicle configuration file or enable model tuning on the Comma.
+
+Run off-device:
+
+```bash
+cd ram1500-development
+python -m ramtools.parameter_experiments proposed_parameters.json
+```
+
+The adjacent `tests/test_parameter_experiments.py` covers the five trial values, bad parameters, mismatched firmware, implausible learned delays, and all-other-candidates-null. GitHub CI runs those tests and the generator. Candidates for lateral acceleration factor, friction, lane-change behavior, ACC gap and low-speed authorization remain **numerically unspecified** until identifiable and reviewed; do not invent search ranges and then treat them as data.
