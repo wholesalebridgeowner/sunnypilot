@@ -72,3 +72,19 @@ Installed control settings read at the same time (context for log interpretation
 (stock torque controller; latAccelFactor 2.000, friction 0.050 placeholder confirmed in the device CarParams),
 `LagdToggle=1` with learned lateral delay 0.32 s (configured `steerActuatorDelay` 0.2 s), `Mads=1`,
 `DisengageOnAccelerator=1`, `BlinkerPauseLateralControl=1`, `openpilotLongitudinalControl=False`, `pcmCruise=True`.
+
+
+## Correction from owner: factory automatic parking is present and functional
+
+The owner explicitly confirms this truck **has factory automatic parking assistance that steers itself at parking speeds**. Treat this as a verified owner-reported vehicle capability, not an unproven option. Accordingly the EPS hardware and some **OEM-authorized control interface** demonstrably support zero-speed steering. Our unresolved question is whether the OEM park-assist control path is *the same CAN message/authorization mode* as lane-keeping assist or a distinct EPS operating mode.
+
+Do not equate `minEnableSpeed=14.5 m/s`, `minSteerSpeed=0.5 m/s`, EPS firmware `68466110AB`, or absence of `NO_MIN_STEERING_SPEED` with the motor's physical inability to steer at zero. These only characterize the supported **current Sunnypilot LKAS integration**, not the OEM park-assist controller's capability.
+
+### Next read-only experiment
+
+1. With the truck parked in a safe location and under the driver's supervision, record an **OEM automatic-parking session** using existing vehicle logger R-logs or passive Comma/Panda subscribers. No custom `sendcan`, ECU coding, firmware spoofing, harness reconfiguration or safety bypass.
+2. Compare synchronized CAN IDs, bus origin, EPS feedback, steering wheel angle, gear and park-assist activation during four phases: ordinary stationary steering, park-assist activation, self-steering maneuver and return to normal mode. Avoid including GPS/location and personal data in GitHub.
+3. Determine whether parking sends a separate actuation command/frame/mode, whether `0xA6` LKAS continues unchanged, and what distinguishes factory-authorized parking operation from normal LKAS. Presence or correlation of a CAN frame **does not** prove its command semantics or provide authorization to replay it.
+4. Separate park-assist capability evidence from the question of whether Comma can be *safely and officially authorized* to perform zero-speed LKAS. Consult OEM documentation/DBC and independent safety testing before even proposing a control change.
+
+**Engineering conclusion:** low-speed hardware capability is established by the factory feature; direct Comma zero-speed engagement is still unsupported and must not be implemented by spoofing parking messages or bypassing vehicle safety.
