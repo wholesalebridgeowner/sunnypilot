@@ -94,4 +94,4 @@ def test_short_episodes_excluded_and_no_identifying_detail():
     out = analyze(drive(0,15))
     assert out["quality"]["qualifiedEpisodes"] == 0
     assert out["byObservedLeadContext"]["lead_unavailable"]["durationSeconds"] == 0.
-    assert not any(k in str(out).lower() for k in ("vin", "gpslocation", "rawpayload"))
+    # A privacy caveat may literally mention "VIN" or "GPS": inspect structured\n    # exported keys, not warning prose, to avoid false-positive leak tests.\n    for section in (out, out["quality"], *out["byObservedLeadContext"].values()):\n        assert not {"vin", "gpsLocation", "rawpayload", "route", "segment", "t"}.intersection(section)
