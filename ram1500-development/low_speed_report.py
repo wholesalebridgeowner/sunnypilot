@@ -25,7 +25,9 @@ from pathlib import Path
 # Half-open bins in m/s. Do not label "zero steering": carState.vEgo
 # measures speed, not whether a steering command reached the EPS.
 SPEED_BINS = (
-    ("standstill_below_0p5_mps", 0.0, 0.5),
+    # Keep reported zero separate from a slowly moving vehicle.
+    ("reported_zero_mps", 0.0, 0.0),
+    ("rolling_below_0p5_mps", 0.0, 0.5),
     ("crawl_0p5_to_2_mps", 0.5, 2.0),
     ("low_2_to_14p5_mps", 2.0, 14.5),
     ("at_least_14p5_mps", 14.5, math.inf),
@@ -55,7 +57,10 @@ def boolean(value):
 def speed_bin(v):
     if v is None or v < 0:
         return None
-    return next((name for name, lo, hi in SPEED_BINS if lo <= v < hi), None)
+    if v == 0.0:
+        return "reported_zero_mps"
+    return next((name for name, lo, hi in SPEED_BINS[1:]
+                 if (lo < v < hi if lo == 0.0 else lo <= v < hi)), None)
 
 
 def eligible_rows(rows):
@@ -148,11 +153,17 @@ def analyze(rows, *, max_age_ms=150.0, command_deadband=0.0):
         "source": "read-only analyze_route.py CSV (no raw telemetry included)",
         "parameters": {"maxAgeMs": max_age_ms, "commandDeadbandNative": command_deadband},
         "rejectedRows": dict(rejected),
-        "speedBinsMps": {name: {"lowerInclusive": lo, "upperExclusive": hi if math.isfinite(hi) else None}
-                         for name, lo, hi in SPEED_BINS},
+        "speedBinsMps": {
+            "reported_zero_mps": {"equalTo": 0.0},
+            "rolling_below_0p5_mps": {"greaterThan": 0.0, "lessThan": 0.5},
+            "crawl_0p5_to_2_mps": {"lowerInclusive": 0.5, "upperExclusive": 2.0},
+            "low_2_to_14p5_mps": {"lowerInclusive": 2.0, "upperExclusive": 14.5},
+            "at_least_14p5_mps": {"lowerInclusive": 14.5, "upperExclusive": None},
+        },
         "bins": bins,
         "caveats": [
             "Counts are recorded carState samples, not seconds, independent maneuvers, or a proof of zero-speed engagement.",
+            "reported_zero_mps means vEgo was exactly 0.0 in the decoded record; it does not prove absolute physical immobility or EPS acceptance.",
             "Only at-or-before carControl/carOutput records no older than maxAgeMs can be associated with vehicle speed.",
             "carControl.latActive is the internal requested lateral-active flag, not proof an LKAS control bit was accepted.",
             "carOutput.actuatorsOutput.torqueOutputCan is requested native CAN output, NOT measured EPS actuation.",
