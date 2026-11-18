@@ -69,6 +69,9 @@ class Summary:
         self.segment_counts = Counter()
         self._last_auto_park = None
         self.park_episodes = ParkEpisodes()
+        # R-log services can be interleaved with non-monotonic logMonoTime.
+        # Buffer only privacy-minimized scalar observations for sorted as-of joins.
+        self._parking_scalars = []
         self.eps_status_by_auto_park = {"true": {"lkas": Counter(), "overlay": Counter()},
                                         "false": {"lkas": Counter(), "overlay": Counter()}}
 
@@ -82,10 +85,10 @@ class Summary:
         state = self.bins[idx]
         if name == "carState":
             obj = event.carState
-            self.park_episodes.update(sec, "carState", speed=valid_number(obj.vEgo),
-                                      angle=valid_number(obj.steeringAngleDeg),
-                                      driver_pressed=bool(obj.steeringPressed),
-                                      gear=str(obj.gearShifter))
+            self._parking_scalars.append((sec, "carState", {"speed":valid_number(obj.vEgo),
+                    "angle":valid_number(obj.steeringAngleDeg),
+                    "driver_pressed":bool(obj.steeringPressed),
+                    "gear":str(obj.gearShifter)}))
             for name_key, attr in (("speed", "vEgo"), ("angle", "steeringAngleDeg"), ("eps", "steeringTorqueEps")):
                 v = valid_number(getattr(obj, attr, None))
                 if v is not None:
@@ -100,11 +103,11 @@ class Summary:
             state["driverSteering"] += bool(obj.steeringPressed)
             state["gear"][str(obj.gearShifter)] += 1
         elif name == "carControl":
-            self.park_episodes.update(sec, "carControl", lat_active=bool(event.carControl.latActive))
+            self._parking_scalars.append((sec,"carControl",{"lat_active":bool(event.carControl.latActive)}))
             state["latActive"][str(event.carControl.latActive)] += 1
         elif name == "carOutput":
             v = valid_number(event.carOutput.actuatorsOutput.torqueOutputCan)
-            self.park_episodes.update(sec, "carOutput", comma_torque=v)
+            self._parking_scalars.append((sec,"carOutput",{"comma_torque":v}))
             if v is not None:
                 state["requested"].append(v)
         elif name in ("can", "sendcan"):
@@ -114,7 +117,7 @@ class Summary:
                 if name == "can":
                     flag = eps_auto_park_has_control(frame)
                     if flag is not None:
-                        self.park_episodes.update(sec, "eps", park_flag=flag)
+                        self._parking_scalars.append((sec,"eps",{"park_flag":flag}))
                         phase_name = "true" if flag else "false"
                         state["autoParkControl"][phase_name] += 1
                         # Historical installed DBC EPS_2:
@@ -145,6 +148,15 @@ class Summary:
                     self.events[key] += 1
 
     def result(self):
+        # Sort only small scalar rows, never whole CAN frames. Use at-or-before
+        # source observations and deterministic tie-breaking. Same-timestamp
+        # status ordering is observationally ambiguous; EPS flag last is
+        # conservative about assigning the activation instant.
+        priority={"carControl":0,"carOutput":1,"carState":2,"eps":3}
+        self.park_episodes = ParkEpisodes()
+        for when,stream,fields in sorted(self._parking_scalars,
+                                         key=lambda r:(r[0],priority[r[1]])):
+            self.park_episodes.update(when,stream,**fields)
         bins=[]
         for idx, row in sorted(self.bins.items()):
             if not row["speed"] and not row["angle"]:
