@@ -38,3 +38,37 @@ Before investigating firmware changes or actuator constraints, gather the truck'
 ### Independent issue: navigation-guided steering
 
 None of the Chrysler firmware logic above establishes navigation maneuver capability. It remains a separate model/planner/route-data/control validation effort; low-speed steering alone does not make turn-by-turn navigation safe or functional.
+
+## Passive evidence from the truck — collected by Claude, 2026-11-17 (read-only SSH, truck parked)
+Decoded on the Comma from `/data/params/d/CarParamsPersistent` and `CarParamsSP` with the device's own cereal; VIN not read
+out. Device runs `sunnypilot/sunnypilot@1f7233cb` (v0.10.1, prebuilt, clean tree — see `DEVICE_DIAGNOSTICS.md`).
+
+| Item requested above | Value on the truck | Consequence |
+|---|---|---|
+| 1. EPS firmware (`carFw`, ecu `eps`, 0x75A) | **`68466110AB`** | Prefix `6846` is above the `<= 6831` "older EPS steers to zero" rule, and the string is **not** one of `68273275AF/AG`, `68312176AE/AG`. |
+| 2. `0x4FF` in the fingerprint | **Not present** (`CarParamsSP.flags = 0`, so `NO_MIN_STEERING_SPEED` unset) | The flag-based zero-speed path does not apply. |
+| 3. Installed `minEnableSpeed` / `minSteerSpeed` / safety / flags | **14.5 m/s** / **0.5 m/s** / `chrysler`, param 1 (RAM_DT) / `CarParams.flags = 0`, `CarParamsSP.flags = 0` | Engagement requires ≥ 14.5 m/s (~32 mph) on this truck. |
+
+Other ECUs (part numbers only): fwdRadar `68475160AG`, combinationMeter `68453505AD`, srs `68500728AA`, abs `68728727AA`,
+engine `68500630AF`, transmission `68502994AD`.
+
+**Correction to the source basis above:** `df807f8` is the `opendbc_repo` submodule of this fork's April 2026 master
+(`sunnypilot/opendbc`), not the code the truck runs. In the installed build `1f7233cb`, the four-firmware
+`minEnableSpeed = 0` exception **does not exist at all** (it was added later), and the "older EPS steer to zero" result is
+overwritten to 0.5 m/s by sunnypilot's `_get_params_sp`. Verified by diffing the two trees (`interface.py`).
+
+**Behaviour in the installed build for this truck** (`carcontroller_ext.py:14-24` at `1f7233cb`): the LKAS control bit
+latches on only while passing 14.5–15.0 m/s, then stays on below that until the gear leaves Drive; openpilot stops
+lateral control below 0.5 m/s (`controlsd.py:112`). So after engaging above ~32 mph, steering commands continue down to
+~1 mph. Whether this EPS firmware *honours* torque at those speeds is not shown by configuration; it is visible in logs
+as `carControl.latActive` with low `vEgo` plus a responding `carState.steeringTorqueEps`. Full logs of drives since
+Nov 14 are on the device (the Nov 14 route itself has been rotated off), so this can be measured passively.
+
+**Bottom line for this truck:** no supported zero-speed engagement path exists for EPS `68466110AB` in either the
+installed build or this fork's master. Low-speed engagement stays a research question; nothing here justifies
+spoofing a firmware string, injecting `0x4FF`, or changing limits.
+
+Installed control settings read at the same time (context for log interpretation): `NeuralNetworkLateralControl=0`
+(stock torque controller; latAccelFactor 2.000, friction 0.050 placeholder confirmed in the device CarParams),
+`LagdToggle=1` with learned lateral delay 0.32 s (configured `steerActuatorDelay` 0.2 s), `Mads=1`,
+`DisengageOnAccelerator=1`, `BlinkerPauseLateralControl=1`, `openpilotLongitudinalControl=False`, `pcmCruise=True`.
