@@ -174,3 +174,48 @@ def test_direction_on_exit_does_not_invalidate_stable_right_phase():
   phase=analyze(rows)["phaseWindows"]["laneChangeFinishing"]
   assert phase["counts"]["qualifiedWindows"]==1
   assert phase["qualifiedByDirection"]=={"right":1}
+
+
+def test_model_gap_midphase_cannot_manufacture_new_entry_from_resumed_fragment():
+  # The gap censors the original phase. Fresh kinematic observations after
+  # the gap cannot make the truncated tail a second completed maneuver.
+  models=[model(.0,"laneChangeStarting"),model(.1,"laneChangeStarting"),
+          model(1.0,"laneChangeStarting"),model(1.1,"laneChangeStarting"),
+          model(1.2,"laneChangeStarting"),model(1.4,"off",direction="none")]
+  cars=[cs(1.0,1),cs(1.1,3),cs(1.2,5),cs(1.3,2)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]["counts"]
+  assert counts["censoredByGapOrInvalidModel"]==1
+  assert counts.get("qualifiedWindows",0)==0
+
+
+def test_invalid_model_inside_phase_does_not_requalify_continuation():
+  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=None),
+          model(.3,"laneChangeStarting"),model(.4,"laneChangeStarting"),
+          model(.5,"off",direction="none")]
+  cars=[cs(.3,1),cs(.4,3),cs(.45,5)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]["counts"]
+  assert counts["censoredByGapOrInvalidModel"]==1
+  assert counts.get("qualifiedWindows",0)==0
+
+
+def test_boundary_continuation_does_not_become_new_completed_phase():
+  models=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+          model(.3,"laneChangeFinishing",segment=31),
+          model(.4,"laneChangeFinishing",segment=31),
+          model(.5,"off",direction="none",segment=31)]
+  cars=[cs(.3,1,segment=31),cs(.4,2,segment=31),
+        cs(.45,3,segment=31)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
+  assert counts["censoredBySegmentBoundaryOrUnverified"]==1
+  assert counts.get("qualifiedWindows",0)==0
+
+
+def test_verified_exit_allows_subsequent_independent_lane_phase():
+  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
+          model(.3,"laneChangeStarting"),model(.4,"off",direction="none"),
+          model(.5,"laneChangeStarting"),model(.6,"laneChangeStarting"),
+          model(.7,"off",direction="none")]
+  cars=[cs(.5,1),cs(.55,2),cs(.6,3),cs(.65,4)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]["counts"]
+  assert counts["censoredByGapOrInvalidModel"]==1
+  assert counts["qualifiedWindows"]==1
