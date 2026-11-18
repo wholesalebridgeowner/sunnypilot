@@ -31,7 +31,13 @@ def _pct(values, q):
     return round(xs[lower] + (xs[min(lower + 1, len(xs) - 1)] - xs[lower]) * (at - lower), 3)
 
 
-def _lead_label(t, radar, times, max_radar_age_s):
+def _lead_label(t, segment, radar_index, max_radar_age_s):
+    # Segment provenance is mandatory. A fresh radar frame from the previous
+    # segment is NOT a verified observation within this segment.
+    scoped = radar_index.get(segment)
+    if scoped is None:
+        return "lead_unavailable"
+    radar, times = scoped
     i = bisect_right(times, t) - 1
     if i < 0 or (t - times[i]) / NS > max_radar_age_s:
         return "lead_unavailable"
@@ -98,7 +104,20 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
                      and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
     radar = sorted((r for r in records if r.get("service") == "radarState"
                     and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
-    times = [r["t"] for r in radar]
+    # Index within segments before as-of joins: cross-segment radar reuse can
+    # manufacture apparently continuous lead context at a log boundary.
+    radar_by_segment = defaultdict(list)
+    unscoped_radar_rows = 0
+    for r in radar:
+        segment = r.get("segment")
+        if type(segment) is int and segment >= 0:
+            radar_by_segment[segment].append(r)
+        else:
+            unscoped_radar_rows += 1
+    radar_index = {
+        seg: (rows, [r["t"] for r in rows])
+        for seg, rows in radar_by_segment.items()
+    }
     rejects = Counter()
     episodes = []
     current = []
@@ -134,7 +153,7 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             close()
             previous = None
             continue
-        label = _lead_label(t, radar, times, max_radar_age_s)
+        label = _lead_label(t, r["segment"], radar_index, max_radar_age_s)
         if previous is not None:
             dt = (t - previous["t"]) / NS
             if (dt <= 0 or dt > max_state_gap_s or
@@ -163,7 +182,9 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
     return {
         "status": "observed_longitudinal_not_throttle_or_acc_target",
         "source": "pinned_log_carState.aEgo_and_observational_radarState",
-        "quality": {"carStateRows": len(states), "excludedRowsByReason": dict(rejects),
+        "quality": {"carStateRows": len(states), "radarStateRows": len(radar),
+                    "unscopedRadarRows": unscoped_radar_rows,
+                    "excludedRowsByReason": dict(rejects),
                     "continuousCandidateRuns": len(episodes),
                     "qualifiedEpisodes": len(accepted),
                     "minimumEpisodeSeconds": minimum_episode_s,
@@ -188,6 +209,8 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             "Raw jerk is noisy; windowed median-bin derivative is an observational proxy, not a vehicle jerk rating.",
             "Disengagement, manual pedal use, invalid CAN/vehicle data and discontinuous segments are excluded, not joined.",
             "A qualifying episode is one correlated time interval, not an independent experiment or validated control target.",
+            "Radar observations must match the carState segment. An absent, stale or unscoped radar sample is unavailable.",
+            "Callers must supply a single recorded route; segment numbers are only unique within one route.",
             "No per-sample timestamps, segment identities, VIN, GPS or raw CAN are exported.",
         ],
     }
