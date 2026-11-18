@@ -64,6 +64,7 @@ def audit(rows, *, start=1800.0, end=1807.0, max_source_age_ms=80.0,
         stream.sort(key=lambda pair: pair[0])
     stamps = {k: [t for t, _ in v] for k, v in streams.items()}
     counts = Counter()
+    phase_identifiability = Counter()
     mismatch_control_age = Counter()
     mismatch_state_age = Counter()
     match_control_age = Counter()
@@ -112,6 +113,49 @@ def audit(rows, *, start=1800.0, end=1807.0, max_source_age_ms=80.0,
             counts["ineligibleLatestSource"] += 1
             continue
         counts["eligibleChangedOutput"] += 1
+        # Identifiability audit: score ALL eligible output changes, including
+        # baseline matches. Retrospective fits to older control observations
+        # otherwise risk making a 22/22 result look uniquely explanatory.
+        # Hold the latest preceding EPS sample fixed, varying only earlier
+        # distinct-timestamp control observations inside the causal age bound.
+        earlier_predictions = []
+        latest_request = number(cc[0][1].get("requestedTorque"))
+        for _, earlier_control in cc[1:]:
+            predicted = candidate(earlier_control, cs[0][1], previous)
+            if predicted is not None:
+                earlier_predictions.append((
+                    predicted, number(earlier_control.get("requestedTorque"))))
+        predictions = [baseline] + [p for p, _ in earlier_predictions]
+        fit_count = sum(abs(p - observed) <= tolerance for p in predictions)
+        phase_identifiability["eligibleChangedOutputs"] += 1
+        phase_identifiability["olderControlCandidatesEvaluated"] += len(earlier_predictions)
+        if earlier_predictions:
+            phase_identifiability["outputsWithOlderControlOptions"] += 1
+            if len(set(predictions)) > 1:
+                phase_identifiability["outputsWithDistinctPredictedCommands"] += 1
+            else:
+                phase_identifiability["allControlOptionsPredictSameCommand"] += 1
+            if any(p == baseline and r is not None and
+                   r != latest_request for p, r in earlier_predictions):
+                phase_identifiability["differentRequestsSamePredictedCommand"] += 1
+        else:
+            phase_identifiability["outputsWithoutOlderControlOptions"] += 1
+        if fit_count == 0:
+            phase_identifiability["noControlOptionFits"] += 1
+        elif fit_count == 1:
+            phase_identifiability["oneControlOptionFits"] += 1
+        else:
+            phase_identifiability["multipleControlOptionsFit"] += 1
+        if abs(baseline - observed) <= tolerance:
+            if fit_count >= 2:
+                phase_identifiability["baselineFitsWithOlderAlternative"] += 1
+            else:
+                phase_identifiability["baselineFitsWithoutOlderAlternative"] += 1
+        else:
+            if fit_count:
+                phase_identifiability["baselineMissOlderAlternativeFits"] += 1
+            else:
+                phase_identifiability["baselineMissNoOlderAlternativeFits"] += 1
         control_age_bin = age_bin((when - cc[0][0]) / 1e6)
         state_age_bin = age_bin((when - cs[0][0]) / 1e6)
         if abs(baseline - observed) <= tolerance:
@@ -151,6 +195,7 @@ def audit(rows, *, start=1800.0, end=1807.0, max_source_age_ms=80.0,
                        "maxOutputGapMs": max_output_gap_ms, "olderSamplesPerStream": max_older,
                        "matchToleranceNative": tolerance},
         "counts": dict(counts),
+        "controlPhaseIdentifiability": dict(phase_identifiability),
         "baselineMatchesByControlAge": dict(match_control_age),
         "baselineMismatchesByControlAge": dict(mismatch_control_age),
         "baselineMismatchesByStateAge": dict(mismatch_state_age),
@@ -159,6 +204,9 @@ def audit(rows, *, start=1800.0, end=1807.0, max_source_age_ms=80.0,
         "caveats": [
             "Historical torque limits are not verified against the installed runtime.",
             "Retrospective older-input match can occur by chance; it is not proof of controller phase.",
+            "Control-phase fit counts test the latest plus bounded earlier control observations with latest preceding EPS fixed; alternatives are not equally likely.",
+            "Rate or EPS-software clipping may cause different requests to yield identical native commands, making phase unidentifiable.",
+            "One matching candidate does not prove controller timing: intermediate controls may be unlogged and the historical model may differ.",
             "Alternate inputs are at or before observed output time and inside age bounds.",
             "No LKAS latch, internal update phase, CAN acknowledgment, or EPS acceptance captured.",
             "Aggregate counts only; no absolute timestamps, GPS, raw CAN or vehicle identifiers.",
