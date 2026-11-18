@@ -41,6 +41,9 @@ def message_record(msg):
       r[k]=get(p,k)
     for k in ("available","enabled","speed","standstill"):
       r["cruise_"+k]=get(p,"cruiseState",k)
+  elif typ=="carParams":
+    r["openpilotLongitudinalControl"]=get(p,"openpilotLongitudinalControl")
+    r["pcmCruise"]=get(p,"pcmCruise")
   elif typ=="carControl":
     r.update(longActive=get(p,"longActive"),latActive=get(p,"latActive"),
              requestedAccel=get(p,"actuators","accel"),
@@ -74,7 +77,7 @@ def message_record(msg):
     r["selfdrive_enabled"]=get(p,"enabled")
   return r
 
-STREAMS={"carState","carControl","carOutput","radarState","longitudinalPlan","drivingModelData","selfdriveState"}
+STREAMS={"carState","carControl","carOutput","carParams","radarState","longitudinalPlan","drivingModelData","selfdriveState"}
 
 def summarize(records, max_gap=.35):
   rows=sorted(records,key=lambda x:x["seconds"])
@@ -92,6 +95,7 @@ def summarize(records, max_gap=.35):
   driver_pedal_samples=0
   previous_lc=(None,None)
   current_transition=None
+  vehicle_config=Counter()
   control_long_active=Counter()
   plan_sources=Counter()
   for row in rows:
@@ -109,18 +113,22 @@ def summarize(records, max_gap=.35):
           if .03<=delta_t<=.3:
             observed_longitudinal_jerk.append((row["aEgo"]-last_accel["aEgo"])/delta_t)
         last_accel={"seconds":row["seconds"],"aEgo":row["aEgo"]}
+    elif typ=="carParams":
+      vehicle_config[f"openpilotLongitudinalControl={row.get('openpilotLongitudinalControl')},pcmCruise={row.get('pcmCruise')}"]+=1
     elif typ=="radarState":
       last_state["radarState"]=row
       lead_valid=row.get("leadOne_status") is True
       state=last_state.get("carState")
       age=row["seconds"]-state["seconds"] if state else None
-      if lead_valid and state and age is not None and 0<=age<=max_gap and finite(row.get("leadOne_dRel")) and finite(state.get("vEgo")) and state["vEgo"]>2:
+      if lead_valid and state and age is not None and 0<=age<=max_gap and finite(row.get("leadOne_dRel")) and row["leadOne_dRel"]>0 and finite(state.get("vEgo")) and state["vEgo"]>2:
         gaps.append({"seconds":round(row["seconds"]-first,3),
                      "dRel_m":row["leadOne_dRel"],
                      "vEgo_mps":state["vEgo"],
                      "timeGap_seconds":row["leadOne_dRel"]/state["vEgo"],
                      "vRel_mps":row.get("leadOne_vRel"),
-                     "sourceRadar":row.get("leadOne_radar")})
+                     "sourceRadar":row.get("leadOne_radar"),
+                     "cruiseEnabled":state.get("cruise_enabled"),
+                     "driverPedalActive":state.get("gasPressed") is True or state.get("brakePressed") is True})
     elif typ=="carControl":
       control_long_active[str(row.get("longActive"))]+=1
     elif typ=="longitudinalPlan":
@@ -137,6 +145,7 @@ def summarize(records, max_gap=.35):
     current_transition["endSeconds"]=round(last-first,3)
     lane_changes.append(current_transition)
   valid_gaps=sorted(g["timeGap_seconds"] for g in gaps if finite(g["timeGap_seconds"]) and 0<=g["timeGap_seconds"]<=20)
+  cruise_gaps=sorted(g["timeGap_seconds"] for g in gaps if g["cruiseEnabled"] is True and g["driverPedalActive"] is False and finite(g["timeGap_seconds"]) and 0<=g["timeGap_seconds"]<=20)
   def percentile(values,p):
     if not values:return None
     idx=(len(values)-1)*p
@@ -158,6 +167,7 @@ def summarize(records, max_gap=.35):
     "messages":len(rows),"streamCounts":dict(counts),
     "durationSeconds":round(last-first,2) if first is not None else None,
     "longitudinalActiveSamples":dict(control_long_active),
+    "carParamsConfigurationSamples":dict(vehicle_config),
     "cruiseEnabledCarStateSamples":cruise_enabled_samples,
     "driverPedalPressedCarStateSamples":driver_pedal_samples,
     "observedLongitudinalJerk":{"samples":len(jerk_abs),"medianAbsMetersPerSecondCubed":percentile(jerk_abs,.5),"p90AbsMetersPerSecondCubed":percentile(jerk_abs,.9),
@@ -167,6 +177,7 @@ def summarize(records, max_gap=.35):
                    "medianSeconds":percentile(valid_gaps,.5),
                    "p10Seconds":percentile(valid_gaps,.1),
                    "p90Seconds":percentile(valid_gaps,.9),
+                   "cruiseNoDriverPedals":{"matchedSamples":len(cruise_gaps),"medianSeconds":percentile(cruise_gaps,.5),"p10Seconds":percentile(cruise_gaps,.1),"p90Seconds":percentile(cruise_gaps,.9)},
                    "warning":"RadarState lead may be model-derived (radarUnavailable on Ram port). Time gap is distance/speed only, not a factory ACC target or a comfort score."},
     "laneChangeTransitions":lane_changes,
     "laneChangeStartingWindows":turning,
