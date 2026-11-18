@@ -125,6 +125,7 @@ def main():
     import eps_feedback_lag
     import torque_limit_coverage
     import torque_command_replay
+    import torque_replay_phase_audit
 
     env = os.environ
     required = ("S3_BUCKET", "S3_ENDPOINT", "S3_ACCESS_KEY_ID",
@@ -183,9 +184,12 @@ def main():
                 begin_seconds=1800.0, end_seconds=1807.0)
         command_replay = torque_command_replay.analyze(result["rows"],
                 start=1800.0, end=1807.0)
+        phase_audit = torque_replay_phase_audit.audit(result["rows"],
+                start=1800.0, end=1807.0)
+        summary = summarize(result, steering, coverage, eps, torque_window, cap_audit, command_replay)
+        summary["commandReplayPhaseSensitivity"] = phase_audit
         print("RAM_PRIVATE_PROBE " + json.dumps(
-            summarize(result, steering, coverage, eps, torque_window, cap_audit, command_replay),
-            separators=(",", ":"), allow_nan=False), flush=True)
+            summary, separators=(",", ":"), allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":
