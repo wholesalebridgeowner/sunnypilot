@@ -58,10 +58,11 @@ class ParkEpisodes:
                         state["freshCommaTorqueSamples"] += 1
                         if abs(v) > 0:
                             state["nonzeroCommaTorqueSamples"] += 1
-                if speed is not None and angle is not None and -0.1 <= speed <= NEAR_STOP_SPEED_MS:
+                sv, av = _number(speed), _number(angle)
+                if sv is not None and av is not None and -0.1 <= sv <= NEAR_STOP_SPEED_MS:
                     state["nearStopSamples"] += 1
-                    state["stoppedAngleMin"] = min(state["stoppedAngleMin"],angle)
-                    state["stoppedAngleMax"] = max(state["stoppedAngleMax"],angle)
+                    state["stoppedAngleMin"] = min(state["stoppedAngleMin"],av)
+                    state["stoppedAngleMax"] = max(state["stoppedAngleMax"],av)
                     if driver_pressed is True:
                         state["steeringPressedNearStopSamples"] += 1
         elif stream == "carControl":
