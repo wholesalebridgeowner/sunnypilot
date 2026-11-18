@@ -1,5 +1,6 @@
 """Synthetic read-only tests: no device, log, VIN, payload or route identifiers."""
 from ramtools.acc_motion_integrity import analyze
+from ramtools.input_scope import require_one_route
 
 N = 1_000_000_000
 
@@ -125,3 +126,22 @@ def test_radar_without_segment_is_unavailable_not_joinable():
     assert out["quality"]["unscopedRadarRows"] == 31
     assert out["byObservedLeadContext"]["lead_unavailable"]["episodeCount"] == 1
     assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+
+def test_one_route_gate_accepts_multiple_segments_of_same_route():
+    first = "00000000--aaaaaaaaaa--29/rlog.zst"
+    second = "00000000--aaaaaaaaaa--30/rlog.zst"
+    assert len(require_one_route([first, second])) == 2
+
+
+def test_one_route_gate_rejects_other_routes_or_missing_provenance():
+    good = "00000000--aaaaaaaaaa--29/rlog.zst"
+    wrong_route = "00000000--bbbbbbbbbb--30/rlog.zst"
+    for paths in ([good, wrong_route], [good, "unknown.rlog.zst"], []):
+        try:
+            require_one_route(paths)
+        except ValueError as exc:
+            # Privacy gate messages should never include route tokens.
+            assert "aaaaaaaaaa" not in str(exc)
+            assert "bbbbbbbbbb" not in str(exc)
+        else:
+            raise AssertionError("Mixed or unidentified route accepted")
