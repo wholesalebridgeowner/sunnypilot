@@ -13,8 +13,8 @@ from pathlib import Path
 
 STREAMS = {"carState", "carControl", "carOutput", "controlsState", "liveTorqueParameters", "selfdriveState"}
 COLUMNS = ("seconds", "monoTimeNs", "stream", "valid", "event", "vEgo_mps", "steeringAngleDeg",
-           "steeringTorque", "steeringTorqueEps", "steeringPressed", "requestedSteer",
-           "requestedSteeringAngleDeg", "outputSteer", "outputTorqueCan", "outputSteeringAngleDeg",
+           "steeringTorque", "steeringTorqueEps", "steeringPressed", "requestedTorque",
+           "requestedSteeringAngleDeg", "outputTorque", "outputTorqueCan", "outputSteeringAngleDeg",
            "lateralState", "lateralActive", "lateralOutput", "lateralError",
            "lateralSaturated", "actualLateralAccel", "desiredLateralAccel",
            "desiredCurvature", "liveTorqueValid", "latAccelFactorFiltered",
@@ -41,10 +41,10 @@ def timeline(msg, kind):
       row[out] = field(p,key)
   elif kind in ("carControl","carOutput"):
     prefix = "requested" if kind == "carControl" else "output"
-    row[prefix+"Steer"] = field(p,"actuators","steer")
-    row[prefix+"SteeringAngleDeg"] = field(p,"actuators","steeringAngleDeg")
+    row[prefix+"Torque"] = field(p,"actuators" if kind=="carControl" else "actuatorsOutput","torque")
+    row[prefix+"SteeringAngleDeg"] = field(p,"actuators" if kind=="carControl" else "actuatorsOutput","steeringAngleDeg")
     if kind == "carOutput":
-      row["outputTorqueCan"] = field(p,"actuators","torqueOutputCan")
+      row["outputTorqueCan"] = field(p,"actuatorsOutput","torqueOutputCan")
   elif kind == "controlsState":
     row["desiredCurvature"] = field(p, "desiredCurvature")
     try:
