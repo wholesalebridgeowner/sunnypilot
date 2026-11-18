@@ -208,6 +208,21 @@ def main() -> None:
         records, read_results = load_records(paths, schema)
         if len(read_results) != len(segments) or any(
                 f.error or f.truncated or f.messages == 0 for f in read_results):
+            # Never log path, private object key, per-frame content or the
+            # untrusted exception text (it may contain identifiers).
+            health = [{
+                "fileOrdinal": i,
+                "decodedMessages": int(f.messages),
+                "truncated": bool(f.truncated),
+                "errorCategory": (
+                    "capnp" if f.error and "capnp:" in f.error else
+                    "zstd" if f.error and "zstd:" in f.error else
+                    "other" if f.error else "none"),
+            } for i, f in enumerate(read_results)]
+            print("RAM_PRIVATE_COMFORT " + json.dumps({
+                "status": "incomplete_private_decode",
+                "files": health,
+            }, sort_keys=True), flush=True)
             raise RuntimeError("private R-log decode incomplete")
         stage("summary")
         payload = summarize(records, read_results)
