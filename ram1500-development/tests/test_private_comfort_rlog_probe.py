@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from private_comfort_rlog_probe import (
-    PINNED_COMMIT, parse_segments, pinned_recorded_build, select_keys, summarize,
+    PINNED_COMMIT, parse_segments, pinned_recorded_build, public_lane_summary,
+    select_keys, summarize,
 )
 
 PREFIX = "aabbccdd"
@@ -96,3 +97,17 @@ def test_unknown_recorded_build_is_never_misreported_as_verified():
     assert not out["provenance"]["recordedCommitMatchedPinned"]
     assert out["quality"]["selectedFiles"] == 0
     assert out["accMotionIntegrity"]["quality"]["qualifiedEpisodes"] == 0
+
+
+def test_model_direction_strings_are_whitelisted_before_stdout():
+    import json
+    out = public_lane_summary({
+        "modelSamples": 1,
+        "phaseWindows": {"laneChangeStarting": {
+            "counts": {"qualifiedWindows": 123},
+            "qualifiedByDirection": {"SECRET_VIN_OR_LOCATION": 7, "left": 2},
+        }},
+    })
+    assert "SECRET_VIN_OR_LOCATION" not in json.dumps(out)
+    assert out["phaseWindows"]["laneChangeStarting"]["qualifiedByDirection"]["other"] == 7
+    assert out["phaseWindows"]["laneChangeStarting"]["qualifiedByDirection"]["left"] == 2
