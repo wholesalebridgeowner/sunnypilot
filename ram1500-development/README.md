@@ -51,7 +51,8 @@ No CAN commands, firmware edits, or vehicle access are involved.
 Example **only in a private, schema-compatible checkout** with local logs:
 ```sh
 python3 ram1500-development/analyze_route.py /private/route/*/qlog.zst \
-  --focus-seconds 0 --window 999999 --output-prefix /private/ram-full-route
+  --expected-segments 51 --focus-seconds 0 --window 999999 \
+  --output-prefix /private/ram-full-route
 python3 ram1500-development/low_speed_report.py /private/ram-full-route.csv \
   --output /private/ram-low-speed.json
 ```
