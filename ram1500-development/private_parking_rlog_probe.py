@@ -14,6 +14,7 @@ import os
 import tempfile
 
 from private_route_probe import select_keys, reader_from_cereal
+from park_assist_event_audit import ParkEpisodes
 
 TARGET_SEGMENTS = (11, 12)
 ROUTE_PREFIX = "000003dc"
@@ -67,6 +68,7 @@ class Summary:
         self.events = Counter()
         self.segment_counts = Counter()
         self._last_auto_park = None
+        self.park_episodes = ParkEpisodes()
         self.eps_status_by_auto_park = {"true": {"lkas": Counter(), "overlay": Counter()},
                                         "false": {"lkas": Counter(), "overlay": Counter()}}
 
@@ -80,6 +82,10 @@ class Summary:
         state = self.bins[idx]
         if name == "carState":
             obj = event.carState
+            self.park_episodes.update(sec, "carState", speed=valid_number(obj.vEgo),
+                                      angle=valid_number(obj.steeringAngleDeg),
+                                      driver_pressed=bool(obj.steeringPressed),
+                                      gear=str(obj.gearShifter))
             for name_key, attr in (("speed", "vEgo"), ("angle", "steeringAngleDeg"), ("eps", "steeringTorqueEps")):
                 v = valid_number(getattr(obj, attr, None))
                 if v is not None:
@@ -94,9 +100,11 @@ class Summary:
             state["driverSteering"] += bool(obj.steeringPressed)
             state["gear"][str(obj.gearShifter)] += 1
         elif name == "carControl":
+            self.park_episodes.update(sec, "carControl", lat_active=bool(event.carControl.latActive))
             state["latActive"][str(event.carControl.latActive)] += 1
         elif name == "carOutput":
             v = valid_number(event.carOutput.actuatorsOutput.torqueOutputCan)
+            self.park_episodes.update(sec, "carOutput", comma_torque=v)
             if v is not None:
                 state["requested"].append(v)
         elif name in ("can", "sendcan"):
@@ -106,6 +114,7 @@ class Summary:
                 if name == "can":
                     flag = eps_auto_park_has_control(frame)
                     if flag is not None:
+                        self.park_episodes.update(sec, "eps", park_flag=flag)
                         phase_name = "true" if flag else "false"
                         state["autoParkControl"][phase_name] += 1
                         # Historical installed DBC EPS_2:
@@ -192,6 +201,7 @@ class Summary:
             "canCandidateChanges":candidates[:45],
             "canFrameSummary":{"baseline":sum(normal.values()),"parkingCandidate":sum(parking.values())},
             "criticalEventCounts":dict(self.events),
+            "factoryControlEpisodes":self.park_episodes.finish(),
             "epsStateByAutoParkFlag": {state: {name: dict(counts) for name, counts in fields.items()}
                                        for state, fields in self.eps_status_by_auto_park.items()},
             "messageCountsBySegmentAndService":[{"segment":k[0],"service":k[1],"count":v}
