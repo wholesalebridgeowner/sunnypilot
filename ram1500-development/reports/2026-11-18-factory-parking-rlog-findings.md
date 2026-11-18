@@ -29,7 +29,16 @@ Private reanalysis deployment `e214cb58-0252-4cc0-b1d6-de7c23445d70` **SUCCESS**
 | **695–700 s** | **60 / 500** | **Factory auto-park control disabled** |
 | 700–780 s | 0 / subsequent ~8,000 | Not under factory parking control |
 
-The EPS reported factory auto-park control active for **approximately 15.6 seconds**, during the owner-identified low-speed maneuver. **Comma lateral control remained inactive and Comma native LKAS torque was zero throughout.** In the 690–695 s interval, 200 samples with reported speed ≤ 0.3 m/s spanned **354.1° of steering wheel angle**, while the factory control bit was active for that entire five-second bin.
+The EPS reported factory auto-park control active for **approximately 14.6 seconds**, during the owner-identified low-speed maneuver. **Comma lateral control remained inactive and Comma native LKAS torque was zero throughout.** In the 690–695 s interval, 200 samples with reported speed ≤ 0.3 m/s spanned **354.1° of steering wheel angle**, while the factory control bit was active for that entire five-second bin.
+
+**Additional independent EPS status cross-check:** a follow-up private analyzer deployment `b350eb55-3179-44f2-816a-9bf1feb44f48` decoded two further status fields from that same installed-build DBC `EPS_2`: `LKAS_STATE : 23|4@0+` (byte 2, bits 7–4) and `TORQUE_OVERLAY_STATUS : 6|4@0+` (byte 0, bits 6–3). The historical schema provides ordinal values but no verified enumeration for these modes.
+
+| Status field | Factory auto-park flag true (1,460 EPS frames) | Factory auto-park flag false (10,539 EPS frames) |
+|---|---|---|
+| `LKAS_STATE` | **value 1: 1,460 / 1,460** | value 0: 10,537; value 1: 2 |
+| `TORQUE_OVERLAY_STATUS` | **value 1: 1,460 / 1,460** | value 1: 3,518; value 3: 7,021 |
+
+The `LKAS_STATE` shift is another clearly measured EPS mode/status correlation during factory parking. Do not assign a human-readable meaning or third-party command recipe to these **ordinal** values without OEM definitions. The two residual inactive-flag samples with `LKAS_STATE=1` can represent near-edge timing; the audit did not infer causality from them. The counts agree with **approximately 14.6 seconds of the auto-park control bit enabled** at 100 Hz.
 
 **Important attribution correction:** later large steering changes at 700–705 s occurred **after the EPS auto-park control bit had switched off**; they must *not* be attributed to active factory automated steering. They may reflect driver-controlled maneuver completion or other steering activity. Similarly, high `steeringPressed` torque flags cannot by themselves establish hand contact or program cancellation.
 
