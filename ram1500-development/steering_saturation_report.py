@@ -81,14 +81,15 @@ def grouped_episodes(timestamps, gap_ns=1_000_000_000):
     return episodes
 
 
-def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSaturated"):
+def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSaturated", pre_event_window_ms=1000):
     """Align each controller-state sample with the most recent *earlier* source data.
 
+    Event snapshots also use only controller samples at or before event time.
     No interpolation or future sample look-ahead. Missing/stale fields remain null.
     Matching temporal validity is distinct from sensor/calibration validity.
     """
-    if max_age_ms <= 0 or steer_max_native <= 0:
-        raise ValueError("max_age_ms and steer_max_native must be positive")
+    if max_age_ms <= 0 or steer_max_native <= 0 or pre_event_window_ms <= 0:
+        raise ValueError("max_age_ms, steer_max_native, and pre_event_window_ms must be positive")
     streams = {kind: [] for kind in CORE}
     event_ns = []
     rejected = Counter()
@@ -156,19 +157,38 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
                              and abs(s["outputTorqueCan"]) >= .95 * steer_max_native for s in member)}
     episodes = grouped_episodes(event_ns)
     event_rows = []
+    controller_times = source_times["controlsState"]
     for ep in episodes:
-        nearest = min(samples, key=lambda s: abs(s["monoTimeNs"]-ep["startNs"]), default=None)
-        diff_ms = abs(nearest["monoTimeNs"]-ep["startNs"])/1e6 if nearest else None
-        event_rows.append({"eventSamples": ep["samples"], "startNs": ep["startNs"], "endNs": ep["endNs"],
-                          "nearestControllerDelayMs": round(diff_ms, 3) if diff_ms is not None else None,
-                          "controllerMatched": diff_ms is not None and diff_ms <= max_age_ms,
-                          "nearestControllerSaturated": nearest["lateralSaturated"] if diff_ms is not None and diff_ms <= max_age_ms else None,
-                          "nearestOutputTorqueCan": nearest["outputTorqueCan"] if diff_ms is not None and diff_ms <= max_age_ms else None,
-                          "nearestSteeringTorqueEps": nearest["steeringTorqueEps"] if diff_ms is not None and diff_ms <= max_age_ms else None})
+        # A future controller record may look closer to the alert than the
+        # controlling state actually available at alert time. Never use it.
+        ix = bisect_right(controller_times, ep["startNs"]) - 1
+        preceding = samples[ix] if ix >= 0 else None
+        age_ms = (ep["startNs"] - preceding["monoTimeNs"])/1e6 if preceding is not None else None
+        matched = age_ms is not None and age_ms <= max_age_ms
+        window_ns = int(pre_event_window_ms * 1e6)
+        start_ix = bisect_right(controller_times, ep["startNs"] - window_ns - 1)
+        window = samples[start_ix:ix + 1] if ix >= start_ix else []
+        event_rows.append({
+            "eventSamples": ep["samples"], "startNs": ep["startNs"], "endNs": ep["endNs"],
+            # Retain the old key for consumers; its semantics are now strictly
+            # preceding-controller age (never nearest-in-absolute-time).
+            "nearestControllerDelayMs": round(age_ms, 3) if age_ms is not None else None,
+            "precedingControllerAgeMs": round(age_ms, 3) if age_ms is not None else None,
+            "controllerMatched": matched,
+            "nearestControllerSaturated": preceding["lateralSaturated"] if matched else None,
+            "nearestOutputTorqueCan": preceding["outputTorqueCan"] if matched else None,
+            "nearestSteeringTorqueEps": preceding["steeringTorqueEps"] if matched else None,
+            "precedingWindowMs": pre_event_window_ms,
+            "precedingWindowControllerSamples": len(window),
+            "precedingWindowSaturatedSamples": sum(s["lateralSaturated"] is True for s in window),
+            "precedingWindowNearCommandLimitSamples": sum(
+                s["outputTorqueCan"] is not None
+                and abs(s["outputTorqueCan"]) >= .95 * steer_max_native for s in window),
+        })
     return {"inputRows": len(rows), "discardedRows": dict(rejected),
             "controllerSamples": len(samples), "sourceMatchedWithinAgeSamples": dict(match_counts),
             "eventName": event_name, "eventSampleCount": len(event_ns), "eventEpisodeCount": len(episodes),
-            "events": event_rows, "groups": groups, "parameters": {"maxAgeMs": max_age_ms, "steerMaxNative": steer_max_native},
+            "events": event_rows, "groups": groups, "parameters": {"maxAgeMs": max_age_ms, "steerMaxNative": steer_max_native, "preEventWindowMs": pre_event_window_ms},
             "caveats": [
                 "Read-only offline analysis. No control parameters changed.",
                 "A steering-saturation notification is not proof of EPS torque saturation.",
@@ -176,7 +196,8 @@ def analyze(rows, *, max_age_ms=150, steer_max_native=350, event_name="steerSatu
                 "outputTorqueCan and steeringTorqueEps may have different scaling/calibration; DO NOT subtract or equate them.",
                 "A past-sample match within the specified age is not guaranteed to represent simultaneous ECU behavior.",
                 "Near limit refers to commanded LKAS CAN units, not actual steering motor capacity.",
-                "Event snapshots report the nearest controller record and require temporal matching; empty data is not interpreted as zero.",
+                "Event snapshots use the latest controller record at or before the event, never a future record; empty data is not interpreted as zero.",
+                "The preceding event window counts observed controller samples; a missing sample is not interpreted as an unsaturated controller.",
             ]}
 
 
@@ -187,8 +208,11 @@ def main():
     parser.add_argument("--max-age-ms", type=float, default=150)
     parser.add_argument("--steer-max-native", type=int, default=350,
                         help="Native LKAS steering command limit from verified pinned RAM_DT source (default 350)")
+    parser.add_argument("--pre-event-window-ms", type=float, default=1000,
+                        help="Controller context window preceding each event start (default 1000ms)")
     args = parser.parse_args()
-    report = analyze(load_csv(args.input_csv), max_age_ms=args.max_age_ms, steer_max_native=args.steer_max_native)
+    report = analyze(load_csv(args.input_csv), max_age_ms=args.max_age_ms, steer_max_native=args.steer_max_native,
+                     pre_event_window_ms=args.pre_event_window_ms)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(args.output), "controllerSamples": report["controllerSamples"],
