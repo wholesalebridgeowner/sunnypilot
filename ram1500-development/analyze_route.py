@@ -72,51 +72,78 @@ def timeline(msg, kind):
   return row
 
 def analyze(files, reader, focus_seconds=171.0, window=30.0):
+  """Two-pass, window-bounded analysis.
+
+  Pass 1 determines route-relative time and global event episodes; pass 2
+  decodes timeline fields only inside the requested focus window. This
+  preserves correct alignment even if an earlier timestamp appears late
+  in an otherwise valid log, and avoids materializing the entire route's
+  vehicle/control samples for a short forensic window.
+  """
   if focus_seconds < 0 or window < 0:
     raise ValueError("focus and window must be nonnegative")
-  kinds, event_counts = Counter(),Counter()
-  samples, rows = [],[]
+  files = list(files)
+  kinds, event_counts = Counter(), Counter()
+  samples = []
   first = last = None
   for f in files:
     for msg in reader(str(f)):
       t = int(msg.logMonoTime)
-      first = t if first is None else min(first,t)
-      last = t if last is None else max(last,t)
+      first = t if first is None else min(first, t)
+      last = t if last is None else max(last, t)
       kind = str(msg.which())
       kinds[kind] += 1
       if kind == "onroadEvents":
         for event in msg.onroadEvents:
           name = str(event.name)
           event_counts[name] += 1
-          samples.append((t,name))
-          rows.append({"monoTimeNs":t,"stream":kind,"valid":field(msg,"valid"),"event":name})
-      elif kind in STREAMS:
-        rows.append(timeline(msg,kind))
+          samples.append((t, name))
   if first is None:
     raise ValueError("No messages read")
+
+  lower_ns = first + (focus_seconds - window) * 1e9
+  upper_ns = first + (focus_seconds + window) * 1e9
+  rows = []
+  for f in files:
+    for msg in reader(str(f)):
+      t = int(msg.logMonoTime)
+      if not (lower_ns <= t <= upper_ns):
+        continue
+      kind = str(msg.which())
+      if kind == "onroadEvents":
+        for event in msg.onroadEvents:
+          rows.append({"monoTimeNs": t, "stream": kind, "valid": field(msg, "valid"),
+                       "event": str(event.name)})
+      elif kind in STREAMS:
+        rows.append(timeline(msg, kind))
   for r in rows:
-    r["seconds"] = round((r["monoTimeNs"]-first)/1e9,3)
-  rows = [r for r in rows if abs(r["seconds"]-focus_seconds)<=window]
-  rows.sort(key=lambda r:(r["monoTimeNs"],r["stream"]))
+    r["seconds"] = round((r["monoTimeNs"] - first)/1e9, 3)
+  rows.sort(key=lambda r: (r["monoTimeNs"], r["stream"]))
   episodes = defaultdict(list)
-  for t,name in sorted(samples):
+  for t, name in sorted(samples):
     previous = episodes[name][-1] if episodes[name] else None
-    if previous is not None and t-previous["lastNs"]<=1_000_000_000:
-      previous["lastNs"]=t
-      previous["samples"]+=1
+    if previous is not None and t-previous["lastNs"] <= 1_000_000_000:
+      previous["lastNs"] = t
+      previous["samples"] += 1
     else:
-      episodes[name].append({"firstNs":t,"lastNs":t,"samples":1})
-  episode_summary={name:[{"startSeconds":round((v["firstNs"]-first)/1e9,3),
-                          "endSeconds":round((v["lastNs"]-first)/1e9,3),
-                          "samples":v["samples"]} for v in periods]
-                   for name,periods in episodes.items()}
-  return {"summary":{"files":[str(f) for f in files],"messageCount":sum(kinds.values()),
-                     "messageKinds":dict(kinds),"eventSampleCounts":dict(event_counts),
-                     "eventEpisodes":episode_summary,"firstMonoTimeNs":first,
-                     "lastMonoTimeNs":last,"durationSeconds":round((last-first)/1e9,3),
-                     "focusSeconds":focus_seconds,"windowSeconds":window,
-                     "interpretation":"Each CSV row is a recorded sample; no interpolation. Event episodes use 1s gap and are not unique failures. Missing values are blank. Controller output is not calibrated physical rack torque."},
-          "rows":rows}
+      episodes[name].append({"firstNs": t, "lastNs": t, "samples": 1})
+  episode_summary = {
+    name: [{"startSeconds": round((v["firstNs"] - first)/1e9, 3),
+            "endSeconds": round((v["lastNs"] - first)/1e9, 3),
+            "samples": v["samples"]} for v in periods]
+    for name, periods in episodes.items()
+  }
+  return {"summary": {"files": [str(f) for f in files],
+                       "messageCount": sum(kinds.values()),
+                       "messageKinds": dict(kinds),
+                       "eventSampleCounts": dict(event_counts),
+                       "eventEpisodes": episode_summary,
+                       "firstMonoTimeNs": first, "lastMonoTimeNs": last,
+                       "durationSeconds": round((last - first)/1e9, 3),
+                       "focusSeconds": focus_seconds, "windowSeconds": window,
+                       "readerPasses": 2, "windowSamples": len(rows),
+                       "interpretation": "Each CSV row is a recorded sample; no interpolation. Event episodes use 1s gap and are not unique failures. Missing values are blank. Controller output is not calibrated physical rack torque."},
+          "rows": rows}
 
 def save(result,prefix):
   prefix=Path(prefix)
