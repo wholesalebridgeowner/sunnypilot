@@ -120,7 +120,10 @@ def summarize(records: list[dict], read_results) -> dict:
     """Only a fixed set of aggregate fields leaves the private analysis process."""
     provenance = pinned_recorded_build(records)
     motion = analyze_motion(records)
-    episodes = analyze_episodes(records)
+    # Historical episode helper assumes every input has a valid monotonic clock.
+    # Corrupt/unknown services cannot supply an invented time anchor.
+    timed = [r for r in records if type(r.get("t")) is int and r["t"] >= 0]
+    episodes = analyze_episodes(timed)
     lanes = analyze_lanes(records)
     following = episodes.get("following", {})
     allowed_following = (
