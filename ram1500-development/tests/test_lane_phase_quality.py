@@ -36,7 +36,7 @@ def test_model_gap_censors_and_no_false_recenter_completion():
           model(2,"laneChangeFinishing"),model(2.1,"laneChangeFinishing")]
   report=analyze(inputs)
   assert report["phaseWindows"]["laneChangeStarting"]["counts"]=={"censoredByGapOrInvalidModel":1}
-  assert report["phaseWindows"]["laneChangeFinishing"]["counts"]=={"censoredAtEnd":1}
+  assert report["phaseWindows"]["laneChangeFinishing"]["counts"]=={"censoredByUnverifiedEntry":1}
 
 def test_invalid_model_breaks_interval_and_invalid_vehicle_or_driver_is_rejected():
   inputs=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
@@ -114,7 +114,8 @@ def test_mixed_segment_car_states_cannot_qualify_model_phase():
 def test_independent_same_segment_model_phases_remain_qualified():
   # A legitimate completed phase in each segment is still counted.
   rows=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
-        model(.4,"off"), model(.5,"laneChangeStarting",segment=31),
+        model(.4,"off"), model(.45,"off",segment=31),
+        model(.5,"laneChangeStarting",segment=31),
         model(.6,"laneChangeStarting",segment=31),model(.8,"off",segment=31)]
   rows += [cs(.1,1),cs(.2,2),cs(.3,3),
            cs(.5,4,segment=31),cs(.6,5,segment=31),cs(.7,6,segment=31)]
@@ -219,3 +220,55 @@ def test_verified_exit_allows_subsequent_independent_lane_phase():
   counts=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]["counts"]
   assert counts["censoredByGapOrInvalidModel"]==1
   assert counts["qualifiedWindows"]==1
+
+
+def test_gap_to_different_model_phase_censors_unobserved_new_entry():
+  # A recentering state observed after missing model data may already have
+  # begun inside the gap; a complete-looking tail must not qualify.
+  models=[model(.0,"off"), model(.1,"laneChangeStarting"),
+          model(.2,"laneChangeStarting"),
+          model(1.0,"laneChangeFinishing"), model(1.1,"laneChangeFinishing"),
+          model(1.2,"laneChangeFinishing"),model(1.4,"off",direction="none")]
+  cars=[cs(1.0,1), cs(1.1,3), cs(1.2,5),cs(1.3,2)]
+  report=analyze(models+cars)["phaseWindows"]
+  assert report["laneChangeStarting"]["counts"]["censoredByGapOrInvalidModel"]==1
+  assert report["laneChangeFinishing"]["counts"]=={"censoredByUnverifiedEntry":1}
+  assert report["laneChangeFinishing"]["medianDurationSeconds"] is None
+
+
+def test_segment_switch_to_different_active_phase_requires_anchor():
+  models=[model(.0,"off"),model(.1,"laneChangeStarting"),
+          model(.2,"laneChangeStarting"),
+          model(.3,"laneChangeFinishing",segment=31),
+          model(.4,"laneChangeFinishing",segment=31),
+          model(.5,"laneChangeFinishing",segment=31),
+          model(.6,"off",direction="none",segment=31)]
+  cars=[cs(.3,1,segment=31),cs(.4,3,segment=31),cs(.5,5,segment=31)]
+  report=analyze(models+cars)["phaseWindows"]
+  assert report["laneChangeStarting"]["counts"]["censoredBySegmentBoundaryOrUnverified"]==1
+  assert report["laneChangeFinishing"]["counts"]=={"censoredByUnverifiedEntry":1}
+
+
+def test_valid_neutral_after_gap_allows_independent_later_phase():
+  models=[model(.0,"off"),model(.1,"laneChangeStarting"),
+          model(.2,"laneChangeStarting"),
+          model(1.0,"laneChangeFinishing"),model(1.1,"laneChangeFinishing"),
+          model(1.2,"off",direction="none"),
+          model(1.3,"laneChangeFinishing"),model(1.4,"laneChangeFinishing"),
+          model(1.5,"laneChangeFinishing"),model(1.7,"off",direction="none")]
+  cars=[cs(1.3,1),cs(1.4,3),cs(1.5,5),cs(1.6,2)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
+  assert counts["censoredByUnverifiedEntry"]==1
+  assert counts["completedTransitions"]==1
+  assert counts["qualifiedWindows"]==1
+
+
+def test_unknown_model_state_is_not_postgap_anchor():
+  models=[model(.0,"off"),model(.1,"laneChangeStarting"),
+          model(.2,"laneChangeStarting"),
+          model(1.0,"unexpected"),model(1.1,"laneChangeFinishing"),
+          model(1.2,"laneChangeFinishing"),model(1.3,"laneChangeFinishing"),
+          model(1.4,"off",direction="none")]
+  cars=[cs(1.1,1),cs(1.2,3),cs(1.3,5)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
+  assert counts=={"censoredByUnverifiedEntry":1}
