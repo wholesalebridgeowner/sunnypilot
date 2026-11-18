@@ -52,7 +52,8 @@ class Tests(unittest.TestCase):
         a.update(4.01,"carState",speed=0,angle=40)
         ep=a.finish()["factoryParkEpisodes"][0]
         self.assertFalse(ep["closedWithFalseFlag"])
-        self.assertIsNone(ep["nearStopAngleRangeDeg"] if ep["nearStopSamples"]==0 else None)
+        self.assertEqual(ep["nearStopSamples"],1)
+        self.assertEqual(ep["nearStopAngleRangeDeg"],0.0)
 
     def test_invalid_and_out_of_order_rejected(self):
         a=mod.ParkEpisodes()
