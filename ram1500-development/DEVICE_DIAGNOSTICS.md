@@ -1,6 +1,21 @@
 # Ram Comma/Panda diagnostic sidecar — v0 read-only design
 
-**Status: source and automated fixture tests; NOT installed on vehicle, NOT hardware-tested.**
+**Status: source and offline tests; NOT installed on vehicle, NOT hardware-tested.**
+
+## Read-only remote connectivity audit — November 17, 2026
+A one-time diagnostic probe was run via the already configured Railway/Comma JWT connection, using only supported Athena read methods (`getVersion`, `getGithubUsername`, `getSshAuthorizedKeys`) and the authenticated device listing. No command execution or installer invocation occurred.
+
+- Comma API device type: `three` (consistent with logs reporting `tici`). Earlier conversational descriptions of the device as Comma 2 should not be used to choose binaries.
+- Reported Sunnypilot: `0.10.1`, `staging-tici`, commit `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`.
+- Device was online at inspection, with the last Athena ping about 62 seconds old.
+- GitHub SSH username and authorized keys: **not configured**.
+- Comma Prime: **inactive**.
+- The Comma API permits read-only diagnostic RPCs and explicit upload requests, but is not an arbitrary remote shell installer. No authorized remote-install action was available through the connected tools.
+
+**Installation prerequisite:** When parked, enable SSH in device Settings and configure an authorized GitHub account/SSH public key for an operator-controlled computer. Local-network SSH is a supported path; Comma Prime provides a remote SSH proxy if subscribed. The operator must establish a properly authenticated shell to the parked device, verify its actual runtime and installed code, and only then perform a minimal, reversible passive diagnostic pilot.
+
+Do not treat API access to log uploads as permission to run arbitrary commands, or claim software is installed merely because an upload request succeeds.
+
 
 ## Purpose
 Develop a safe path from one-off Q-log review toward higher-fidelity engineering observability. The connected Comma device already receives Panda CAN packets and runs `loggerd`, which saves raw/decimated `can` and `sendcan` streams in R-/Q-logs. We should use the existing paths instead of creating a competing CAN device driver.
