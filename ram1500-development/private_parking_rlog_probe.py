@@ -172,8 +172,18 @@ def main():
             start=None
             for msg in reader(dest):
                 ts=int(msg.logMonoTime)
-                if start is None:start=ts
+                # Some segment headers (e.g. repeated initData) carry a route
+                # startup timestamp hundreds of seconds before this segment.
+                # Anchor at the first actual CAN sample for this R-log segment.
+                if start is None:
+                    if msg.which() != "can":
+                        continue
+                    start=ts
+                if ts < start:
+                    continue
                 data.observe(segment,(ts-start)/1e9,msg)
+            if start is None:
+                raise RuntimeError("selected R-log contains no CAN anchor")
     print("PARKING_PASSIVE_AGGREGATES "+json.dumps(data.result(),separators=(",",":"),allow_nan=False),flush=True)
 
 if __name__=="__main__":
