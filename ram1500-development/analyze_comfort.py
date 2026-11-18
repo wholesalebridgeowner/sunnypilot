@@ -23,6 +23,8 @@ def get(obj, *keys):
       return None
   if isinstance(obj, (bool, int, float, str)):
     return obj
+  if keys and keys[-1] in ("laneChangeState", "laneChangeDirection", "longitudinalPlanSource", "longControlState") and obj is not None:
+    return str(obj)  # pycapnp enums may not inherit str
   return None
 
 def finite(value):
