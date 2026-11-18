@@ -20,4 +20,4 @@ jobs:
         with:
           python-version: '3.11'
       - name: Offline fixture tests
-        run: python3 -m unittest discover -s ram1500-development -p 'test_analyze_route.py' -v
+        run: python3 -m unittest discover -s ram1500-development -p 'test_analyze*.py' -v
