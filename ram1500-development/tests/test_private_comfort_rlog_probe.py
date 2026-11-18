@@ -126,3 +126,29 @@ def test_direction_censor_count_is_exported_without_direction_payload():
     assert starting["counts"]["censoredByDirectionChangeOrUnknown"] == 1
     assert starting["qualifiedByDirection"]["other"] == 3
     assert "PRIVATE_MARKER" not in json.dumps(out)
+
+def test_following_validity_counts_only_emit_known_aggregate_reason_keys():
+    import json
+    secret="SECRET_RAW_LOCATION_OR_VIN"
+    rows=[
+        {"service": "carState", "t": 100_000_000, "segment": 30,
+         "valid": False, "canValid": False, "vEgo": 20.,
+         "gasPressed": False, "brakePressed": False,
+         "cruiseState.enabled": True, "secret": secret},
+        {"service": "radarState", "t": 120_000_000, "segment": 30,
+         "valid": True, "leadOne.status": True, "leadOne.dRel": 35.,
+         "leadOne.vRel": -2., "secret": secret},
+        {"service": "carState", "t": 200_000_000, "segment": 30,
+         "valid": True, "canValid": True, "vEgo": 20.,
+         "gasPressed": False, "brakePressed": False,
+         "cruiseState.enabled": True},
+        {"service": "radarState", "t": 220_000_000, "segment": 30,
+         "valid": None, "leadOne.status": True, "leadOne.dRel": 35.,
+         "leadOne.vRel": -2., "secret": secret},
+    ]
+    out=summarize(rows, [])
+    assert out["following"]["validityRejections"] == {
+        "invalidCarStateOrCan": 1, "invalidRadarMessage": 1}
+    assert secret not in json.dumps(out)
+    assert set(out["following"]["validityRejections"]) == {
+        "invalidCarStateOrCan", "invalidRadarMessage"}
