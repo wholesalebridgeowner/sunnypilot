@@ -1,6 +1,6 @@
 # November 18 — historical Nov 14 R-log recovery: automatic collector eligibility audit
 
-**Status: read-only source review + synthetic tests; no new Comma archive availability check.** This report examines why the existing automatic Railway log bridge does not currently provide the missing high-resolution Nov 14 saturation segment. It does **not** establish that Comma cloud or the vehicle lacks the R-log.
+**Status: read-only deployed collector review + read-only historical Comma archive metadata preflight + synthetic tests.** This report examines why the existing automatic Railway log bridge does not currently provide the missing high-resolution Nov 14 saturation segment. It does **not** establish that Comma cloud or the vehicle lacks the R-log.
 
 ## Audited source and independent observations
 
@@ -10,9 +10,20 @@
 - Verified November 18 Railway bucket inventory, separate from this source review: `ram-private-log-presence-audit` deployment `b0981f35-0238-4381-b141-0d359be5e8b4` reported 612 objects, 11 route groups, complete pagination, **no matching Nov 14 route** in this bucket. Nov 17 had 45/45 Q/R segments 0–44, including the focus segment 30. The original 51-segment Nov 14 Q-log analysis was performed through another source and is not contradicted.
 - The collector's deployed function source was only **read**, not changed. No cloud log URL, route ID, VIN, object key, location or credentials are included in this report.
 
+## New independently verified archived-route metadata lookup
+
+After reviewing the collector, ran an isolated **one-shot, metadata-only** Railway Function `ram-historical-rlog-availability-readonly` against the **specific historical Nov 14 route** using existing authorized Comma credential references. This Function made one authenticated **GET** of Comma's `/v1/route/<private-route>/files` endpoint; it did not request an Athena upload, download a raw file, access vehicle CAN, or write any object or private URL. Its output was limited to URL-presence booleans for segments 1–3 and aggregate link counts. The route selector and credentials remained private Railway variables.
+
+Verified completed private Railway deployment `12d85690-b883-4268-bfaf-54bb2c90cbdc` reported:
+- `phase=completed_metadata_only`, HTTP success.
+- **0 available R-log links** in the authorized Comma route-file listing, including **no R-log for segments 1, 2 or 3**.
+- **51 Q-log links**, with Q-log links present for each of segments **1, 2 and 3**.
+
+This is stronger and more precisely scoped than the earlier bucket-only absence: the currently authorized Comma route-file metadata also contains **no R-log download URLs** for the studied drive. It does **not** prove that the parked device, a different archival system, or future upload requests cannot recover the segment. The existing historical Q-log count is independently corroborated by this metadata lookup; no Q-log contents were downloaded or decoded here.
+
 ## Safe next retrieval and analysis gates
 
-An authorized, separately reviewed **historical-route lookup** must query the older Nov 14 route specifically through the existing Comma archive permissions, rather than relying on the collector's rolling 72-hour window. Check whether the focused segment 2 R-log and adjacent segments have actual Comma cloud links; a previously accepted Athena upload request is insufficient. If available, retrieve only those logs into private storage, verify object arrival and decompression, match route/segment identity and decode against `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` with the dirty-tree caveat. Only then can the +171-second torque event be analyzed at high resolution.
+The authorized historical-route metadata lookup **has now confirmed no R-log links** for the Nov 14 drive. Recovery would require a separately authorized device/archive availability assessment (or fresh, independently approved upload), not the existing rolling collector; a previously accepted Athena request is insufficient. Only if a real R-log later becomes available should it be retrieved into private storage, have object arrival and decompression verified, match route/segment identity and be decoded against `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` with the dirty-tree caveat. Only then can the +171-second torque event be analyzed at high resolution.
 
 ### Offline reproducibility
 
