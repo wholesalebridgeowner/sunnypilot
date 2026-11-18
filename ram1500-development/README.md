@@ -105,3 +105,32 @@ applies when exporting a complete route for `low_speed_report.py`.
 
 Eight independent offline fixture tests passed locally for this input gate.
 No changes to vehicle control software or Comma installation were made.
+
+
+## Steering-alert temporal integrity update (November 17, 2026, late evening)
+
+`steering_saturation_report.py` now separately evaluates command and EPS-motor
+feedback at each alert's exact monotonic timestamp using **past-only**, age-bounded
+joins. The previous report attached command/feedback to a controller sample,
+which could itself be up to 150 ms older than the alert: two independently valid
+150 ms joins could therefore misattribute a source observation 300 ms old to
+the alert. Conversely, it could miss newer output or EPS data recorded between
+the controller sample and the alert. New output keys are
+`outputTorqueCanAgeAtEventMs` and `steeringTorqueEpsAgeAtEventMs`.
+Existing `nearestOutputTorqueCan` and `nearestSteeringTorqueEps` keys now
+report **fresh, past-only, as-of-alert** observations. An aged-out source is
+null, with the stale age retained so missing evidence is not treated as zero.
+The controller-state alert age is unchanged.
+
+Three synthetic regression tests cover compounded staleness, fresh observations
+after the latest controller sample, and future-data exclusion. The changes are
+analysis-only and do not modify controller, vehicle integration or Panda safety.
+
+To verify from the branch checkout, run:
+```sh
+python3 -m unittest discover -s ram1500-development -p 'test_steering_saturation_report.py' -v
+```
+
+The original November 14 event still requires execution against private,
+build-matched logs to determine commanded-output and EPS response values.
+Synthetic tests and code reviews cannot establish root cause or deployment fitness.
