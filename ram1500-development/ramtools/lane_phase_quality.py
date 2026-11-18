@@ -57,6 +57,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   # Model state and carState data have independent logging intervals.
   # Never use a future car sample to fill a missing past one.
   open_phase = None
+  suppressed_state = None  # ambiguous direction: reject the whole model phase
   previous_t = None
   previous_segment = None
   car_index = 0
@@ -85,7 +86,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
            r["segment"] != phase["segment"] for r in selected):
       phase_counts[name]["carStateSegmentMismatch"] += 1
       return
-    if any(r.get("valid") is False for r in selected):
+    if any(r.get("valid") is not True for r in selected):
       phase_counts[name]["invalidCarState"] += 1
       return
     if any(r.get("steeringPressed") is not False for r in selected):
@@ -122,7 +123,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
     segment = seg if type(seg) is int and seg >= 0 else None
     invalid_segment = segment is None
     boundary = previous_segment is not None and segment != previous_segment
-    invalid_or_gap = (rec.get("valid") is False or previous_t is not None and
+    invalid_or_gap = (rec.get("valid") is not True or previous_t is not None and
                       not 0 < (t - previous_t) / NS <= max_model_gap_s)
     if invalid_segment or boundary or invalid_or_gap:
       if open_phase:
@@ -130,19 +131,35 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
                   if invalid_segment or boundary else "censoredByGapOrInvalidModel")
         phase_counts[open_phase["state"]][reason] += 1
       open_phase = None
+      suppressed_state = None
       previous_t = None
       previous_segment = None
-      if rec.get("valid") is False or invalid_segment:
+      if rec.get("valid") is not True or invalid_segment:
         continue
     previous_t = t
     previous_segment = segment
     state = str(rec.get("meta.laneChangeState") or "")
+    direction = str(rec.get("meta.laneChangeDirection") or "unknown")
+    if suppressed_state == state:
+      continue
+    suppressed_state = None
+    if open_phase and state == open_phase["state"] and direction != open_phase["direction"]:
+      # A direction reversal (or missing direction) within the same model
+      # state is not a second maneuver. Censor the entire phase until exit.
+      phase_counts[state]["censoredByDirectionChangeOrUnknown"] += 1
+      open_phase = None
+      suppressed_state = state
+      continue
     if open_phase and state != open_phase["state"]:
       complete(open_phase, t)
       open_phase = None
     if state in PHASES and open_phase is None:
-      open_phase = {"state": state, "start": t, "segment": segment,
-                    "direction": str(rec.get("meta.laneChangeDirection") or "unknown")}
+      if direction not in ("left", "right"):
+        phase_counts[state]["censoredByDirectionChangeOrUnknown"] += 1
+        suppressed_state = state
+      else:
+        open_phase = {"state": state, "start": t, "segment": segment,
+                      "direction": direction}
 
   if open_phase:
     phase_counts[open_phase["state"]]["censoredAtEnd"] += 1
@@ -168,6 +185,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
       "Only complete, same-segment continuously sampled driver-not-steering windows enter comfort percentiles.",
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
+      "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
       "This is offline observation only; do not tune or deploy a controller from these metrics alone.",
     ],
   }
