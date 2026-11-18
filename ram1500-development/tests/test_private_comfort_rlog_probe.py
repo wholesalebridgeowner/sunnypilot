@@ -111,3 +111,18 @@ def test_model_direction_strings_are_whitelisted_before_stdout():
     assert "SECRET_VIN_OR_LOCATION" not in json.dumps(out)
     assert out["phaseWindows"]["laneChangeStarting"]["qualifiedByDirection"]["other"] == 7
     assert out["phaseWindows"]["laneChangeStarting"]["qualifiedByDirection"]["left"] == 2
+
+
+def test_direction_censor_count_is_exported_without_direction_payload():
+    import json
+    out = public_lane_summary({
+        "modelSamples": 4,
+        "phaseWindows": {"laneChangeStarting": {
+            "counts": {"censoredByDirectionChangeOrUnknown": 1},
+            "qualifiedByDirection": {"PRIVATE_MARKER": 3},
+        }},
+    })
+    starting = out["phaseWindows"]["laneChangeStarting"]
+    assert starting["counts"]["censoredByDirectionChangeOrUnknown"] == 1
+    assert starting["qualifiedByDirection"]["other"] == 3
+    assert "PRIVATE_MARKER" not in json.dumps(out)
