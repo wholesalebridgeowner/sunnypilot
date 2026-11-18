@@ -31,3 +31,9 @@ ChatGPT and Claude may develop and review patches, but tests and measured teleme
 
 ## Current status
 Branch and plan created. No rebuilt control software, signed image, install URL, or validated zero-speed/end-to-end-navigation capability exists yet.
+
+## Most recent development work (November 17, 2026)
+
+**Continuation branch:** `ram1500-steering-forensics-20261117` — see [draft PR #1](https://github.com/wholesalebridgeowner/sunnypilot/pull/1). This contains the latest steering/following-distance/throttle/lane-change analysis scripts, passive Comma/Panda CAN sidecar, CI tests, reports, and the complete Windows Claude SSH handoff.
+
+**Claude after restarting Windows:** open [CLAUDE_RESUME_HANDOFF.md on the continuation branch](https://github.com/wholesalebridgeowner/sunnypilot/blob/ram1500-steering-forensics-20261117/ram1500-development/CLAUDE_RESUME_HANDOFF.md), review [DEVICE_DIAGNOSTICS.md](https://github.com/wholesalebridgeowner/sunnypilot/blob/ram1500-steering-forensics-20261117/ram1500-development/DEVICE_DIAGNOSTICS.md), and check out that branch. The test suite passed on the continuation branch prior to the documentation-only handoff. Its tools are **not** installed on the Comma; remote SSH is not yet configured. No active driving code or safety limits have been changed.
