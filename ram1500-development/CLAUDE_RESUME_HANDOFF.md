@@ -77,3 +77,10 @@ Return a brief device compatibility assessment, local SSH connectivity status (w
   `sunnypilot@1f7233cb` (Oct 2025), which shares no git history with it and differs in every steering file. Pinned-schema decoding,
   exact event episodes and a ranked 171 s analysis are on branch `claude/ram1500-review-2026-11-17`
   (`reports/2026-11-17-claude-independent-review.md`, `REVIEW_LOG.md`); the two branches still need to be reconciled.
+
+## New steering-alignment measurement tool (2026-11-17 evening)
+- `ram1500-development/steering_saturation_report.py` consumes local CSV exported by `analyze_route.py` and performs bounded past-sample joins (150 ms default) among controller state, requested normalized torque, CAN steering command, vehicle EPS torque feedback and saturation events.
+- It summarizes saturated/non-saturated samples, time-match coverage, requested-vs-commanded native LKAS gap using source-level 350-unit scale, and event-adjacent snapshots. It **does not equate EPS motor torque and CAN steering command or treat a warning as proof of physical EPS saturation**.
+- Use: `python3 ram1500-development/steering_saturation_report.py /private/ram-171.csv --output /private/ram-171-steering.json`. Keep real-route CSV and JSON private, not committed to GitHub.
+- `test_steering_saturation_report.py` includes four synthetic tests (time alignment, missing/stale data, non-finite values and event grouping). Local tests passed; GitHub Actions offline Ram analyzer workflow passed on commit `ad668e35fbc7eeecffdb7cb18c7a2fac153486bd`.
+- Next step: execute on **private actual-route CSV**, verify real numerics and flag confidence. Synthetic CI passing does **not** establish a vehicle diagnosis or release readiness.
