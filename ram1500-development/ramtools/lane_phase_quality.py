@@ -62,6 +62,9 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   # begun inside the gap. Require a valid neutral/preparation observation first.
   needs_state_anchor = False
   unverified_active_state = None
+  # The first available active model sample may be the tail of a phase whose
+  # entry predates the recording. Require a verified neutral/preparation anchor.
+  first_valid_model_seen = False
   previous_t = None
   previous_segment = None
   car_index = 0
@@ -152,6 +155,13 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
     previous_segment = segment
     state = str(rec.get("meta.laneChangeState") or "")
     direction = str(rec.get("meta.laneChangeDirection") or "unknown")
+    if not first_valid_model_seen:
+      first_valid_model_seen = True
+      if state not in ("off", "preLaneChange"):
+        needs_state_anchor = True
+        if state in PHASES:
+          phase_counts[state]["censoredAtStreamStart"] += 1
+          unverified_active_state = state
     if needs_state_anchor:
       # An active state first observed after missing/invalid model chronology
       # cannot prove its entry, even if different from the interrupted phase.
@@ -213,6 +223,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
       "After model gaps, invalid records or segment changes, a valid off/preLaneChange observation must anchor new phase entries.",
+      "A phase already active at the first valid model observation is left-censored until an observed neutral/preparation anchor.",
       "This is offline observation only; do not tune or deploy a controller from these metrics alone.",
     ],
   }
