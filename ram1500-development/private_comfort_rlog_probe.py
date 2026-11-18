@@ -101,6 +101,7 @@ def public_lane_summary(lanes: dict) -> dict:
         "carStateGap", "missingKinematics", "lowSpeedExcluded",
         "qualifiedWindows", "censoredByGapOrInvalidModel", "censoredAtEnd",
         "censoredBySegmentBoundaryOrUnverified", "carStateSegmentMismatch",
+        "censoredByDirectionChangeOrUnknown",
     )
     score_fields = (
         "medianDurationSeconds", "p90PeakAbsSteeringRateDegPerSecond",
