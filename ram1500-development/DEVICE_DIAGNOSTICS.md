@@ -58,3 +58,14 @@ python3 ram1500-development/summarize_can_capture.py \
 
 ## Limitations and guardrails
 This is a **diagnostic recorder**. It neither enables longitudinal control nor changes factory ACC, EPS, steering torque, calibration, model weights, or safety behavior. Direct steering/braking modification is outside this PR. Raw CAN is powerful evidence, but source-code message definitions, firmware differences, ECU gating and sample drops must be verified before conclusions. An accepted Comma upload request does not establish that a device file was actually transferred.
+
+## Windows operator preflight (no changes to device)
+The companion `windows_preflight.ps1` checks whether Git and OpenSSH are installed, whether there are public key files (without reading private keys), and optionally whether port 22 is reachable on an explicitly specified local Comma IP. Run only from your trusted Windows PC. The optional IP must be established independently on the device; the script performs no subnet scans.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\ram1500-development\\windows_preflight.ps1
+# Optional, only once actual parked Comma IPv4 address is verified:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\ram1500-development\\windows_preflight.ps1 -DeviceIP 192.168.1.100
+```
+
+The example IP is illustrative, **not** the discovered address of your Comma. SSH keys and any remote installation need explicit operator authorization, host-key verification, and a parked vehicle. The diagnostic sidecar now restricts its local directory to mode 0700 and files to mode 0600. This is defense-in-depth; local device disk access and operating-system permissions still matter.
