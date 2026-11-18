@@ -31,6 +31,6 @@ jobs:
       - name: Read-only private selection and comfort fixture tests
         run: |
           cd ram1500-development
-          python -m pytest tests/test_private_comfort_rlog_probe.py tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py tests/test_comfort_episodes.py -q
+          python -m pytest tests/test_private_comfort_rlog_probe.py tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py -q
       - name: Reproducible historical decoder container (no private logs or secrets)
         run: docker build -f ram1500-development/Dockerfile.comfort -t ram-comfort-research:ci ram1500-development
