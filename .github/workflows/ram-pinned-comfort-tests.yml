@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install pytest
       - name: Pinned decoder comfort fixtures
-        run: cd ram1500-development && python -m pytest tests/test_comfort.py tests/test_comfort_episodes.py tests/test_lane_phase_quality.py tests/test_torque_cap.py tests/test_park_replication.py tests/test_parameter_proposal.py tests/test_parameter_experiments.py -q
+        run: cd ram1500-development && python -m pytest tests/test_comfort.py tests/test_comfort_episodes.py tests/test_lane_phase_quality.py tests/test_torque_cap.py tests/test_park_replication.py tests/test_acc_motion_integrity.py tests/test_parameter_proposal.py tests/test_parameter_experiments.py -q
       - name: Verify offline parameter candidate manifest
         run: cd ram1500-development && python -m ramtools.parameter_proposal proposed_parameters.json
       - name: Generate non-installable actuator delay sensitivity experiments
