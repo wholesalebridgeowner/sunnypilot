@@ -38,6 +38,12 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(stream["medianInterSampleMs"], 500)
         self.assertIsNone(r["streamCoverage"]["carOutput"]["maxInterSampleMs"])
 
+    def test_exact_rank_percentile_for_odd_sample_count(self):
+        r = a.analyze([rec(1000000000, "carState"), rec(1100000000, "carState"),
+                       rec(1200000000, "carState"), rec(1300000000, "carState")])
+        self.assertEqual(r["streamCoverage"]["carState"]["medianInterSampleMs"], 100)
+        self.assertEqual(r["streamCoverage"]["carState"]["p95InterSampleMs"], 100)
+
     def test_invalid_and_unknown_validity_are_separate(self):
         r = a.analyze([rec(1, "carState", valid="False"),
                        rec(2, "carState", valid=""),
