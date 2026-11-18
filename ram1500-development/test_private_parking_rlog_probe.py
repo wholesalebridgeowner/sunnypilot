@@ -39,6 +39,7 @@ class Tests(unittest.TestCase):
         observed=[v for v in r["bins"] if v["relativeWindowSeconds"]==[720,725]][0]
         self.assertEqual(observed["stoppedSamplesLe0p3Mps"],30)
         self.assertGreater(observed["steeringAngleRangeDeg"],50)
+        self.assertGreater(observed["stoppedSteeringAngleRangeDeg"],50)
         self.assertEqual(observed["commaLateralActiveSamples"],{"False":30})
         self.assertEqual(observed["commaNativeCommandAbsMax"],0)
 
