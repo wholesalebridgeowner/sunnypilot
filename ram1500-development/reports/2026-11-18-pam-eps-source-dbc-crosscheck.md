@@ -31,7 +31,7 @@ python3 ram1500-development/oem_eps_dbc_provenance.py \
   --ram-generator /path/to/1f7233cb/_stellantis_common_ram.py
 ```
 
-The parallel `test_oem_eps_dbc_provenance.py` fixture suite requires no network or private driving data. GitHub source SHA retrieval is independently confirmed; the new CLI's execution against the two downloaded full files remains a separate validation gate.
+The parallel `test_oem_eps_dbc_provenance.py` fixture suite requires no network or private driving data. **Independently executed:** [GitHub Actions run 44305926803](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44305926803) downloaded both *complete* pinned public upstream files and passed the SHA/layout/address CLI check. The same job passed **145 offline tests**, including all 10 new negative/positive provenance fixtures. This verifies the actual source files in CI; it does not validate OEM wire-level command authorship or the vehicle.
 
 **Important topology limitation:** a DBC frame label `EPS_2` proves neither which ECU originally transmitted a frame nor where it originated on the physical truck network. The generator's address mapping does **not** specify physical bus 0, which is only established in the recorded Comma capture. CAN-C at the OEM PAM is not synonymous with complete CAN-C visibility through a Comma harness or permitted third-party transmission.
 
@@ -45,7 +45,7 @@ Only the **AUTO_PARK_HAS_CONTROL_2 name**, not a trusted OEM enumeration for the
 
 1. Obtain licensed model-year/VIN-specific topology and scan-tool **read-only** PAM/EPS mode diagnostics to confirm module path and status semantics. Do not publish identifying results.
 2. Establish which bus(ses) are observable from the existing Comma harness; absent CAN frames cannot rule out traffic on another private or gateway-isolated bus.
-3. Run this SHA-pinned source check on an independently obtained full source snapshot and confirm the workflow CI result at the new head.
+3. Maintain the exact recorded-source SHA verification in CI on future analysis changes; do not substitute newer opendbc layouts for the installed build.
 4. Keep Nov 14 +171 s R-log and ACC/lane comfort work isolated on their existing branches. Do not merge control changes or alter safety software.
 
 **Release gate:** independent review, full pinned replay/build, parked device diagnostics and controlled hardware safety validation are not complete. There is no installable candidate.
