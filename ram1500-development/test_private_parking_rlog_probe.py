@@ -47,10 +47,10 @@ class Tests(unittest.TestCase):
         summary=mod.Summary()
         for i in range(12):
             frame=SimpleNamespace(src=2,address=0x777,dat=bytes([i%2+1]))
-            summary.observe(11,20+i*.1,E("can",can=[frame]))
+            summary.observe(11,i*.1,E("can",can=[frame]))
         for i in range(15):
             frame=SimpleNamespace(src=2,address=0x777,dat=bytes([i%3+40]))
-            summary.observe(12,i*.1,E("can",can=[frame]))
+            summary.observe(11,25+i*.1,E("can",can=[frame]))
         v=summary.result()
         row=next(x for x in v["canCandidateChanges"] if x["idHex"]=="0x777")
         self.assertEqual((row["baselineFrames"],row["parkingCandidateFrames"]),(12,15))
