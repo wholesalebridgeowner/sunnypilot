@@ -113,7 +113,7 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     self.assertEqual(r["gearShifter"], "park")
 
   def test_run_loop_with_fake_bus_parked_then_moving(self):
-    """Regression for G3 run 1 (KeyError): msgq's Poller.poll() returns NEW objects, not the subscribed sockets."""
+    """Regression for G3 run 1 (KeyError on poller objects) and the poller-free drain loop that replaced it."""
     import contextlib
     import json
     import sys
@@ -140,8 +140,8 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
         return [object()]  # fresh object every time, exactly like msgq's ipc_pyx Poller
 
     fake_messaging = types.ModuleType("cereal.messaging")
-    fake_messaging.Poller = FakePoller
-    fake_messaging.sub_sock = lambda service, poller: FakeSock(queues.get(service, []))
+    fake_messaging.Poller = FakePoller  # must stay unused: looking up its objects was the run 1 crash
+    fake_messaging.sub_sock = lambda service, poller=None: FakeSock(queues.get(service, []))
     fake_log = types.ModuleType("cereal.log")
     fake_log.Event = NS(from_bytes=lambda raw: contextlib.nullcontext(events[raw]))
     fake_cereal = types.ModuleType("cereal")
@@ -150,15 +150,54 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     with tempfile.TemporaryDirectory() as folder, \
          mock.patch.dict(sys.modules, {"cereal": fake_cereal, "cereal.messaging": fake_messaging, "cereal.log": fake_log}):
       args = NS(output_dir=Path(folder), max_mb=1, keep_files=2, sample_hz=20, minutes=0.05,
-                all_can_ids=False, allow_moving=False)
+                all_can_ids=False, allow_moving=False, drain_ms=10, max_cpu_pct=15.0, max_private_mb=150)
       result = mod.run(args)
       rows = [json.loads(line) for f in sorted(Path(folder).glob("*.jsonl")) for line in f.read_text().splitlines()]
     self.assertIn("moving", result["stopReason"])
     self.assertEqual(result["rows"].get("carState"), 1)  # parked sample kept; moving sample stopped the capture
     services = [r["service"] for r in rows]
     self.assertEqual(services[0], "sidecar_start")
+    self.assertEqual(rows[0]["canLabels"]["0x31"], "eps_motor_feedback")  # labels once, not per frame
+    can_rows = [r for r in rows if r["service"] == "can"]
+    self.assertEqual(can_rows[0]["packets"], [{"bus": 0, "id": 0x31, "dataHex": "0102"}])
     self.assertEqual(services[-1], "sidecar_stop")
     self.assertIn("moving", rows[-1]["reason"])
+
+  def test_memory_split_parses_proc_status(self):
+    status = "Name:\tpython3\nVmRSS:\t   53908 kB\nRssAnon:\t   21000 kB\nRssFile:\t    9000 kB\nRssShmem:\t   23908 kB\n"
+    m = mod.proc_memory_kib(status)
+    self.assertEqual(m, {"rssKiB": 53908, "rssAnonKiB": 21000, "rssShmemKiB": 23908, "rssFileKiB": 9000})
+
+  def test_self_limits(self):
+    # CPU must breach in two consecutive windows; one spike is tolerated
+    reason, breach = mod.limit_breach({"windowCpuPercentOneCore": 22.0}, 15.0, 150, prev_cpu_breach=False)
+    self.assertIsNone(reason)
+    self.assertTrue(breach)
+    reason, _ = mod.limit_breach({"windowCpuPercentOneCore": 21.6}, 15.0, 150, prev_cpu_breach=True)
+    self.assertIn("CPU", reason)
+    reason, breach = mod.limit_breach({"windowCpuPercentOneCore": 9.0}, 15.0, 150, prev_cpu_breach=True)
+    self.assertIsNone(reason)
+    self.assertFalse(breach)
+    # private memory is checked every window; shared ring pages (RssShmem) do not count
+    reason, _ = mod.limit_breach({"rssAnonKiB": 151 * 1024, "rssShmemKiB": 900 * 1024}, 15.0, 150, False)
+    self.assertIn("private memory", reason)
+    self.assertIsNone(mod.limit_breach({"rssAnonKiB": 40 * 1024, "rssShmemKiB": 900 * 1024}, 15.0, 150, False)[0])
+
+  def test_carstate_full_record_only_at_sample_rate(self):
+    import contextlib
+    events = {}
+    for k in range(100):  # one second of 100 Hz carState
+      events[b"cs%d" % k] = NS(logMonoTime=1_000_000_000 + k * 10_000_000,
+                               carState=NS(vEgo=0.0, gearShifter="park", cruiseState=None))
+    log = NS(Event=NS(from_bytes=lambda raw: contextlib.nullcontext(events[raw])))
+    with tempfile.TemporaryDirectory() as folder:
+      w = mod.RotatingWriter(folder, 1 << 20, 2)
+      cap = mod.Capture(w, log, sample_hz=2, all_can_ids=False, allow_moving=False)
+      for k in range(100):
+        cap.handle("carState", b"cs%d" % k)
+      w.close()
+    self.assertEqual(cap.counts["carState"], 2)
+    self.assertIsNone(cap.stop_reason)
 
 if __name__=="__main__":
   unittest.main()

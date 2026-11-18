@@ -199,3 +199,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\\ram1500-development\\wind
 ```
 
 The example IP is illustrative, **not** the discovered address of your Comma. SSH keys and any remote installation need explicit operator authorization, host-key verification, and a parked vehicle. The diagnostic sidecar now restricts its local directory to mode 0700 and files to mode 0600. This is defense-in-depth; local device disk access and operating-system permissions still matter.
+
+## Fixes after G3 run 2 (2026-11-17) — tested off-device only, NOT yet run on the Comma
+- **Memory:** off-device the processing path grows Python's heap by only 1–8 KiB per 30 s of truck-shaped traffic, so the
+  device's VmRSS climb (~12 MB/min) points at the shared 10 MB msgq rings (11 × 10 MB, verified sizes) being paged in as
+  they are read: shared, already-resident memory that stops growing once each ring wraps. Health rows now split
+  `rssAnonKiB` (private) from `rssShmemKiB` (shared) so the next device run confirms or refutes this.
+- **CPU:** no Poller; sockets drained on a 50 ms cycle (removes per-message wake-ups, the part the off-device bench cannot
+  measure); `carState` reads only `vEgo` at 100 Hz and builds the full record at the sample rate; CAN frames check the
+  address first and skip per-frame labels (labels once in `sidecar_start`). Off-device bench
+  (`bench_device_telemetry.py`, real pinned-schema messages): processing CPU −20 to −28 %, output −30 % (2.31 → 1.62 MB per
+  30 s). The device figure needs a new parked run.
+- **Self-enforced limits:** stops itself when its own CPU exceeds `--max-cpu-pct` (default 15 % of one core) in two
+  consecutive 10 s windows, or private memory exceeds `--max-private-mb` (default 150).
