@@ -84,3 +84,12 @@ Return a brief device compatibility assessment, local SSH connectivity status (w
 - Use: `python3 ram1500-development/steering_saturation_report.py /private/ram-171.csv --output /private/ram-171-steering.json`. Keep real-route CSV and JSON private, not committed to GitHub.
 - `test_steering_saturation_report.py` includes four synthetic tests (time alignment, missing/stale data, non-finite values and event grouping). Local tests passed; GitHub Actions offline Ram analyzer workflow passed on commit `ad668e35fbc7eeecffdb7cb18c7a2fac153486bd`.
 - Next step: execute on **private actual-route CSV**, verify real numerics and flag confidence. Synthetic CI passing does **not** establish a vehicle diagnosis or release readiness.
+
+
+## Coordination note: pinned-drive branch and ACC analysis (new)
+A separate Claude independent-review branch now exists: `claude/ram1500-review-2026-11-17`, latest observed commit `97779e9b23a150cbd1fb5b1fde2b5b0b4b602bc8`.
+It includes `ramtools/`, `investigate_route.py`, a schema pin to the **actual recorded driving commit** `1f7233cb`, 31 fixture/offline tests, `REVIEW_LOG.md` and an extensive independent review. **Do not overwrite those changes while working on SSH.** Check the branch and reconcile any work before merging it with this diagnostics branch.
+
+A source-reconciliation report now lives on this diagnostics branch at `ram1500-development/reports/drive-build-acc-lanechange-crossreview.md`. In particular, the November 14 **installed build** has the original basic Chrysler cruise cancel/resume support; the newer code's Intelligent Cruise Button Management was not part of that recorded car-controller source. Its lane-line fades were 0.5-second exit and ~1-second re-entry. Keep recorded-build claims separate from current-master behavior.
+
+Next non-SSH tasks: execute the *pinned* `investigate_route.py` against private Saturday Q-logs, and get R-logs for the saturation segment before choosing a controller fix. Never run a mixed-schema decode with both the newer branch's opendbc and pinned drive-build schema loaded in the same process, as Claude reproduced a pycapnp schema-ID conflict.
