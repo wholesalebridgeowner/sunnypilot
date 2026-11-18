@@ -36,16 +36,36 @@ def valid_number(x):
         return None
 
 
+
+def eps_auto_park_has_control(frame):
+    """RAM DT EPS_2 @ CAN 0x31, DBC AUTO_PARK_HAS_CONTROL_2 51|1@0+.
+
+    Chrysler RAM DT generator maps Stellantis EPS_2 address 544 to 49.
+    A one-bit Motorola signal at DBC start bit 51 occupies byte 6, bit 3.
+    Only reads CAN data; does not interpret OEM steering commands.
+    """
+    try:
+        if int(frame.src) != 0 or int(frame.address) != 0x31:
+            return None
+        data = bytes(frame.dat)
+        if len(data) < 7:
+            return None
+        return bool((data[6] >> 3) & 1)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
 class Summary:
     def __init__(self):
         self.bins = defaultdict(lambda: {"speed": [], "angle": [], "eps": [], "requested": [],
                                          "driverSteering": 0, "latActive": Counter(), "gear": Counter(),
-                                         "stoppedAngles": [], "column": []})
+                                         "stoppedAngles": [], "column": [], "autoParkControl": Counter(),
+                                         "autoParkTransitions": Counter()})
         self.frame_counts = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_changed = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_previous = {"baseline": {}, "parkCandidate": {}}
         self.events = Counter()
         self.segment_counts = Counter()
+        self._last_auto_park = None
 
     def observe(self, segment: int, local_sec: float, event):
         sec = segment * 60 + local_sec
@@ -79,8 +99,15 @@ class Summary:
         elif name in ("can", "sendcan"):
             phase = ("baseline" if BASELINE_SECONDS[0] <= sec < BASELINE_SECONDS[1] else
                      "parkCandidate" if PARK_CANDIDATE_SECONDS[0] <= sec < PARK_CANDIDATE_SECONDS[1] else None)
-            if phase:
-                for frame in getattr(event, name):
+            for frame in getattr(event, name):
+                if name == "can":
+                    flag = eps_auto_park_has_control(frame)
+                    if flag is not None:
+                        state["autoParkControl"]["true" if flag else "false"] += 1
+                        if self._last_auto_park is not None and flag != self._last_auto_park:
+                            state["autoParkTransitions"]["enabled" if flag else "disabled"] += 1
+                        self._last_auto_park = flag
+                if phase:
                     key = (name, int(frame.src), int(frame.address))
                     raw = bytes(frame.dat)
                     self.frame_counts[phase][key] += 1
@@ -120,6 +147,8 @@ class Summary:
                 "commaLateralActiveSamples": dict(row["latActive"]),
                 "driverSteeringPressedSamples": row["driverSteering"],
                 "gearCounts": dict(row["gear"]),
+                "epsAutoParkHasControl2Samples": dict(row["autoParkControl"]),
+                "epsAutoParkControlTransitions": dict(row["autoParkTransitions"]),
             })
         candidates=[]
         normal=self.frame_counts["baseline"]
@@ -155,6 +184,7 @@ class Summary:
                 "Owner time indicates approximate parking activation, not independently verified vehicle mode.",
                 "Route-relative seconds are reconstructed using 60-second log segments; validate alignment.",
                 "Changes in CAN frequency/payload variability do not identify steering command ownership.",
+                "AUTO_PARK_HAS_CONTROL_2 is a named EPS_2 DBC bit, not proof of the entire factory command or third-party authorization protocol.",
                 "A stationary steering wheel-angle change with Comma lateral control off would support a distinct factory path, not authorize replay.",
                 "This is aggregate-only observational analysis; no physical actuation or steering software changed."
             ]
