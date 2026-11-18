@@ -24,6 +24,15 @@ KEY_PATTERN = re.compile(r"^logs/([^/]+)/([0-9]+)/rlog\.zst$")
 ROUTE_PATTERN = re.compile(r"^[0-9a-f]{8}--[0-9a-f]{10}$")
 MAX_COMPRESSED_BYTES = 30_000_000
 MAX_SEGMENTS = 4
+# Only these fixed, non-identifying stage labels can appear in a failure log.
+CURRENT_STAGE = "startup"
+
+
+def stage(name: str) -> None:
+    global CURRENT_STAGE
+    if name not in ("configuration", "schema", "inventory", "download", "decode", "summary"):
+        raise ValueError("invalid private audit stage")
+    CURRENT_STAGE = name
 
 
 def parse_segments(value: str) -> tuple[int, ...]:
@@ -159,6 +168,7 @@ def main() -> None:
     import boto3
     from botocore.config import Config
 
+    stage("configuration")
     env = os.environ
     required = ("S3_BUCKET", "S3_ENDPOINT", "S3_ACCESS_KEY_ID",
                 "S3_SECRET_ACCESS_KEY", "RAM_ROUTE_PREFIX")
@@ -166,6 +176,7 @@ def main() -> None:
         raise ValueError("missing private environment configuration")
     segments = parse_segments(env.get("RAM_SEGMENTS", "29,30,31"))
     schema_dir = Path(env.get("RAM_SCHEMA_DIR", "/opt/sunnypilot/cereal"))
+    stage("schema")
     if any(v != "ok" for v in verify_schema_dir(schema_dir).values()):
         raise RuntimeError("pinned source schema integrity gate failed")
     schema = load_log_schema(schema_dir)
@@ -174,11 +185,13 @@ def main() -> None:
                       aws_secret_access_key=env["S3_SECRET_ACCESS_KEY"],
                       region_name=env.get("S3_REGION", "auto"),
                       config=Config(s3={"addressing_style": "virtual"}))
+    stage("inventory")
     pager = s3.get_paginator("list_objects_v2")
     objects = (item for page in pager.paginate(Bucket=env["S3_BUCKET"], Prefix="logs/")
                for item in page.get("Contents", ()))
     keys = select_keys(objects, route_prefix=env["RAM_ROUTE_PREFIX"], segments=segments)
 
+    stage("download")
     with tempfile.TemporaryDirectory(prefix="ram-private-comfort-") as tmp:
         paths = []
         for segment, key in zip(segments, keys):
@@ -191,10 +204,12 @@ def main() -> None:
                 raise RuntimeError("invalid private download size")
             p.chmod(0o600)
             paths.append(p)
+        stage("decode")
         records, read_results = load_records(paths, schema)
         if len(read_results) != len(segments) or any(
                 f.error or f.truncated or f.messages == 0 for f in read_results):
             raise RuntimeError("private R-log decode incomplete")
+        stage("summary")
         payload = summarize(records, read_results)
         print("RAM_PRIVATE_COMFORT " + json.dumps(payload, sort_keys=True, allow_nan=False),
               flush=True)
@@ -204,7 +219,10 @@ if __name__ == "__main__":
     # No exception traceback: SDK errors can contain private endpoint/key/object data.
     try:
         main()
-    except Exception:
-        print('RAM_PRIVATE_COMFORT {"status":"failed_closed_private_data_or_quality_gate"}',
-              flush=True)
+    except Exception as exc:
+        print("RAM_PRIVATE_COMFORT " + json.dumps({
+            "status": "failed_closed_private_data_or_quality_gate",
+            "stage": CURRENT_STAGE,
+            "failureType": type(exc).__name__,
+        }, sort_keys=True), flush=True)
         raise SystemExit(1)
