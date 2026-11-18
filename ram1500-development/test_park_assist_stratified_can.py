@@ -42,7 +42,7 @@ class Tests(unittest.TestCase):
         self.assertNotIn("0x31",ids)
         serialized=json.dumps(r)
         self.assertNotIn("dataHex",serialized)
-        self.assertNotIn("VIN",serialized)
+        self.assertNotIn("vehicleIdentificationNumber",serialized)
         self.assertNotIn("latitude",serialized.lower())
 
     def test_stale_and_future_only_dropped(self):
