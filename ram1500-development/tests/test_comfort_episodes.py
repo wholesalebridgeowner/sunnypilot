@@ -62,3 +62,35 @@ def test_empty_and_parameter_checks():
     try:evaluate([],**kwargs)
     except ValueError:pass
     else:raise AssertionError("expected validation failure")
+
+
+def test_excluded_lead_cannot_bridge_following_episodes():
+  # Two 1.1 s bursts must not count as one sustained 2.4 s follow episode
+  # across an intervening radar rejection. Valid sample spacing is only 0.2 s.
+  for reason in ("unconfirmed", "invalid_message", "driver_pedal"):
+    records=[]
+    for start in (0.,1.3):
+      for i in range(12):
+        t=start+i*.1
+        records.append(row("carState",t,vEgo=20.,gasPressed=False,brakePressed=False,
+                           **{"cruiseState.enabled":True}))
+        records.append(row("radarState",t+.02,**{"leadOne.status":True,
+                       "leadOne.dRel":40.,"leadOne.vRel":-1.,"leadOne.radar":True}))
+    if reason=="unconfirmed":
+      records.append(row("radarState",1.22,**{"leadOne.status":False}))
+    elif reason=="invalid_message":
+      bad=row("radarState",1.22,**{"leadOne.status":True,"leadOne.dRel":40.})
+      bad["valid"]=False
+      records.append(bad)
+    else:
+      records.append(row("carState",1.2,vEgo=20.,gasPressed=True,brakePressed=False,
+                         **{"cruiseState.enabled":True}))
+      records.append(row("radarState",1.22,**{"leadOne.status":True,
+                     "leadOne.dRel":40.,"leadOne.vRel":-1.}))
+    following=evaluate(records)["following"]
+    assert following["validCruiseLeadObservations"]==24
+    assert following["qualifyingEpisodeCount"]==0
+    assert following["qualifyingEpisodeTotalSeconds"]==0.
+    reject=following["leadFilteringRejections"]
+    assert reject[{"unconfirmed":"leadNotValid","invalid_message":"invalidRadarMessage",
+                   "driver_pedal":"driverPedalOrUnknown"}[reason]]==1
