@@ -58,7 +58,7 @@ class Tests(unittest.TestCase):
         self.assertNotIn("dataHex",output)
         self.assertNotIn("canFrameData",output)
         self.assertNotIn("GPS",output)
-        self.assertNotIn("VIN",output)
+        self.assertNotIn("vehicleIdentificationNumber",output)
 
     def test_stale_initdata_clock_does_not_double_route_time(self):
         stale=E("initData")
