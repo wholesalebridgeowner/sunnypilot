@@ -20,7 +20,8 @@ class E:
 
     def __getattr__(self,field):
         if field==self.name:
-            return self.payload
+            # Real cereal events return the frame list for can/sendcan (E("can", can=[...])), a struct otherwise.
+            return getattr(self.payload,field,self.payload)
         raise AttributeError(field)
 
 

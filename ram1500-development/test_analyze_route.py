@@ -87,7 +87,7 @@ class AnalyzerTests(unittest.TestCase):
       result = module.analyze([Path("0/rlog.zst")], reader, focus_seconds=1.0, window=0.0)
     finally:
       module.timeline = original_timeline
-    self.assertEqual(calls, ["0/rlog.zst", "0/rlog.zst"])
+    self.assertEqual(calls, [str(Path("0/rlog.zst"))] * 2)  # platform path separator (Windows: 0\rlog.zst)
     self.assertEqual(result["summary"]["readerPasses"], 2)
     self.assertEqual(result["summary"]["messageCount"], 4)
     self.assertEqual(result["summary"]["firstMonoTimeNs"], 1_000_000_000)
