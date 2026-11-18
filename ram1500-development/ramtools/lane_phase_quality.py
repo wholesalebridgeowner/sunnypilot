@@ -126,12 +126,18 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
     invalid_or_gap = (rec.get("valid") is not True or previous_t is not None and
                       not 0 < (t - previous_t) / NS <= max_model_gap_s)
     if invalid_segment or boundary or invalid_or_gap:
+      # Once an observed phase is interrupted, its reappearance is NOT a
+      # verified new entry. The same phase can continue across missing model
+      # frames, invalid observations or a recording boundary. Hold that state
+      # censored until a subsequent valid, different model state is observed.
+      # Preserve an existing suppression across additional invalid frames.
+      interrupted_state = open_phase["state"] if open_phase else suppressed_state
       if open_phase:
         reason = ("censoredBySegmentBoundaryOrUnverified"
                   if invalid_segment or boundary else "censoredByGapOrInvalidModel")
         phase_counts[open_phase["state"]][reason] += 1
       open_phase = None
-      suppressed_state = None
+      suppressed_state = interrupted_state
       previous_t = None
       previous_segment = None
       if rec.get("valid") is not True or invalid_segment:
