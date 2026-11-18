@@ -31,3 +31,11 @@ ChatGPT and Claude may develop and review patches, but tests and measured teleme
 
 ## Current status
 Branch and plan created. No rebuilt control software, signed image, install URL, or validated zero-speed/end-to-end-navigation capability exists yet.
+
+
+## November 17 continuation: event attribution and RPM/firmware evidence
+
+- In [steering_saturation_report.py](steering_saturation_report.py), the event snapshot now chooses the **latest controller state at or before the event**, never the closer *future* state. This corrects a potential false attribution for the +171s `steerSaturated` alert. Missing/stale controller samples stay `null`. Added 1s pre-event observed controller sample/saturation/command-limit counts and three deterministic fixture tests. No source torque or safety limits changed.
+- [RAM DT zero-speed source audit](reports/ram-dt-zero-speed-evidence-2026-11-17.md) documents actual pinned `df807f8be` integration exceptions for selected EPS firmware strings and `0x4FF` fingerprint state. **32 mph is not a universal physical steering limit**; installed firmware eligibility is still unknown. Self-parking doesn't prove an LKAS permission path.
+- **Next empirical step:** using the privately stored Q-logs and schema-matched installed build, produce a +171s numeric steering event report, then obtain sanitized EPS firmware/`CarParams` evidence. Do not distribute raw Q-/R-logs, VIN, credentials, or local paths via this public repository.
+- **Validation:** GitHub offline fixture test workflow passed on the event attribution change. This is *synthetic validation only* and neither proves cause nor qualifies a software installer.
