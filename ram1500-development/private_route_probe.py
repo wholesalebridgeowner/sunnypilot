@@ -3,7 +3,7 @@
 
 Railway one-shot job only. No vehicle connection, CAN transmission, VIN access,
 public HTTP listener, or raw telemetry in stdout. The device's cereal revision
-is pinned in Dockerfile.private-probe; never decode with arbitrary master schema.
+is pinned in Dockerfile; never decode with arbitrary master schema.
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def reader_from_cereal(schema_path):
     import capnp
     import zstandard as zstd
 
-    schema = capnp.load(str(schema_path))
+    schema = capnp.load(str(schema_path), imports=[str(schema_path.parent)])
     def read(path):
         compressed = Path(path).read_bytes()
         with zstd.ZstdDecompressor().stream_reader(io.BytesIO(compressed)) as stream:
