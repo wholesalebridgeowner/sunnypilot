@@ -59,6 +59,22 @@ class Tests(unittest.TestCase):
         self.assertNotIn("GPS",output)
         self.assertNotIn("VIN",output)
 
+    def test_stale_initdata_clock_does_not_double_route_time(self):
+        stale=E("initData")
+        stale.logMonoTime=0
+        frame=SimpleNamespace(src=0,address=0x31,dat=b"\\x00")
+        first=E("can",can=[frame])
+        first.logMonoTime=720_000_000_000
+        state=E("carState",vEgo=0.0,steeringAngleDeg=45,
+                steeringTorqueEps=60,steeringPressed=False,gearShifter="reverse")
+        state.logMonoTime=721_000_000_000
+        summary=mod.Summary()
+        mod.observe_segment_events(summary,12,[stale,first,state])
+        v=summary.result()
+        self.assertEqual(v["bins"][0]["relativeWindowSeconds"],[720,725])
+        self.assertEqual(v["bins"][0]["carStateSamples"],1)
+        self.assertFalse(any(item["relativeWindowSeconds"][0]>=1400 for item in v["bins"]))
+
     def test_no_fake_parking_claim_and_invalid_numbers(self):
         s=mod.Summary().result()
         self.assertEqual(s["status"],"unverified_oem_parking_annotation")
