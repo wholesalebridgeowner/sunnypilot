@@ -30,7 +30,7 @@ class LowSpeedAuditTests(unittest.TestCase):
             row(base, "carState", vEgo_mps="0"),
         ]
         report = audit.analyze(rows)
-        b = report["bins"]["standstill_below_0p5_mps"]
+        b = report["bins"]["reported_zero_mps"]
         self.assertEqual(b["speedSamples"], 1)
         self.assertEqual(b["carControlLatActiveTrue"], 1)
         self.assertEqual(b["nonzeroRequestedCanOutputSamples"], 1)
@@ -46,7 +46,7 @@ class LowSpeedAuditTests(unittest.TestCase):
             row(t + 1, "carControl", carControlLatActive="True"),
             row(t + 1, "carOutput", outputTorqueCan="350"),
         ]
-        b = audit.analyze(rows)["bins"]["standstill_below_0p5_mps"]
+        b = audit.analyze(rows)["bins"]["rolling_below_0p5_mps"]
         self.assertEqual(b["carControlMatched"], 0)
         self.assertEqual(b["carOutputMatched"], 0)
         self.assertEqual(b["activeAndNonzeroOutputSamples"], 0)
@@ -69,7 +69,7 @@ class LowSpeedAuditTests(unittest.TestCase):
         rows.append(row(6, "carState", vEgo_mps="0", valid="False"))
         rows.append(row("broken", "carControl", carControlLatActive="True"))
         result = audit.analyze(rows)
-        self.assertEqual([result["bins"][key]["speedSamples"] for key, _, _ in audit.SPEED_BINS], [0, 1, 1, 1])
+        self.assertEqual([result["bins"][key]["speedSamples"] for key, _, _ in audit.SPEED_BINS], [0, 0, 1, 1, 1])
         self.assertEqual(result["rejectedRows"], {"invalidTimestamp": 1, "invalidMessage": 1, "invalidSpeed": 2})
         json.dumps(result, allow_nan=False)
 
@@ -90,6 +90,16 @@ class LowSpeedAuditTests(unittest.TestCase):
             audit.analyze(rows, max_age_ms=float("nan"))
         with self.assertRaises(ValueError):
             audit.analyze(rows, command_deadband=-1)
+
+    def test_reported_zero_is_distinct_from_rolling_near_zero(self):
+        rows = [
+            row(100_000_000, "carState", vEgo_mps="0"),
+            row(200_000_000, "carState", vEgo_mps="0.01"),
+            row(300_000_000, "carState", vEgo_mps="0.49"),
+        ]
+        bins = audit.analyze(rows)["bins"]
+        self.assertEqual(bins["reported_zero_mps"]["speedSamples"], 1)
+        self.assertEqual(bins["rolling_below_0p5_mps"]["speedSamples"], 2)
 
     def test_original_exporter_preserves_lateral_active_flag(self):
         class Msg:
