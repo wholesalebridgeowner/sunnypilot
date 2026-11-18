@@ -3,7 +3,7 @@
 **Status: real recorded-drive measurements with the factory automatic-parking EPS control flag independently decoded from the pinned original Ram DBC. Read-only; no vehicle modification.**
 
 ## Provenance
-- Owner reported activating factory automatic parallel parking at approximately **05:32 Central** on November 18, 2026. The owner's vehicle has functional factory self-steering parallel parking.
+- Owner reported activating factory automatic parallel parking at the end of a short drive on November 18, 2026. The owner's vehicle has functional factory self-steering parallel parking.
 - Exact vehicle's recorded Sunnypilot build: `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` (v0.10.1). The matching pinned cereal schema was validated and used.
 - Completed adjacent R-log segments 11 and 12 were requested through the existing authorized Comma cloud-uploader connection and downloaded into the existing **private** Railway S3 bucket. The two compressed private objects were 9,906,687 and 10,247,145 bytes.
 - One-shot isolated Railway private analyzer service `ram-factory-parking-private-analysis`, final successful deployment `250e3a06-9079-45d6-bd76-077019d795e2`, source commit `5526975353a9ea3ebe41ba0d3ee4349cac5de8fb`. No vehicle communication or CAN transmission from this process.
@@ -46,7 +46,7 @@ This independently confirms the OEM EPS was in its automatic parking control mod
 
 ## Confirmed vehicle behavior
 
-The strongest activity falls in the **route-relative seconds 685–705**, with repeated Drive/Reverse selection, slow movement, large steering angle changes, and substantial EPS motor feedback. This is broadly consistent with the user's approximately 05:32 factory park-assist observation; the precise activation instant remains unverified.
+The strongest activity falls in the **route-relative seconds 685–705**, with repeated Drive/Reverse selection, slow movement, large steering angle changes, and substantial EPS motor feedback. This is broadly consistent with the owner's report of a factory park-assist maneuver at the end of the drive; the precise activation instant remains unverified.
 
 | Route-relative interval | Observed speed range | Near-stop steering angle motion* | Comma lateral control | Comma native steering command |
 |---|---|---|---|---|
@@ -80,9 +80,9 @@ Selected existing CAN messages showing byte-level activity changes between these
 
 ## Vehicle service documentation supports a separate factory architecture
 
-A service-manual reproduction for the 2021 Ram 1500 HFE identifies the **Park Assist Module (PAM)** as accepting inputs including parking mode, steering angle, gear and vehicle speed, and lists a **steering-control output to the EPS**. It also describes module communication over CAN. This is a strong architectural lead that **factory ParkSense self-steering has an OEM control path distinct from Comma's standard LKAS command**. It is not a confirmed frame ID or an authorization protocol.
+2021 Ram 1500 HFE service information identifies the **Park Assist Module (PAM)** as accepting inputs including parking mode, steering angle, gear and vehicle speed, and lists a **steering-control output to the EPS**. It also describes module communication over CAN. This is a strong architectural lead that **factory ParkSense self-steering has an OEM control path distinct from Comma's standard LKAS command**. It is not a confirmed frame ID or an authorization protocol.
 
-Source: [2021 Ram service manual, Park Assist Module](https://www.shinevfn.com/Dodge%20and%20Ram/2021/1500%20HFE/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Drivers%20Assistance%20Systems%20-%20ADAS/Chime%2FBuzzer%2FDriver%20Assist%20%28Service%20Information%29%20-%201500/Description/Park%20Assist%20System/Park%20Assist%20Module%20%28PAM%29/).
+Source: 2021 Ram 1500 service information, Park Assist System → Park Assist Module (PAM) description. The official copy is Stellantis TechAuthority (subscription); unofficial third-party reproductions are deliberately not linked.
 
 The [2021 Ram 1500 official owner's manual](https://vehicleinfo.mopar.com/assets/publications/en-us/Ram/2021/1500_DT/5633293_21_DT_OM_EN_USC_DIGITAL_E4.pdf) describes steering guidance during ParkSense maneuvering at parking speeds and a nominal 5 mph limit while active. This motivated excluding the later, faster post-parking samples from the candidate interval.
 
@@ -155,7 +155,7 @@ Ask Claude to cross-check `0xA9`'s message origin and purpose against OEM servic
 
 The 2021 Ram 1500 HFE service-manual description of the **Park Assist Module (PAM)** explicitly states that it communicates on the **high-speed Controller Area Network – Chassis (CAN-C)**. It also describes PAM broadcasting electronic messages to enable other factory Park Assist functions. This is authoritative network-family context, **not** evidence that any particular unlabelled frame on the Comma-visible bus is a steering request.
 
-- [2021 factory service-manual reproduction: Park Assist Module description and operation](https://www.shinevfn.com/Dodge%20and%20Ram/2021/1500%20HFE/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Communication%20Devices/Electronic%20Control%20Modules%20%28Service%20Information%29%20-%201500/Module%2C%20Park%20Assist%20%28PAM%29/Description/Description%20And%20Operation/)
+- 2021 Ram 1500 service information, Electronic Control Modules → Module, Park Assist (PAM), Description and Operation (official copy: Stellantis TechAuthority; unofficial reproductions not linked)
 - [Ram 1500 DT body-builder cybersecurity/network overview](https://www.ramtrucks.com/BodyBuilder/service/Image?imageId=MtQrP%2FFqLY5r%2Fest8MtGjGgHzAHGUTU0WB3rWuqSY7YmQ2vEhuBWBNLjy4xHgojZ%0A), which documents a vehicle Security Gateway isolating outside connections from vehicle networks.
 
 The next passive engineering problem is therefore **bus observability and source attribution**: whether the Comma harness's observed vehicle streams include the EPS-relevant CAN-C PAM messages, and whether the apparent differential activity of `0xA9` survives matched controls for speed, gear, steering load and repeat maneuvers. No gateway bypass, module authentication modification, steering-command injection, or full-auto steering install is proposed.

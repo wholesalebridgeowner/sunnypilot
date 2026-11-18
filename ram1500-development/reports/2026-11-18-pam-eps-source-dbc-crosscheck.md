@@ -4,11 +4,11 @@
 
 ## Independent public service-information corroboration
 
-Three separate descriptions in reproduced **2021 Ram 1500 service information** agree at the *module architecture* level:
+Three separate descriptions in **2021 Ram 1500 service information** agree at the *module architecture* level. The official copy is Stellantis TechAuthority (subscription); unofficial third-party reproductions are deliberately not linked.
 
-1. [PAM inputs and outputs, Ram 1500 HFE](https://www.shinevfn.com/Dodge%20and%20Ram/2021/1500%20HFE/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Drivers%20Assistance%20Systems%20-%20ADAS/Chime%2FBuzzer%2FDriver%20Assist%20%28Service%20Information%29%20-%201500/Description/Park%20Assist%20System/Park%20Assist%20Module%20%28PAM%29/): identifies a **steering-control output from the Park Assist Module to EPS**. This is a documented module role, not a known CAN ID.
-2. [PAM description and operation, Ram 1500 HFE](https://www.shinevfn.com/Dodge%20and%20Ram/2021/1500%20HFE/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Communication%20Devices/Electronic%20Control%20Modules%20%28Service%20Information%29%20-%201500/Module%2C%20Park%20Assist%20%28PAM%29/Description/Description%20And%20Operation/): describes PAM **CAN-C (chassis CAN)** transmission and broadcast of parking-system messages.
-3. [EPS park-assist description, 2021 Ram 1500 Big Horn](https://lemon-manuals.org.ua/Dodge%20and%20Ram/2021/1500%20Big%20Horn%2C%204D%20Pickup%20Crew%20Cab%2C%205.7L%20Eng%20VIN%20T%2C%20Eng%20CD%20EZH%2C%204WD/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Warning%20Systems/Chime%2FBuzzer%2FDriver%20Assist%20%28Service%20Information%29%20-%201500/Description/Park%20Assist%20System/Electronic%20Power%20Steering%20%28EPS%29%20Module/): says EPS ramps assist toward a **PAM-requested torque value** when a park maneuver is permitted and mentions OEM hands-on monitoring.
+1. PAM inputs and outputs (Park Assist System → Park Assist Module): identifies a **steering-control output from the Park Assist Module to EPS**. This is a documented module role, not a known CAN ID.
+2. PAM description and operation (Electronic Control Modules → Module, Park Assist): describes PAM **CAN-C (chassis CAN)** transmission and broadcast of parking-system messages.
+3. EPS module park-assist description (Park Assist System → Electronic Power Steering (EPS) Module): says EPS ramps assist toward a **PAM-requested torque value** when a park maneuver is permitted and mentions OEM hands-on monitoring.
 
 **Conclusion bounded by these sources:** PAM-to-EPS steering-request ownership is described by 2021 model-family service documentation, and PAM communicates over CAN-C. The EPS-side request is described as an OEM function. This is stronger than arbitrary observed CAN frame-activity correlations. Nevertheless this is a cross-trim/year architectural comparison, **not** proof of this truck's exact module wiring, firmware semantics, frame sender identity, security authorization, or Comma-harness visibility.
 
