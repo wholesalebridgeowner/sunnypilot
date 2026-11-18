@@ -62,5 +62,60 @@ class AnalyzerTests(unittest.TestCase):
       self.assertIn("outputTorqueCan",prefix.with_suffix(".csv").read_text())
       self.assertIn("eventEpisodes",prefix.with_suffix(".json").read_text())
 
+
+  def test_focus_window_decodes_only_selected_timeline(self):
+    """An early timestamp may arrive after later messages; anchor to route min."""
+    messages = [
+      FakeMessage(5_000_000_000, "carState", NS(vEgo=5.0)),
+      FakeMessage(1_000_000_000, "onroadEvents", [NS(name="steerSaturated")]),
+      FakeMessage(2_000_000_000, "carControl",
+                  NS(actuators=NS(torque=.25, steeringAngleDeg=1), latActive=True)),
+      FakeMessage(9_000_000_000, "carOutput",
+                  NS(actuatorsOutput=NS(torqueOutputCan=100))),
+    ]
+    calls = []
+    original_timeline = module.timeline
+    try:
+      def rejecting_timeline(msg, kind):
+        if msg.logMonoTime != 2_000_000_000:
+          raise AssertionError("decoded a sample outside the requested window")
+        return original_timeline(msg, kind)
+      module.timeline = rejecting_timeline
+      def reader(path):
+        calls.append(path)
+        return iter(messages)
+      result = module.analyze([Path("0/rlog.zst")], reader, focus_seconds=1.0, window=0.0)
+    finally:
+      module.timeline = original_timeline
+    self.assertEqual(calls, ["0/rlog.zst", "0/rlog.zst"])
+    self.assertEqual(result["summary"]["readerPasses"], 2)
+    self.assertEqual(result["summary"]["messageCount"], 4)
+    self.assertEqual(result["summary"]["firstMonoTimeNs"], 1_000_000_000)
+    self.assertEqual(result["summary"]["eventSampleCounts"]["steerSaturated"], 1)
+    self.assertEqual(len(result["rows"]), 1)
+    self.assertEqual(result["rows"][0]["stream"], "carControl")
+    self.assertEqual(result["rows"][0]["seconds"], 1.0)
+
+  def test_generator_files_and_event_window_boundaries(self):
+    messages = [
+      FakeMessage(0, "onroadEvents", [NS(name="steerSaturated")]),
+      FakeMessage(1_000_000_000, "onroadEvents", [NS(name="steerSaturated")]),
+      FakeMessage(1_500_000_000, "carState", NS(vEgo=8.0)),
+      FakeMessage(2_000_000_000, "onroadEvents", [NS(name="canError")]),
+    ]
+    seen = []
+    def reader(path):
+      seen.append(path)
+      return iter(messages)
+    result = module.analyze((Path(p) for p in ["0/rlog.zst", "1/rlog.zst"]),
+                            reader, focus_seconds=1.5, window=.5)
+    # Four segment scans: both files in each of the two independent passes.
+    self.assertEqual(len(seen), 4)
+    self.assertEqual(result["summary"]["messageCount"], 8)
+    self.assertEqual(result["summary"]["eventSampleCounts"]["steerSaturated"], 4)
+    # Boundaries (1.0, 2.0) are inclusive; zero-time samples are omitted.
+    self.assertEqual(sorted({r["monoTimeNs"] for r in result["rows"]}),
+                     [1_000_000_000, 1_500_000_000, 2_000_000_000])
+
 if __name__ == "__main__":
   unittest.main()
