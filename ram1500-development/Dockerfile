@@ -23,6 +23,9 @@ RUN mkdir -p /opt/sunnypilot && cd /opt/sunnypilot \
     && git checkout -q --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${PINNED_SUNNYPILOT_COMMIT}"
 
+# Fail at build time if the pinned schema cannot resolve its imported capnp files.
+RUN python -c 'import capnp; from pathlib import Path; p=Path("/opt/sunnypilot/cereal/log.capnp"); capnp.load(str(p), imports=[str(p.parent)])'
+
 WORKDIR /opt/ram
 COPY . /opt/ram/
 RUN python -m unittest discover -s /opt/ram -p 'test_private_route_probe.py' -v
