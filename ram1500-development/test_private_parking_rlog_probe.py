@@ -76,6 +76,27 @@ class Tests(unittest.TestCase):
         self.assertEqual(v["bins"][0]["carStateSamples"],1)
         self.assertFalse(any(item["relativeWindowSeconds"][0]>=1400 for item in v["bins"]))
 
+    def test_pinned_dbc_eps_auto_park_status_bit_and_transitions(self):
+        def frame(flag, bus=0, address=0x31, byte_length=8):
+            dat=bytearray(byte_length)
+            if byte_length>6 and flag:
+                dat[6]|=0x08  # DBC bit 51, single-bit Motorola
+            return SimpleNamespace(src=bus,address=address,dat=bytes(dat))
+        self.assertIs(mod.eps_auto_park_has_control(frame(True)),True)
+        self.assertIs(mod.eps_auto_park_has_control(frame(False)),False)
+        self.assertIsNone(mod.eps_auto_park_has_control(frame(True,bus=130)))
+        self.assertIsNone(mod.eps_auto_park_has_control(frame(True,address=0xA6)))
+        self.assertIsNone(mod.eps_auto_park_has_control(frame(True,byte_length=6)))
+        summary=mod.Summary()
+        summary.observe(11,1.0,E("can",can=[frame(False)]))
+        summary.observe(11,25.0,E("can",can=[frame(True)]))
+        summary.observe(11,25.01,E("can",can=[frame(True)]))
+        summary.observe(11,40.0,E("can",can=[frame(False)]))
+        self.assertEqual(summary.bins[132]["autoParkControl"]["false"],1)
+        self.assertEqual(summary.bins[137]["autoParkControl"]["true"],2)
+        self.assertEqual(summary.bins[137]["autoParkTransitions"]["enabled"],1)
+        self.assertEqual(summary.bins[140]["autoParkTransitions"]["disabled"],1)
+
     def test_no_fake_parking_claim_and_invalid_numbers(self):
         s=mod.Summary().result()
         self.assertEqual(s["status"],"unverified_oem_parking_annotation")
