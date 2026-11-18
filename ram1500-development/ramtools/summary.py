@@ -10,7 +10,7 @@ NS = 1e9
 
 # cloudlog events that are logged with error=True by design and are not, on their own, faults.
 ROUTINE_ERROR_EVENTS = {
-  "selfdrived.initialized": "always logged with error=True at startup (selfdrived.py:476-485); inspect 'timeout' and the lists",
+  "selfdrived.initialized": "always logged with error=True at startup (selfdrived.py:458-485); inspect 'timeout' and the lists",
 }
 
 

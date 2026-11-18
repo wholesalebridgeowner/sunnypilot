@@ -11,6 +11,7 @@ Build a measured, Ram 1500-specific assisted-driving software stack based on the
 - Starting documentation: `ram1500-development/README.md`
 - Existing read-only decoder: `ram1500-development/analyze_route.py`
 - Relevant controls implementation: `selfdrive/controls/lib/latcontrol_torque.py`; inspect the actual RAM platform integration and its upstream dependency/submodule rather than assuming a particular path.
+  - **Claude review 2026-11-17 (disputed, see REVIEW_LOG C-01):** the Nov 14 drive ran `sunnypilot/sunnypilot@1f7233cb` (v0.10.1), which shares no git history with this fork's master; every steering file differs. Explanations and replays of that drive must use the `1f7233cb` copies. Pinned schema and cited constants: `ramtools/schema.py`, `ramtools/constants.py`.
 - Live vehicle fingerprint reported in logs: `RAM_1500_5TH_GEN`
 - Recorded Saturday drive build: Sunnypilot 0.10.1, `staging-tici` commit `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`, dirty working tree. This is **not** evidence that the `ram1500-custom-development` branch was installed on the vehicle.
 - Hardware: telemetry reports `tici`; confirm hardware identity from device instead of making assumptions about Comma version.
@@ -59,6 +60,21 @@ Deliverable: platform capability and constraint matrix, evidence citations to so
 - Software-vs-hardware limiting factors; separate stock vehicle limitations from Sunnypilot controller behavior.
 - Prioritized, smallest safe changes for offline experiments, with test plans.
 - Table of unknowns, required further logs, and evidence for each claim.
+
+## Cross-review status (ChatGPT ↔ Claude)
+Ledger: `ram1500-development/REVIEW_LOG.md` (one row per claim; replies appended, never overwritten).
+Claude round 1 (2026-11-17, branch `claude/ram1500-review-2026-11-17`): report `reports/2026-11-17-claude-independent-review.md`. Logs were not read (access blocked); findings are source-grounded at `1f7233cb`.
+
+| Phase 1 item | Status after Claude round 1 |
+|---|---|
+| 1. Schema / commit | Done: pinned to `1f7233cb`, five files verified by git blob SHA-1 (`ramtools/schema.py`). |
+| 2. Manifests, `logMonoTime` alignment | Tooling done (`investigate_route.py`); run on data pending. |
+| 3. ±15 / ±30 s around 171 s | Tooling done (`steerSaturated_<n>_pm15s.csv`, `_pm30s.csv`, mechanism A/B classification); run pending. |
+| 4. CSV/JSON timelines | Done (per-row cross-service skew, units sidecar). |
+| 5. Episodes vs samples | Done (`episodes.csv`, exact durations from on-change messages). |
+| 6. Compare segments / earlier route | Pending data. |
+
+Next three steps (owner: whoever has log access): (1) run `investigate_route.py` on the 51 qlogs; (2) fetch rlogs for segments 0, 2 and the last two, rerun; (3) offline lateral-accel-per-torque fit vs the 2.0 placeholder (experiment E1). No controls change is proposed in this round.
 
 ## Working rules
 Keep baseline and changes separately versioned, no blind vehicle actuation, and no raw identifying driving data in public commits. Do not mistake route summaries for validated engineering diagnoses. Record command and observed actuator output together before reaching conclusions about steering torque limits.

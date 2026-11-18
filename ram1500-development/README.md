@@ -29,5 +29,20 @@ Status: **development only, not installable or validated for road use**.
 ## Workflow
 ChatGPT and Claude may develop and review patches, but tests and measured telemetry decide whether to retain a change. Prefer a private destination repository for future development; the initial branch is in the existing public repository. Do not publish vehicle identifiers or private logs in this repo.
 
+## Offline analysis tools (read-only)
+Requires Python 3.11+ with `pycapnp` and `zstandard` (`pip install pycapnp zstandard`). Nothing here talks to a vehicle.
+Outputs are derived from private driving data and must stay outside this repository (the tool enforces it).
+
+```
+python ram1500-development/investigate_route.py --fetch-schema --schema-dir ~/.cache/ram1500/schema-1f7233cb --out ~/ram-analysis/<route> <log dir>/<route>--*/qlog.zst
+```
+
+- `--fetch-schema` downloads the five Cap'n Proto files of the drive build `1f7233cb` and verifies their git blob SHA-1s.
+- Output: `summary.json`, `findings.md`, `episodes.csv`, `faults.csv`, `steerSaturated_<n>_pm15s.csv` / `_pm30s.csv` (+ units).
+- `analyze_route.py --schema-dir ...` gives the quick counts/episodes summary.
+- Tests: `cd ram1500-development && python -m pytest` (set `RAM1500_SCHEMA_DIR` to the schema dir to include the Cap'n Proto end-to-end test).
+- Do not load the pinned schema and this branch's openpilot/opendbc in the same Python process; pycapnp aborts on the duplicate schema ids.
+
 ## Current status
 Branch and plan created. No rebuilt control software, signed image, install URL, or validated zero-speed/end-to-end-navigation capability exists yet.
+Claude round-1 review and offline tooling: `reports/2026-11-17-claude-independent-review.md`, `REVIEW_LOG.md`.
