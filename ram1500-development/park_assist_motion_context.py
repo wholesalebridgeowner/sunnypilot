@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from statistics import median
 
-from park_assist_phase_windows import parse_window
+from park_assist_phase_windows import REORDER_TOLERANCE_S, parse_window
 
 NS = 1_000_000_000
 
@@ -35,12 +35,17 @@ def describe(records, normal, parking):
     # Input rows: (monoNs, service, selected privacy-safe scalar dict).
     anchor = None
     stats = {"normal": [], "factoryParking": []}
-    last_time = None
+    newest = None
+    max_reorder = 0.
     for t, service, values in records:
         t = int(t)
-        if last_time is not None and t < last_time:
-            raise ValueError("records must be chronological")
-        last_time = t
+        # rlogs interleave services in per-socket batches: bounded reordering is normal; fail closed beyond it.
+        if newest is not None and t < newest:
+            lag = (newest - t) / NS
+            if lag > REORDER_TOLERANCE_S:
+                raise ValueError("records must be chronological")
+            max_reorder = max(max_reorder, lag)
+        newest = t if newest is None else max(newest, t)
         if anchor is None:
             # Same anchor as park_assist_phase_windows: the first valid CAN event.
             if service not in ("can", "sendcan"):
@@ -81,6 +86,7 @@ def describe(records, normal, parking):
     return {"normal": summarize(stats["normal"]),
             "factoryParking": summarize(stats["factoryParking"]),
             "timeReference": "first message of supplied chronological R-logs; NOT wall clock",
+            "maxReorderSeconds": round(max_reorder, 3),
             "caveats": [
                 "FactoryParking is a driver-annotated window, NOT an inferred OEM parking state.",
                 "Steering angle changing at reported zero speed demonstrates motion, not which ECU commanded it.",

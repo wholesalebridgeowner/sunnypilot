@@ -17,6 +17,7 @@ from pathlib import Path
 from park_assist_can_audit import compare, iter_records
 
 NS = 1_000_000_000
+REORDER_TOLERANCE_S = 2.0
 
 
 def parse_window(s: str) -> tuple[float, float]:
@@ -39,6 +40,8 @@ def measure_windows(frames, baseline, parking):
     if not (a < b <= c < d or c < d <= a < b):
         raise ValueError("windows must not overlap")
     anchor = None
+    newest = None
+    max_reorder = 0.
     normal, oem = [], []
     count = 0
     for record in frames:
@@ -47,9 +50,15 @@ def measure_windows(frames, baseline, parking):
         t = int(record[0])
         if anchor is None:
             anchor = t
+        # loggerd writes per-socket batches, so logMonoTime is not strictly increasing in file order
+        # (the drive-build LogReader offers sort_by_time for this). Accept bounded reordering; fail closed beyond it.
+        if newest is not None and t < newest:
+            lag = (newest - t) / NS
+            if lag > REORDER_TOLERANCE_S:
+                raise ValueError("R-log files must be supplied in chronological order")
+            max_reorder = max(max_reorder, lag)
+        newest = t if newest is None else max(newest, t)
         elapsed = (t - anchor) / NS
-        if elapsed < 0:
-            raise ValueError("R-log files must be supplied in chronological order")
         if a <= elapsed < b:
             normal.append(record)
         elif c <= elapsed < d:
@@ -70,6 +79,7 @@ def measure_windows(frames, baseline, parking):
         "sourceCANFrameObservations": count,
         "normalWindowFrames": len(normal),
         "parkingWindowFrames": len(oem),
+        "maxReorderSeconds": round(max_reorder, 3),
     }
     result["caveats"].append(
         "Windows are user-annotated; without confirmed OEM park-assist state, this cannot prove that parking mode engaged.")

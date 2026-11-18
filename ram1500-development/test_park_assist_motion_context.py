@@ -51,6 +51,16 @@ class Tests(unittest.TestCase):
         self.assertIsNone(out["factoryParking"]["steeringAngleRangeDeg"])
         self.assertIsNone(m.finite_number(float("nan")))
 
+    def test_bounded_logger_reordering_is_measured_not_rejected(self):
+        rows=list(self.samples())
+        t=rows[10][0]
+        rows.insert(11,(t-80_000_000,"carControl",{"latActive":False}))  # written after a later carState
+        out=m.describe(rows,(0,4),(8,12))
+        self.assertEqual(out["maxReorderSeconds"],0.08)
+        self.assertEqual(out["normal"]["carStateSamples"],30)
+        with self.assertRaisesRegex(ValueError,"chronological"):
+            m.describe(rows+[(rows[-1][0]-3_000_000_000,"carState",{"vEgo":0})],(0,4),(8,12))
+
 
 if __name__=="__main__":
     unittest.main()

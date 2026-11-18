@@ -60,6 +60,15 @@ class Tests(unittest.TestCase):
         self.assertIn("cannot prove",str(report["caveats"]))
         self.assertTrue(all("payload" not in key.lower() for row in report["changes"] for key in row))
 
+    def test_bounded_logger_reordering_is_measured_not_rejected(self):
+        # rlogs interleave sockets in batches: a sendcan echo can be written after a later can packet.
+        data=packets()
+        late=(data[11][0]-50_000_000,"sendcan",0,0x2A6,b"\x00")
+        data.insert(12,late)
+        report=m.measure_windows(data,(0,4),(8,12))
+        self.assertEqual(report["windowDefinitions"]["maxReorderSeconds"],0.05)
+        self.assertEqual(report["windowDefinitions"]["normalWindowFrames"],81)
+
 
 if __name__ == "__main__":
     unittest.main()
