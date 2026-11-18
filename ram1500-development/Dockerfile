@@ -23,6 +23,18 @@ RUN mkdir -p /opt/sunnypilot && cd /opt/sunnypilot \
     && git checkout -q --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${PINNED_SUNNYPILOT_COMMIT}"
 
+# The pinned cereal/car.capnp is a symlink into a gitlink submodule. Fetch
+# the *exact gitlink SHA* from the installed device commit, never opendbc master.
+RUN set -eu; \
+    dbc_sha="$(git -C /opt/sunnypilot rev-parse HEAD:opendbc_repo)"; \
+    mkdir -p /opt/sunnypilot/opendbc_repo; \
+    cd /opt/sunnypilot/opendbc_repo; \
+    git init -q; \
+    git remote add origin https://github.com/sunnypilot/opendbc.git; \
+    git fetch --depth=1 origin "$dbc_sha"; \
+    git checkout -q --detach FETCH_HEAD; \
+    test "$(git rev-parse HEAD)" = "$dbc_sha"
+
 # Fail at build time if the pinned schema cannot resolve its imported capnp files.
 RUN ls -la /opt/sunnypilot/cereal/ && test -s /opt/sunnypilot/cereal/car.capnp && test -s /opt/sunnypilot/cereal/log.capnp \
     && python -c 'import capnp; from pathlib import Path; p=Path("/opt/sunnypilot/cereal"); capnp.load(str(p/"car.capnp"), imports=[str(p)]); capnp.load(str(p/"log.capnp"), imports=[str(p)])'
