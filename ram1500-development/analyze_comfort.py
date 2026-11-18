@@ -83,6 +83,11 @@ def summarize(records, max_gap=.35):
   per_state=[]
   gaps=[]
   lane_changes=[]
+  observed_accel=[]
+  observed_longitudinal_jerk=[]
+  last_accel=None
+  cruise_enabled_samples=0
+  driver_pedal_samples=0
   previous_lc=(None,None)
   current_transition=None
   control_long_active=Counter()
@@ -91,6 +96,17 @@ def summarize(records, max_gap=.35):
     typ=row["stream"]
     if typ=="carState":
       last_state["carState"]=row
+      if row.get("cruise_enabled") is True:
+        cruise_enabled_samples+=1
+      if row.get("gasPressed") is True or row.get("brakePressed") is True:
+        driver_pedal_samples+=1
+      if finite(row.get("aEgo")):
+        observed_accel.append(row["aEgo"])
+        if last_accel is not None:
+          delta_t=row["seconds"]-last_accel["seconds"]
+          if .03<=delta_t<=.3:
+            observed_longitudinal_jerk.append((row["aEgo"]-last_accel["aEgo"])/delta_t)
+        last_accel={"seconds":row["seconds"],"aEgo":row["aEgo"]}
     elif typ=="radarState":
       last_state["radarState"]=row
       lead_valid=row.get("leadOne_status") is True
@@ -124,10 +140,26 @@ def summarize(records, max_gap=.35):
     idx=(len(values)-1)*p
     lo=int(idx);hi=min(len(values)-1,lo+1)
     return round(values[lo]*(hi-idx)+values[hi]*(idx-lo),3) if lo!=hi else round(values[lo],3)
+  turning=[]
+  for transition in lane_changes:
+    if transition["state"]!="laneChangeStarting":
+      continue
+    start=transition["startSeconds"]+(first or 0)
+    stop=transition["endSeconds"]+(first or 0)
+    observed=[abs(row["steeringRateDeg"]) for row in rows if row["stream"]=="carState"
+              and start<=row["seconds"]<=stop and finite(row.get("steeringRateDeg"))]
+    turning.append({"startSeconds":transition["startSeconds"],"direction":transition["direction"],
+                    "durationSeconds":round(transition["endSeconds"]-transition["startSeconds"],3),
+                    "peakAbsSteeringRateDegPerSecond":round(max(observed),3) if observed else None})
+  jerk_abs=sorted(abs(j) for j in observed_longitudinal_jerk if finite(j))
   return {
     "messages":len(rows),"streamCounts":dict(counts),
     "durationSeconds":round(last-first,2) if first is not None else None,
     "longitudinalActiveSamples":dict(control_long_active),
+    "cruiseEnabledCarStateSamples":cruise_enabled_samples,
+    "driverPedalPressedCarStateSamples":driver_pedal_samples,
+    "observedLongitudinalJerk":{"samples":len(jerk_abs),"medianAbsMetersPerSecondCubed":percentile(jerk_abs,.5),"p90AbsMetersPerSecondCubed":percentile(jerk_abs,.9),
+       "warning":"Derived from finite-differenced aEgo; noisy and not a direct throttle-command measurement; verify filtering before comfort judgments."},
     "longitudinalPlanSources":dict(plan_sources),
     "leadHeadway":{"matchedSamples":len(valid_gaps),
                    "medianSeconds":percentile(valid_gaps,.5),
@@ -135,6 +167,7 @@ def summarize(records, max_gap=.35):
                    "p90Seconds":percentile(valid_gaps,.9),
                    "warning":"RadarState lead may be model-derived (radarUnavailable on Ram port). Time gap is distance/speed only, not a factory ACC target or a comfort score."},
     "laneChangeTransitions":lane_changes,
+    "laneChangeStartingWindows":turning,
     "limitations":["No reliable direct throttle/brake command observed from Ram vehicle controller; cruise buttons and factory ACC can govern speed.",
                    "Plan acceleration does not prove actuator application when longActive is false.",
                    "Lane-change model state transitions alone do not quantify lateral jerk.",
