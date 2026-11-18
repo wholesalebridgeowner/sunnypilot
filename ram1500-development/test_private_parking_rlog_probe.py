@@ -97,6 +97,23 @@ class Tests(unittest.TestCase):
         self.assertEqual(summary.bins[137]["autoParkTransitions"]["enabled"],1)
         self.assertEqual(summary.bins[140]["autoParkTransitions"]["disabled"],1)
 
+    def test_eps_status_ordinals_split_by_factory_control_state(self):
+        def eps(flag, lkas, overlay):
+            b=bytearray(8)
+            b[6]=0x08 if flag else 0
+            b[2]=(lkas&15)<<4
+            b[0]=(overlay&15)<<3
+            return SimpleNamespace(src=0,address=0x31,dat=bytes(b))
+        s=mod.Summary()
+        s.observe(11,2.0,E("can",can=[eps(False,2,0)]))
+        s.observe(11,25.0,E("can",can=[eps(True,7,9)]))
+        s.observe(11,25.01,E("can",can=[eps(True,7,9)]))
+        report=s.result()["epsStateByAutoParkFlag"]
+        self.assertEqual(report["false"]["lkas"],{"2":1})
+        self.assertEqual(report["false"]["overlay"],{"0":1})
+        self.assertEqual(report["true"]["lkas"],{"7":2})
+        self.assertEqual(report["true"]["overlay"],{"9":2})
+
     def test_no_fake_parking_claim_and_invalid_numbers(self):
         s=mod.Summary().result()
         self.assertEqual(s["status"],"unverified_oem_parking_annotation")
