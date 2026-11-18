@@ -21,6 +21,4 @@ jobs:
           python-version: '3.11'
       - name: Offline fixture tests
         run: |
-          python3 -m unittest discover -s ram1500-development -p 'test_analyze*.py' -v
-          python3 -m unittest discover -s ram1500-development -p 'test_device_telemetry.py' -v
-          python3 -m unittest discover -s ram1500-development -p 'test_summarize_can_capture.py' -v
+          python3 -m unittest discover -s ram1500-development -p 'test_*.py' -v
