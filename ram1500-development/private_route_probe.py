@@ -69,11 +69,28 @@ def reader_from_cereal(schema_path):
     return read
 
 
-def summarize(result, steering, coverage):
+def summarize(result, steering, coverage, eps, torque_window):
     # Deliberately do not include absolute timestamps, route IDs, source paths,
     # VIN, raw samples, geoposition, or command traces in process output.
     groups = steering["groups"]
+    metrics = groups["allControllerStateSamples"]["metrics"]
+    fields = ("vEgo_mps", "steeringAngleDeg", "steeringTorqueEps",
+              "requestedTorque", "outputTorqueCan", "lateralError")
+    numbers = {name: {key: metrics[name][key]
+                      for key in ("count", "median", "p95Abs", "maxAbs")}
+               for name in fields}
+    speed_bands = {
+        name: {
+            "carStateSamples": report["carStateSamples"],
+            "eligibleActiveLowDriverSamples": report["eligibleActiveLowDriverSamples"],
+            "delaysMs": report["delaysMs"],
+        } for name, report in eps["speedBands"].items()
+        if report["carStateSamples"]
+    }
     return {
+        "windowNumericMetrics": numbers,
+        "focusedTorqueWindow": torque_window,
+        "epsDirectionCorrelationsBySpeed": speed_bands,
         "status": "partial_observational_analysis_only",
         "segments": list(SELECTED_SEGMENTS),
         "logKind": "rlog",
@@ -103,6 +120,7 @@ def main():
     from analyze_route import analyze
     import steering_saturation_report
     import telemetry_coverage
+    import eps_feedback_lag
 
     env = os.environ
     required = ("S3_BUCKET", "S3_ENDPOINT", "S3_ACCESS_KEY_ID",
@@ -143,9 +161,23 @@ def main():
         result = analyze(paths, reader_from_cereal(schema), focus, window)
         steering = steering_saturation_report.analyze(result["rows"])
         coverage = telemetry_coverage.analyze(result["rows"])
+        eps = eps_feedback_lag.analyze(result["rows"])
+        focus_rows = [row for row in result["rows"]
+                      if 1800 <= row["seconds"] <= 1807]
+        focused = steering_saturation_report.analyze(focus_rows)
+        focused_group = focused["groups"]["allControllerStateSamples"]
+        torque_window = {
+            "routeRelativeSeconds": [1800, 1807],
+            "controllerSamples": focused["controllerSamples"],
+            "nearCommandLimitControllerSamples":
+                focused_group["nearReportedCommandLimitSamples"],
+            "requestNormalized": focused_group["metrics"]["requestedTorque"],
+            "commandNative": focused_group["metrics"]["outputTorqueCan"],
+            "epsFeedbackNative": focused_group["metrics"]["steeringTorqueEps"],
+        }
         print("RAM_PRIVATE_PROBE " + json.dumps(
-            summarize(result, steering, coverage), separators=(",", ":"),
-            allow_nan=False), flush=True)
+            summarize(result, steering, coverage, eps, torque_window),
+            separators=(",", ":"), allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":
