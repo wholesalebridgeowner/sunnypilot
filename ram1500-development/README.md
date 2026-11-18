@@ -134,3 +134,31 @@ python3 -m unittest discover -s ram1500-development -p 'test_steering_saturation
 The original November 14 event still requires execution against private,
 build-matched logs to determine commanded-output and EPS response values.
 Synthetic tests and code reviews cannot establish root cause or deployment fitness.
+
+## Steering-event telemetry coverage audit (November 17, late evening)
+
+The read-only `telemetry_coverage.py` performs a **quality/freshness check**
+on the **private**, focused CSV produced by `analyze_route.py`. It reports
+per-stream usable sample counts, invalid/unknown validity, timestamp
+duplicates, inter-sample gaps and the last past-only observation age of
+`carState`, `carControl`, `carOutput`, `controlsState`,
+`liveTorqueParameters` and `selfdriveState` when a
+`steerSaturated` episode begins. This detects when an otherwise plausible
+steering diagnosis is based on stale or absent data. It does not diagnose
+why the controller saturated or infer whether the EPS applied torque.
+
+Example, **with all files held privately**:
+```sh
+python3 ram1500-development/telemetry_coverage.py /private/ram-171.csv \
+  --output /private/ram-171-coverage.json --max-age-ms 150 \
+  --large-gap-ms 500
+python3 -m unittest discover -s ram1500-development -p 'test_telemetry_coverage.py' -v
+```
+
+The input must already have passed route integrity. Gaps and coverage
+describe only the supplied CSV window, **not** full-route integrity.
+`liveTorqueParameters` is slower than control streams; the 150 ms setting
+is a diagnostic threshold, not a supported control deadline or proof of
+invalidity. Reports omit raw absolute `logMonoTime` and physical signal
+values, but must still be reviewed before publication. Six synthetic fixture
+tests pass locally; actual-route event freshness remains unmeasured.
