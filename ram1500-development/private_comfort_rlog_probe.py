@@ -83,6 +83,39 @@ def pinned_recorded_build(records: list[dict]) -> dict:
     }
 
 
+def public_lane_summary(lanes: dict) -> dict:
+    """Bound all exported keys, including enum-like values from model records."""
+    phases = {}
+    count_fields = (
+        "completedTransitions", "invalidDuration", "insufficientCarState",
+        "invalidCarState", "driverOverrideOrUnknown", "incompleteCarCoverage",
+        "carStateGap", "missingKinematics", "lowSpeedExcluded",
+        "qualifiedWindows", "censoredByGapOrInvalidModel", "censoredAtEnd",
+    )
+    score_fields = (
+        "medianDurationSeconds", "p90PeakAbsSteeringRateDegPerSecond",
+        "p90SteeringRateDerivativeDegPerSecondSquared", "medianQualifiedSpeedMps",
+    )
+    for phase in ("laneChangeStarting", "laneChangeFinishing"):
+        data = lanes.get("phaseWindows", {}).get(phase, {})
+        counts = data.get("counts", {})
+        direction_counts = data.get("qualifiedByDirection", {})
+        directions = {k: int(direction_counts.get(k, 0))
+                      for k in ("left", "right", "none", "unknown")}
+        directions["other"] = sum(int(v) for k, v in direction_counts.items()
+                                  if k not in directions)
+        phases[phase] = {
+            "counts": {key: int(counts.get(key, 0)) for key in count_fields},
+            "qualifiedByDirection": directions,
+            **{key: data.get(key) for key in score_fields},
+        }
+    return {
+        "modelSamples": int(lanes.get("modelSamples", 0)),
+        "phaseWindows": phases,
+        "physicalLaneBoundaryCrossing": "not_observable_from_logged_model_state",
+    }
+
+
 def summarize(records: list[dict], read_results) -> dict:
     """Only a fixed set of aggregate fields leaves the private analysis process."""
     provenance = pinned_recorded_build(records)
@@ -109,7 +142,7 @@ def summarize(records: list[dict], read_results) -> dict:
         },
         "accMotionIntegrity": motion,
         "following": {k: following.get(k) for k in allowed_following},
-        "laneModelPhases": lanes,
+        "laneModelPhases": public_lane_summary(lanes),
         "interpretation": (
             "OEM ACC target distance, throttle and brake commands not decoded; "
             "lead/source and acceleration are observational only. "
