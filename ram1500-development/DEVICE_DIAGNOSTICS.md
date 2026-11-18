@@ -138,6 +138,47 @@ cd /data/openpilot && PYTHONPATH=/data/openpilot timeout 150 /usr/local/venv/bin
   --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
 ```
 
+## G3 run 2 + G4 (2026-11-17, parked in Park, ignition RUN, onroad, not engaged)
+Comma rebooted over SSH (Mark's approval). It came back offroad because the truck's ignition signal had dropped (the Comma
+stays powered from the harness); Mark cycled the ignition and it went onroad. Fresh onroad baseline: `carState` 14/15 readers,
+so 14 is the normal single-session count. Capture: 2 min, 2 Hz scalar sampling, all frames of the nine Ram IDs.
+
+| Criterion | Result |
+|---|---|
+| Stop reason | **Pass** — "duration reached", 120.0 s, 0 malformed records, exit 0 |
+| Driving processes | **Pass** — `pandad`, `card`, `controlsd`, `selfdrived`, `loggerd` same PIDs before/after; stayed onroad |
+| Subscriber eviction | **Pass** — every service +1 exactly (`carState` 14→15); nothing evicted |
+| Fault events | **Pass** — only `wrongGear`, `seatbeltNotLatched`, `belowSteerSpeed` (expected parked, belt off); no `commIssue`, `canError`, `controlsMismatch`; no alert displayed; `canValid` true in all 238 carState samples |
+| CAN integrity | **Pass** — table below |
+| Sidecar CPU ≤ 15 % of one core | **Fail** — 21.6 % steady (≈ 2.7 % of the 8-core device). The live watchdog sampled the `timeout` wrapper instead of the Python process, so the breach was only visible in the sidecar's own health rows. |
+| Sidecar memory | **Fail (trend)** — RSS rose linearly 29.6 → 53.9 MB over 120 s (~12 MB/min). Fine for 2 min; a 20-min run projects to ~270 MB with ~0.8 GB available. Must be understood and fixed before any longer capture. |
+
+Observed CAN (frames in 120 s; `src` ≥ 128 = frames the panda transmitted, i.e. its own LKAS/HUD and harness forwarding):
+
+| Bus | ID | Meaning | Rate | Max gap |
+|---|---|---|---|---|
+| 0 | 0x31 | EPS_2 (motor/column torque) | 100.1 Hz | 21 ms |
+| 0 | 0x79, 0x83, 0x9D, 0xB1 | speed, brake, accelerator, cruise buttons | 50.0 Hz | 31 ms |
+| 0 | 0x28A | center stack | 1.0 Hz | 1010 ms |
+| 2 | 0x99, 0xA6 | factory DASM: ACC state, **factory LKAS command** | 50.1 Hz | 31 ms |
+| 2 | 0xFA | factory DASM HUD | 16.7 Hz | 71 ms |
+| 128 | 0xA6, 0xFA, 0x99 | sent to car bus: **openpilot's** LKAS command (50 Hz), its HUD (4 Hz), forwarded ACC state | 50 / 4 / 50 Hz | 30 / 252 / 31 ms |
+| 130 | 0x31 … 0x28A | car-bus frames forwarded to the camera | same as bus 0 | — |
+| sendcan 0 | 0xA6, 0xFA | openpilot TX requests | 50.0 / 4.0 Hz | 23 / 253 ms |
+
+This matches the drive-build interface: the harness keeps the factory camera's 0xA6/0xFA off the car bus and openpilot
+sends its own at 50 Hz (steering) and 4 Hz (HUD, `frame % 25`). EPS torque was 0 throughout (parked, lateral not active).
+
+Kept on the device (owner-only): `/data/ram-telemetry/` (raw capture 9.2 MB in two files + `summary.json`), `/data/ram-diag/`.
+Copied off: the summary and the sidecar's own rows only. Rollback: `rm -rf /data/ram-diag /data/ram-telemetry`.
+
+Before any longer or driving capture (each needs its own approval):
+1. Find and fix the RSS growth (reproduce off-device with real pinned-schema `can` messages; measure with `tracemalloc`).
+2. Cut CAN parsing cost below the 15 % bar (pre-filter by address before building dicts, or decimate `can`/`sendcan`
+   processing to what the analysis needs).
+3. Watchdog must sample the Python process (`pgrep -f "python3 /data/ram-diag/device_telemetry.py"`) and kill the run
+   live on CPU or RSS limits, not only report them afterwards.
+
 ## Next diagnostics improvements
 - Build DBC-backed offline decoding and compare raw-frame interpretations to `carState.steeringTorqueEps`, `carState.vEgo`, `carOutput.actuatorsOutput.torqueOutputCan`.
 - Correlate factory ACC cruise-button and gap-selection traffic with observed distance and acceleration.
