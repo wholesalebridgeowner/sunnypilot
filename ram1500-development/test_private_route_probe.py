@@ -61,15 +61,23 @@ class PrivateProbeTests(unittest.TestCase):
         steering = {
             "groups": {
                 "controllerSaturated": {"samples": 2},
-                "allControllerStateSamples": {"nearReportedCommandLimitSamples": 3},
+                "allControllerStateSamples": {"nearReportedCommandLimitSamples": 3,
+                    "metrics": {name: {"count": 2, "median": 1.0, "p95Abs": 2.0, "maxAbs": 3.0}
+                        for name in ("vEgo_mps", "steeringAngleDeg", "steeringTorqueEps",
+                                     "requestedTorque", "outputTorqueCan", "lateralError")}},
             },
             "eventSampleCount": 1, "eventEpisodeCount": 1,
             "controllerSamples": 5, "sourceMatchedWithinAgeSamples": {"carState": 4},
         }
-        report = mod.summarize(result, steering,
-                               {"inputRows": 3, "steerSaturatedEpisodeCount": 1})
+        eps = {"speedBands": {"low_5_to_10": {"carStateSamples": 3,
+               "eligibleActiveLowDriverSamples": 2, "delaysMs": {}}}}
+        report = mod.summarize(
+            result, steering, {"inputRows": 3, "steerSaturatedEpisodeCount": 1},
+            eps, {"controllerSamples": 2})
         self.assertEqual(report["nearCommandLimitControllerSamplesInWindow"], 3)
         self.assertEqual(report["quality"]["eventEpisodes"], 1)
+        self.assertEqual(report["windowNumericMetrics"]["outputTorqueCan"]["maxAbs"], 3.0)
+        self.assertEqual(report["epsDirectionCorrelationsBySpeed"]["low_5_to_10"]["carStateSamples"], 3)
         self.assertNotIn("VIN", str(report))
         self.assertNotIn("routeKey", str(report))
         self.assertNotIn("monoTimeNs", str(report))
