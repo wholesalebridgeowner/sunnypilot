@@ -23,6 +23,7 @@ def messages():
       cruiseState=NS(available=True,enabled=True,speed=22.0,standstill=False))),
     Msg(1_100_000_000,"radarState",NS(leadOne=NS(status=True,dRel=40.,vRel=-3.,
       vLead=17.,aRel=0.,radar=False,modelProb=.9),leadTwo=NS(status=False))),
+    Msg(1_150_000_000,"carParams",NS(openpilotLongitudinalControl=False,pcmCruise=True)),
     Msg(1_200_000_000,"carControl",NS(longActive=False,latActive=True,
        actuators=NS(accel=0.6,torque=.2,longControlState="off"))),
     Msg(1_250_000_000,"longitudinalPlan",NS(hasLead=True,aTarget=.5,
@@ -42,8 +43,17 @@ class TestComfort(unittest.TestCase):
     h=r["summary"]["leadHeadway"]
     self.assertEqual(h["matchedSamples"],1)
     self.assertEqual(h["medianSeconds"],2)
+    self.assertEqual(h["cruiseNoDriverPedals"]["matchedSamples"],1)
+    self.assertEqual(r["summary"]["carParamsConfigurationSamples"]["openpilotLongitudinalControl=False,pcmCruise=True"],1)
     self.assertEqual(r["summary"]["longitudinalActiveSamples"]["False"],1)
     self.assertEqual(r["summary"]["longitudinalPlanSources"]["lead0"],1)
+  def test_pedal_active_excluded_from_cruise_headway(self):
+    rows=[a.message_record(x) for x in messages()]
+    car=next(x for x in rows if x["stream"]=="carState")
+    car["gasPressed"]=True
+    stats,_=a.summarize(rows)
+    self.assertEqual(stats["leadHeadway"]["matchedSamples"],1)
+    self.assertEqual(stats["leadHeadway"]["cruiseNoDriverPedals"]["matchedSamples"],0)
   def test_gap_is_not_estimated_if_stale_or_invalid(self):
     rows=[a.message_record(x) for x in messages()]
     radar=next(x for x in rows if x["stream"]=="radarState")
