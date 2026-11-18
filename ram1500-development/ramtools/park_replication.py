@@ -29,16 +29,21 @@ def _runs(records, *, max_gap_s=MAX_GAP_S):
     runs = []
     current = None
     previous_t = None
+    last_active = None
+    epoch = -1
     for t, gear, active, payload in records:
         if not _valid(t,gear,active,payload):
             raise ValueError("invalid or sensitive observation shape")
         if previous_t is not None and t < previous_t:
             raise ValueError("events must be chronological")
         previous_t=t
+        if last_active is None or active != last_active:
+            epoch += 1
+        last_active = active
         fresh = (current is None or current["gear"] != gear or current["active"] != active
                  or t-current["last"] > max_gap_s)
-        if fresh:
-            current={"gear":gear,"active":active,"first":t,"last":t,"samples":0,
+        if fresh or (current is not None and current["epoch"] != epoch):
+            current={"gear":gear,"active":active,"epoch":epoch,"first":t,"last":t,"samples":0,
                      "changes":0,"eligiblePairs":0,"previousPayload":None}
             runs.append(current)
         if current["previousPayload"] is not None and t > current["last"] and t-current["last"] <= max_gap_s:
@@ -68,17 +73,19 @@ def replication_audit(records, *, min_run_seconds=MIN_RUN_SECONDS,
     if not (isinstance(min_replicates,int) and not isinstance(min_replicates,bool)
             and 2 <= min_replicates <= 100):
         raise ValueError("invalid replicate threshold")
-    summary={}
+    summary=defaultdict(dict)
     for run in _runs(records):
         duration=run["last"]-run["first"]
         if run["samples"]<min_run_frames or duration<min_run_seconds or run["eligiblePairs"]<min_run_frames-1:
             continue
         key=(run["gear"],run["active"])
-        summary.setdefault(key,[]).append(run["changes"]/run["eligiblePairs"])
+        # Temporal chunks of one uninterrupted control state count as
+        # ONE physical episode, not independent replicates.
+        summary[key].setdefault(run["epoch"],[]).append(run["changes"]/run["eligiblePairs"])
     out=[]
     for gear in ("reverse","drive"):
-        inactive=summary.get((gear,False),[])
-        active=summary.get((gear,True),[])
+        inactive=[sum(v)/len(v) for v in summary[(gear,False)].values()]
+        active=[sum(v)/len(v) for v in summary[(gear,True)].values()]
         sufficient=len(inactive)>=min_replicates and len(active)>=min_replicates
         out.append({"gear":gear,"inactiveIndependentRuns":len(inactive),
                     "activeIndependentRuns":len(active),
