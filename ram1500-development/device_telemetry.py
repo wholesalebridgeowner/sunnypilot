@@ -103,7 +103,8 @@ class RotatingWriter:
   def __init__(self,directory,max_bytes=16*1024*1024,keep=8):
     self.directory=Path(directory)
     if max_bytes < 4096 or keep < 1: raise ValueError("Invalid size/retention")
-    self.directory.mkdir(parents=True,exist_ok=True)
+    self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    self.directory.chmod(0o700)  # private location for trip/CAN telemetry
     self.max_bytes=max_bytes
     self.keep=keep
     self.index=0
@@ -115,7 +116,8 @@ class RotatingWriter:
     name=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     self.index+=1
     path=self.directory / f"ram-telemetry-{name}-{self.index:04d}.jsonl"
-    self.f=path.open("x",encoding="utf8")
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    self.f=os.fdopen(fd,"w",encoding="utf8")
     self.length=0
     files=sorted(self.directory.glob("ram-telemetry-*.jsonl"))
     for old in files[:-self.keep]:
