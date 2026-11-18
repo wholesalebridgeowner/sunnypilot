@@ -149,3 +149,14 @@ The study discarded 61,094 speed-out-of-band CAN observations, 2,681 EPS status 
 
 Ask Claude to cross-check `0xA9`'s message origin and purpose against OEM service/DBC documentation, while separately verifying that the installed Comma harness sees the relevant PAM-to-EPS control network. If the OEM message is not visible to the harness, no amount of analysis of Comma-captured bus 0 will establish it. Do not transmit unknown CAN messages, infer undocumented bits or change Panda/EPS safety to test a hypothesis.
 
+
+
+## Independent factory network-topology check
+
+The 2021 Ram 1500 HFE service-manual description of the **Park Assist Module (PAM)** explicitly states that it communicates on the **high-speed Controller Area Network – Chassis (CAN-C)**. It also describes PAM broadcasting electronic messages to enable other factory Park Assist functions. This is authoritative network-family context, **not** evidence that any particular unlabelled frame on the Comma-visible bus is a steering request.
+
+- [2021 factory service-manual reproduction: Park Assist Module description and operation](https://www.shinevfn.com/Dodge%20and%20Ram/2021/1500%20HFE/Repair%20and%20Diagnosis%20%28Single%20Page%29/Accessories%20%26%20Equipment/Communication%20Devices/Electronic%20Control%20Modules%20%28Service%20Information%29%20-%201500/Module%2C%20Park%20Assist%20%28PAM%29/Description/Description%20And%20Operation/)
+- [Ram 1500 DT body-builder cybersecurity/network overview](https://www.ramtrucks.com/BodyBuilder/service/Image?imageId=MtQrP%2FFqLY5r%2Fest8MtGjGgHzAHGUTU0WB3rWuqSY7YmQ2vEhuBWBNLjy4xHgojZ%0A), which documents a vehicle Security Gateway isolating outside connections from vehicle networks.
+
+The next passive engineering problem is therefore **bus observability and source attribution**: whether the Comma harness's observed vehicle streams include the EPS-relevant CAN-C PAM messages, and whether the apparent differential activity of `0xA9` survives matched controls for speed, gear, steering load and repeat maneuvers. No gateway bypass, module authentication modification, steering-command injection, or full-auto steering install is proposed.
+
