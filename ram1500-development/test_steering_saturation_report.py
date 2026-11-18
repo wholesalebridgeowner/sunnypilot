@@ -50,6 +50,50 @@ class TestAlignment(unittest.TestCase):
         with self.assertRaises(ValueError):
             a.analyze([],max_age_ms=0)
 
+    def test_event_before_first_controller_never_uses_future_sample(self):
+        rows = [
+            rec(1_000_000_000, "onroadEvents", event="steerSaturated"),
+            rec(1_010_000_000, "controlsState", lateralSaturated="True"),
+            rec(1_010_000_000, "carOutput", outputTorqueCan="350"),
+        ]
+        result = a.analyze(rows, max_age_ms=150)
+        event = result["events"][0]
+        self.assertFalse(event["controllerMatched"])
+        self.assertIsNone(event["nearestControllerSaturated"])
+        self.assertIsNone(event["nearestControllerDelayMs"])
+        self.assertEqual(event["precedingWindowControllerSamples"], 0)
+        self.assertEqual(event["precedingWindowNearCommandLimitSamples"], 0)
+
+    def test_event_prefers_past_even_if_future_is_closer(self):
+        rows = [
+            rec(1_000_000_000, "carOutput", outputTorqueCan="330"),
+            rec(1_000_000_000, "controlsState", lateralSaturated="False"),
+            rec(1_090_000_000, "onroadEvents", event="steerSaturated"),
+            rec(1_091_000_000, "carOutput", outputTorqueCan="350"),
+            rec(1_091_000_000, "controlsState", lateralSaturated="True"),
+        ]
+        event = a.analyze(rows, max_age_ms=150)["events"][0]
+        self.assertTrue(event["controllerMatched"])
+        self.assertEqual(event["precedingControllerAgeMs"], 90)
+        self.assertFalse(event["nearestControllerSaturated"])
+        self.assertEqual(event["nearestOutputTorqueCan"], 330)
+        self.assertEqual(event["precedingWindowControllerSamples"], 1)
+        self.assertEqual(event["precedingWindowSaturatedSamples"], 0)
+
+    def test_event_stale_preceding_sample_is_not_attributed(self):
+        rows = [
+            rec(1_000_000_000, "controlsState", lateralSaturated="True"),
+            rec(1_500_000_000, "onroadEvents", event="steerSaturated"),
+        ]
+        event = a.analyze(rows, max_age_ms=150, pre_event_window_ms=1000)["events"][0]
+        self.assertFalse(event["controllerMatched"])
+        self.assertEqual(event["precedingControllerAgeMs"], 500)
+        self.assertIsNone(event["nearestControllerSaturated"])
+        self.assertEqual(event["precedingWindowControllerSamples"], 1)
+        self.assertEqual(event["precedingWindowSaturatedSamples"], 1)
+        with self.assertRaises(ValueError):
+            a.analyze([], pre_event_window_ms=0)
+
     def test_empty_and_episodes(self):
         r=a.analyze([])
         self.assertEqual(r["eventEpisodeCount"],0)
