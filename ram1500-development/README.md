@@ -172,13 +172,13 @@ For full-route R-log analysis (only with an independently verified single-route 
 
 ```bash
 python3 ram1500-development/analyze_route.py /private/route/*/rlog.zst \
-  --expected-segments 36 --focus-seconds 0 --window 99999 \
+  --expected-segments <independently-verified-current-final-segment-count> --focus-seconds 0 --window 99999 \
   --output-prefix /private/ram-all
 python3 ram1500-development/eps_feedback_lag.py \
   /private/ram-all.csv --output /private/ram-eps-lag.json
 python3 -m unittest discover -s ram1500-development -p 'test_*.py' -v
 ```
 
-The 36-segment example applies **only** to the previously reported Nov 17 driving route, not all routes. Ensure source version is pinned to actual device build `1f7233cb`; do not mix `opendbc` schemas from different revisions. The command does not fetch private logs or operate the Comma.
+**Do not use 36 as the final route count.** A November 18 private Railway S3 key-presence audit found **45 Q-logs and 45 R-logs (segments 0–44)** for the Nov 17 `000003d8` route, including R-log segments 29, 30 and 31. The previous 36-segment device scan was an earlier snapshot. Object presence is not content-validity proof; independently confirm the final segment count before decoding. The Nov 14 `000003cc` route was **not present** in this bucket listing. Ensure source version is pinned to actual device build `1f7233cb`; do not mix `opendbc` schemas from different revisions. The command does not fetch private logs or operate the Comma.
 
 **Why this exists:** An earlier on-device aggregate scan suggested same-direction EPS torque at highway speeds more often than below 5 m/s, but used a coarse 10 Hz coincidence criterion. This lag sensitivity check can assess whether that apparent drop changes with timing or driver-input exclusions. It does **not** prove command acceptance or establish hardware limits. Serially correlated counts must not be interpreted as independent maneuvers. Requesting a second device pilot or altering actuator behavior is not part of this change. Store raw exports and detailed results outside public GitHub.
