@@ -1,0 +1,23 @@
+name: Ram offline telemetry analyzer tests
+on:
+  push:
+    branches: [ram1500-steering-forensics-20261117]
+    paths:
+      - 'ram1500-development/**'
+      - '.github/workflows/ram-analysis-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/**'
+      - '.github/workflows/ram-analysis-tests.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline fixture tests
+        run: python3 -m unittest discover -s ram1500-development -p 'test_analyze_route.py' -v
