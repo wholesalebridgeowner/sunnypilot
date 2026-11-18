@@ -15,6 +15,7 @@ import tempfile
 
 from private_route_probe import select_keys, reader_from_cereal
 from park_assist_event_audit import ParkEpisodes
+from park_assist_stratified_can import inspect_activity
 
 TARGET_SEGMENTS = (11, 12)
 ROUTE_PREFIX = "000003dc"
@@ -72,6 +73,9 @@ class Summary:
         # R-log services can be interleaved with non-monotonic logMonoTime.
         # Buffer only privacy-minimized scalar observations for sorted as-of joins.
         self._parking_scalars = []
+        self._activity_frames = []
+        self._activity_cars = []
+        self._activity_flags = []
         self.eps_status_by_auto_park = {"true": {"lkas": Counter(), "overlay": Counter()},
                                         "false": {"lkas": Counter(), "overlay": Counter()}}
 
@@ -85,6 +89,8 @@ class Summary:
         state = self.bins[idx]
         if name == "carState":
             obj = event.carState
+            if 660 <= sec <= 710:
+                self._activity_cars.append((round(sec*1e9),valid_number(obj.vEgo),str(obj.gearShifter)))
             self._parking_scalars.append((sec, "carState", {"speed":valid_number(obj.vEgo),
                     "angle":valid_number(obj.steeringAngleDeg),
                     "driver_pressed":bool(obj.steeringPressed),
@@ -117,6 +123,8 @@ class Summary:
                 if name == "can":
                     flag = eps_auto_park_has_control(frame)
                     if flag is not None:
+                        if 660 <= sec <= 710:
+                            self._activity_flags.append((round(sec*1e9),flag))
                         self._parking_scalars.append((sec,"eps",{"park_flag":flag}))
                         phase_name = "true" if flag else "false"
                         state["autoParkControl"][phase_name] += 1
@@ -134,6 +142,11 @@ class Summary:
                         if self._last_auto_park is not None and flag != self._last_auto_park:
                             state["autoParkTransitions"]["enabled" if flag else "disabled"] += 1
                         self._last_auto_park = flag
+                if name == "can" and 660 <= sec <= 710 and int(frame.src) < 128:
+                    # Temporary private in-memory frame buffer for matched-
+                    # speed/gear activity comparison. Never emit frame bytes.
+                    self._activity_frames.append((round(sec*1e9),name,int(frame.src),
+                                                  int(frame.address),bytes(frame.dat)))
                 if phase:
                     key = (name, int(frame.src), int(frame.address))
                     raw = bytes(frame.dat)
@@ -214,6 +227,8 @@ class Summary:
             "canFrameSummary":{"baseline":sum(normal.values()),"parkingCandidate":sum(parking.values())},
             "criticalEventCounts":dict(self.events),
             "factoryControlEpisodes":self.park_episodes.finish(),
+            "matchedSpeedGearCANActivity":inspect_activity(self._activity_frames,
+                       self._activity_cars,self._activity_flags,min_frames=30),
             "epsStateByAutoParkFlag": {state: {name: dict(counts) for name, counts in fields.items()}
                                        for state, fields in self.eps_status_by_auto_park.items()},
             "messageCountsBySegmentAndService":[{"segment":k[0],"service":k[1],"count":v}
