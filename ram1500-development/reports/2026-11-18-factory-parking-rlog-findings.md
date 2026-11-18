@@ -121,3 +121,31 @@ The near-stop range pools the near-stop points within the full 14.6-second facto
 4. Keep any future analysis passive. Do not replay OEM commands, spoof firmware/gear/mode, modify Panda safety or attempt third-party zero-speed steering from these findings alone.
 
 **Conclusion:** direct recorded confirmation that the EPS reported `AUTO_PARK_HAS_CONTROL_2` during near-stopped automated steering **without Sunnypilot LKAS actuation**. Together with the owner's experience and service information, this establishes OEM parking-control capability on the truck. The precise factory PAM steering-command address, authorization protocol and supported third-party access remain unresolved. No EPS firmware flash or safety-gate change is justified by these data.
+
+
+## Next passive experiment: matched-speed, matched-gear CAN activity
+
+A new private, source-pinned one-shot analysis (Railway deployment `332b56e5-e9c2-4686-aca4-565ecbd49488`, **SUCCESS**; GitHub commit `f82fa82359bdc0a95c1eda394e0ef30349fe7a99`, offline CI **passed**) matched each observed vehicle CAN frame to the **latest preceding EPS park-control status and carState**, both no more than 150 ms old. The comparison is limited to comparable reported speeds −0.1 to 0.8 m/s and **the same reported gear** (Drive or Reverse). It excludes forwarded harness duplicates, the defining EPS status message `0x31`, and two trailing payload bytes likely to contain counters/checksums. Raw CAN bytes are used only transiently inside the private analysis job; the output contains frame counts and aggregate rate-of-change statistics, not packets or signal bitmaps.
+
+This was specifically designed to reduce the false evidence from the earlier arbitrary before/during-window comparison, which mixed speed changes and gear shifts. It is still **observational**, and does not control for steering demand, load, ECU transitions or full PAM network coverage.
+
+Selected *bus 0* signals, compared **within the same gear and speed band**:
+
+| Bus-0 CAN ID | Gear | Inactive frames | OEM auto-park active frames | Non-tail payload changed between consecutive frames, inactive → active |
+|---|---|---:|---:|---|
+| `0xA9` | Reverse | 118 | 602 | **0.009 → 0.744** |
+| `0xA9` | Drive | 533 | 86 | **0.000 → 0.988** |
+| `0xB5` | Reverse | 118 | 602 | 0.845 → 0.349 |
+| `0x23` | Drive | 1,066 | 172 | 0.201 → 0.982 |
+| `0x81` | Reverse | 118 | 602 | **0.259 → 0.000** |
+
+The `0x81` reversal is especially instructive: its apparent activity increase in the *unmatched*, earlier comparison **did not persist** when speed and gear were held within narrow observational bands. Do **not** identify `0x81`, `0xA9`, `0x23`, or `0xB5` as factory steering-command messages on these statistics alone.
+
+The exact installed-build Chrysler Ram DBC source does **not** label `0xA9` (0xA9 = decimal 169) in its Chrysler-RAM-DT-specific definitions or common generated signal list. Its meaning and originating ECU remain **unverified**. It may reflect motor feedback, powertrain/gear states, parking status, environmental data or an unrelated counter/change. There is no support yet for a PAM-command or actuator authorization conclusion.
+
+The study discarded 61,094 speed-out-of-band CAN observations, 2,681 EPS status frames to prevent circular attribution, 1,499 short payloads, 548 unsupported-gear frames and harness-forwarded duplicates; 76 candidate bus/gear strata had enough source-matched samples to calculate comparable change ratios. These are **filter counts**, not failure events. Input processing was read-only.
+
+### Next validation gate
+
+Ask Claude to cross-check `0xA9`'s message origin and purpose against OEM service/DBC documentation, while separately verifying that the installed Comma harness sees the relevant PAM-to-EPS control network. If the OEM message is not visible to the harness, no amount of analysis of Comma-captured bus 0 will establish it. Do not transmit unknown CAN messages, infer undocumented bits or change Panda/EPS safety to test a hypothesis.
+
