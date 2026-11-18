@@ -62,7 +62,7 @@ def test_stale_or_future_does_not_match():
 def test_gap_splits_and_validation():
   rows=[r("controlsState",t,**{"torqueState.active":True,"torqueState.output":1.}) for t in
         (.1,.11,.12,.13,.14,.15,.16,.17,.18,.19,.5,.51,.52,.53,.54,.55,.56,.57,.58,.59)]
-  assert len(find_runs(Index(rows),min_seconds=.07))==2
+  assert len(find_runs(Index(rows),minimum_seconds=.07))==2
   try:analyze(rows,maximum_runs=0)
   except ValueError:pass
   else:raise AssertionError("did not reject zero maximum_runs")
