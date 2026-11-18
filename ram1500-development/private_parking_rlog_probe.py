@@ -146,6 +146,22 @@ class Summary:
         }
 
 
+def observe_segment_events(summary, segment, messages):
+    """Normalize a segment to its first CAN-bearing event, not stale initData."""
+    start = None
+    for msg in messages:
+        ts = int(msg.logMonoTime)
+        if start is None:
+            if msg.which() != "can":
+                continue
+            start = ts
+        if ts < start:
+            continue
+        summary.observe(segment, (ts-start)/1e9, msg)
+    if start is None:
+        raise RuntimeError("selected R-log contains no CAN anchor")
+
+
 def main():
     import boto3
     from botocore.config import Config
@@ -169,21 +185,7 @@ def main():
             s3.download_file(e["S3_BUCKET"],key,str(dest))
             if dest.stat().st_size > 30_000_000:
                 raise RuntimeError("Rlog exceeds fixed private analysis size limit")
-            start=None
-            for msg in reader(dest):
-                ts=int(msg.logMonoTime)
-                # Some segment headers (e.g. repeated initData) carry a route
-                # startup timestamp hundreds of seconds before this segment.
-                # Anchor at the first actual CAN sample for this R-log segment.
-                if start is None:
-                    if msg.which() != "can":
-                        continue
-                    start=ts
-                if ts < start:
-                    continue
-                data.observe(segment,(ts-start)/1e9,msg)
-            if start is None:
-                raise RuntimeError("selected R-log contains no CAN anchor")
+            observe_segment_events(data, segment, reader(dest))
     print("PARKING_PASSIVE_AGGREGATES "+json.dumps(data.result(),separators=(",",":"),allow_nan=False),flush=True)
 
 if __name__=="__main__":
