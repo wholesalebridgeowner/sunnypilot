@@ -41,7 +41,7 @@ def test_lane_start_end_state_and_accel_jerk():
   assert len(v["laneChanges"])==1
   assert v["laneChanges"][0]["peakAbsSteeringRateDegPerSecond"]==4.
   assert v["laneChanges"][0]["durationSeconds"]==.35
-  assert v["longitudinal"]["jerkSamples"]==1
+  assert v["longitudinal"]["jerkSamples"]==2
 
 def test_empty_and_bad_numbers():
   assert metrics([])["status"]=="no_data"
