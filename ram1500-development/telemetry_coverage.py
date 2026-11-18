@@ -34,6 +34,8 @@ def _percentile(values, p):
     pos = (len(ordered) - 1) * p
     lo = math.floor(pos)
     hi = math.ceil(pos)
+    if lo == hi:
+        return round(ordered[lo], 3)
     return round(ordered[lo] * (hi-pos) + ordered[hi] * (pos-lo), 3)
 
 
