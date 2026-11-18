@@ -135,9 +135,21 @@ def main():
   parser.add_argument("--focus-seconds",type=float,default=171.)
   parser.add_argument("--window",type=float,default=30.)
   parser.add_argument("--output-prefix",type=Path,required=True)
+  parser.add_argument("--expected-segments",type=int,
+                      help="Independently verified segment count (51 for the recorded November 14 drive)")
   a=parser.parse_args()
+  # Fail before expensive decoding if local files are missing, mixed, duplicated,
+  # or spread across routes. A contiguous tail is only provable when the
+  # independent segment count is supplied.
+  from route_integrity import inspect
+  integrity = inspect(a.logs, expected_segments=a.expected_segments)
+  if integrity["errors"] or (a.expected_segments is not None and not integrity["expectedRangeFullyPresent"]):
+    parser.error("Log inputs fail route integrity: " + ", ".join(integrity["errors"]))
+  if a.expected_segments is None:
+    parser.error("--expected-segments is required for time-aligned route forensics")
   from openpilot.tools.lib.logreader import LogReader
   result=analyze(a.logs,LogReader,a.focus_seconds,a.window)
+  result["summary"]["inputIntegrity"] = integrity
   save(result,a.output_prefix)
   print(json.dumps({"summary":str(a.output_prefix.with_suffix(".json")),
                     "csv":str(a.output_prefix.with_suffix(".csv")),
