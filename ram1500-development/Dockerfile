@@ -24,7 +24,8 @@ RUN mkdir -p /opt/sunnypilot && cd /opt/sunnypilot \
     && test "$(git rev-parse HEAD)" = "${PINNED_SUNNYPILOT_COMMIT}"
 
 # Fail at build time if the pinned schema cannot resolve its imported capnp files.
-RUN python -c 'import capnp; from pathlib import Path; p=Path("/opt/sunnypilot/cereal/log.capnp"); capnp.load(str(p), imports=[str(p.parent)])'
+RUN ls -la /opt/sunnypilot/cereal/ && test -s /opt/sunnypilot/cereal/car.capnp && test -s /opt/sunnypilot/cereal/log.capnp \
+    && python -c 'import capnp; from pathlib import Path; p=Path("/opt/sunnypilot/cereal"); capnp.load(str(p/"car.capnp"), imports=[str(p)]); capnp.load(str(p/"log.capnp"), imports=[str(p)])'
 
 WORKDIR /opt/ram
 COPY . /opt/ram/
