@@ -94,6 +94,55 @@ class TestAlignment(unittest.TestCase):
         with self.assertRaises(ValueError):
             a.analyze([], pre_event_window_ms=0)
 
+    def test_alert_source_age_is_checked_at_alert_not_just_controller(self):
+        # Both source values were valid relative to the controller at 120ms,
+        # but are 240ms old when the alert fires. They must not be attributed.
+        rows = [
+            rec(1_000_000_000, "carOutput", outputTorqueCan="347"),
+            rec(1_000_000_000, "carState", steeringTorqueEps="90"),
+            rec(1_120_000_000, "controlsState", lateralSaturated="True"),
+            rec(1_240_000_000, "onroadEvents", event="steerSaturated"),
+        ]
+        event = a.analyze(rows, max_age_ms=150)["events"][0]
+        self.assertTrue(event["controllerMatched"])
+        self.assertEqual(event["precedingControllerAgeMs"], 120)
+        self.assertEqual(event["outputTorqueCanAgeAtEventMs"], 240)
+        self.assertEqual(event["steeringTorqueEpsAgeAtEventMs"], 240)
+        self.assertIsNone(event["nearestOutputTorqueCan"])
+        self.assertIsNone(event["nearestSteeringTorqueEps"])
+
+    def test_alert_uses_freshest_past_source_even_after_last_controller(self):
+        rows = [
+            rec(1_000_000_000, "carOutput", outputTorqueCan="345"),
+            rec(1_000_000_000, "carState", steeringTorqueEps="90"),
+            rec(1_120_000_000, "controlsState", lateralSaturated="True"),
+            rec(1_200_000_000, "carOutput", outputTorqueCan="275"),
+            rec(1_201_000_000, "carState", steeringTorqueEps="80"),
+            rec(1_240_000_000, "onroadEvents", event="steerSaturated"),
+            rec(1_241_000_000, "carOutput", outputTorqueCan="350"),
+            rec(1_241_000_000, "carState", steeringTorqueEps="500"),
+        ]
+        event = a.analyze(rows, max_age_ms=150)["events"][0]
+        self.assertTrue(event["controllerMatched"])
+        self.assertEqual(event["nearestOutputTorqueCan"], 275)
+        self.assertEqual(event["nearestSteeringTorqueEps"], 80)
+        self.assertEqual(event["outputTorqueCanAgeAtEventMs"], 40)
+        self.assertEqual(event["steeringTorqueEpsAgeAtEventMs"], 39)
+
+    def test_alert_without_past_sensor_never_uses_future_sensor(self):
+        rows = [
+            rec(1_000_000_000, "controlsState", lateralSaturated="True"),
+            rec(1_050_000_000, "onroadEvents", event="steerSaturated"),
+            rec(1_051_000_000, "carOutput", outputTorqueCan="350"),
+            rec(1_051_000_000, "carState", steeringTorqueEps="200"),
+        ]
+        event = a.analyze(rows, max_age_ms=150)["events"][0]
+        self.assertTrue(event["controllerMatched"])
+        self.assertIsNone(event["outputTorqueCanAgeAtEventMs"])
+        self.assertIsNone(event["steeringTorqueEpsAgeAtEventMs"])
+        self.assertIsNone(event["nearestOutputTorqueCan"])
+        self.assertIsNone(event["nearestSteeringTorqueEps"])
+
     def test_empty_and_episodes(self):
         r=a.analyze([])
         self.assertEqual(r["eventEpisodeCount"],0)
