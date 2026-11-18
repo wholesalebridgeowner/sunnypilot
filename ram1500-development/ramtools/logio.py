@@ -137,8 +137,14 @@ def event_to_record(evt, segment: int | None = None) -> dict | None:
       if kind == "torqueState":
         for f in TORQUE_STATE_FIELDS:
           rec["torqueState." + f] = _get(lcs.torqueState, f)
-  elif which in ("onroadEvents", "onroadEventsSP"):
+  elif which == "onroadEvents":
+    # Exact installed cereal/log.capnp: plain List(OnroadEvent).
     rec["names"] = [str(e.name) for e in msg]
+  elif which == "onroadEventsSP":
+    # Exact installed cereal/custom.capnp: OnroadEventSP is a STRUCT whose
+    # `events` field holds List(Event). Iterating the struct raises TypeError
+    # and previously mislabeled a fully intact R-log as Capnp-truncated.
+    rec["names"] = [str(e.name) for e in msg.events]
   elif which == "pandaStates":
     rec["n_pandas"] = len(msg)
     if len(msg):

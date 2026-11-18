@@ -1,0 +1,36 @@
+name: Ram private pinned R-log comfort analysis fixtures
+on:
+  push:
+    branches: [ram1500-private-comfort-validation-20261118]
+    paths:
+      - "ram1500-development/private_comfort_rlog_probe.py"
+      - "ram1500-development/Dockerfile.comfort"
+      - "ram1500-development/tests/test_private_comfort_rlog_probe.py"
+      - "ram1500-development/ramtools/**"
+      - ".github/workflows/ram-private-comfort-tests.yml"
+  pull_request:
+    paths:
+      - "ram1500-development/private_comfort_rlog_probe.py"
+      - "ram1500-development/Dockerfile.comfort"
+      - "ram1500-development/tests/test_private_comfort_rlog_probe.py"
+      - "ram1500-development/ramtools/**"
+      - ".github/workflows/ram-private-comfort-tests.yml"
+permissions:
+  contents: read
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install pytest==8.3.4
+      - name: Read-only private selection and comfort fixture tests
+        run: |
+          cd ram1500-development
+          python -m pytest tests/test_private_comfort_rlog_probe.py tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py -q
+      - name: Reproducible historical decoder container (no private logs or secrets)
+        run: docker build -f ram1500-development/Dockerfile.comfort -t ram-comfort-research:ci ram1500-development
