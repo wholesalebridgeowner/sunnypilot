@@ -17,8 +17,8 @@ SEGMENT_RE = re.compile(r"(?P<route>[0-9a-f]{8}--[0-9a-f]{10})--(?P<seg>\d+)")
 
 # Control-relevant params only. Anything else in initData.params is dropped.
 PARAM_WHITELIST = re.compile(
-  r"^(NeuralNetworkLateralControl|EnforceTorqueControl|TorqueParamsOverride\w*|CustomTorqueParams\w*|LiveTorque\w*|"
-  r"Mads\w*|ExperimentalMode|AlphaLongitudinalEnabled|DisengageOnAccelerator|LagdToggle\w*|LiveDelay\w*|"
+  r"^(NeuralNetworkLateralControl|EnforceTorqueControl|TorqueParamsOverride\w*|CustomTorqueParams\w*|LiveTorque\w*|" +
+  r"Mads\w*|ExperimentalMode|AlphaLongitudinalEnabled|DisengageOnAccelerator|LagdToggle\w*|LiveDelay\w*|" +
   r"BlinkerPause\w*|LaneTurn\w*|IsLdwEnabled|OpenpilotEnabledToggle|AutoLaneChange\w*)$")
 PARAM_MAX_BYTES = 32
 
@@ -38,11 +38,10 @@ class FileReadResult:
 
 def segment_of(path: Path | str) -> tuple[str | None, int | None]:
   """Route name and segment number from a comma path such as .../000003cc--27a46b2116--2/qlog.zst."""
-  m = None
-  for m in SEGMENT_RE.finditer(str(path).replace("\\", "/")):
-    pass
-  if m is None:
+  matches = list(SEGMENT_RE.finditer(str(path).replace("\\", "/")))
+  if not matches:
     return None, None
+  m = matches[-1]  # the innermost (last) route--segment token in the path
   return m.group("route"), int(m.group("seg"))
 
 
@@ -53,7 +52,7 @@ def read_log_bytes(path: Path) -> tuple[bytes, str | None]:
   if name.endswith(".zst"):
     import io
 
-    import zstandard  # noqa: PLC0415 (optional dependency)
+    import zstandard
     out = io.BytesIO()
     try:
       with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw), read_across_frames=True) as r:
@@ -75,7 +74,7 @@ def _get(obj, dotted: str):
   for part in dotted.split("."):
     try:
       cur = getattr(cur, part)
-    except Exception:  # noqa: BLE001  pycapnp raises KjException for unknown/unset union fields
+    except Exception:
       return None
   return _plain(cur)
 
@@ -166,7 +165,7 @@ def event_to_record(evt, segment: int | None = None) -> dict | None:
         key = str(entry.key)
         if PARAM_WHITELIST.match(key) and len(entry.value) <= PARAM_MAX_BYTES:
           params[key] = bytes(entry.value).decode("ascii", "replace")
-    except Exception:  # noqa: BLE001  params absent in some logs
+    except Exception:
       pass
     rec["params"] = params
   elif which in ("gpsLocationExternal", "gpsLocation"):
@@ -217,7 +216,7 @@ def iter_file_records(path: Path, log_schema, result: FileReadResult | None = No
       rec = event_to_record(evt, seg)
       if rec is not None:
         yield rec
-  except Exception as e:  # noqa: BLE001  capnp raises on a partial final message
+  except Exception as e:
     if result is not None:
       result.truncated = True
       result.error = (result.error + "; " if result.error else "") + f"capnp: {type(e).__name__}: {e}"[:300]

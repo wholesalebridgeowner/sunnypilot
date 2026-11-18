@@ -184,7 +184,7 @@ def analyze_saturation_episode(index: Index, start_ns: int, end_ns: int | None, 
       evidence["median_abs_eps_while_saturated_raw"] = round(med, 1)
       eps_note = ("EPS motor torque was inside the +/-80 window of the 350 cap: the command was being delivered"
                   if med >= C.STEER_MAX - C.STEER_ERROR_MAX - 5 else
-                  "EPS motor torque was BELOW the window needed to pass a 350 command; check sample skew and the "
+                  "EPS motor torque was BELOW the window needed to pass a 350 command; check sample skew and the " +
                   "limited_by_safety proxy before concluding anything")
   return {"mechanism": mechanism, "confidence": confidence, "evidence": evidence, "eps_note": eps_note}
 

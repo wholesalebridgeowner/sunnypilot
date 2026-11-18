@@ -77,7 +77,7 @@ def load_log_schema(schema_dir: Path, require_pinned: bool = True):
   """Load log.capnp with pycapnp. Imported lazily so the analysis modules work without pycapnp."""
   schema_dir = Path(schema_dir)
   if require_pinned and not schema_is_pinned(schema_dir):
-    raise SchemaIntegrityError(f"schema dir {schema_dir} does not match the pinned drive-build schema: "
+    raise SchemaIntegrityError(f"schema dir {schema_dir} does not match the pinned drive-build schema: " +
                                f"{verify_schema_dir(schema_dir)}")
-  import capnp  # noqa: PLC0415  (optional dependency)
+  import capnp
   return capnp.load(str(schema_dir / "log.capnp"), imports=[str(schema_dir), str(schema_dir / "include")])
