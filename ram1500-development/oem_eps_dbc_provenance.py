@@ -51,7 +51,7 @@ def _dbc_signals(text: str) -> dict[str, str]:
   i = chosen[0]
   block = text[matches[i].end():matches[i + 1].start() if i + 1 < len(matches) else len(text)]
   signals: dict[str, str] = {}
-  for name, layout in re.findall(r"(?m)^\s*SG_\s+(\w+)\s*:\s*(\d+\|\d+@[01][+-])\b", block):
+  for name, layout in re.findall(r"(?m)^\s*SG_\s+(\w+)\s*:\s*(\d+\|\d+@[01][+-])(?=\s)", block):
     if name in signals:
       raise SourceAuditError(f"duplicate EPS_2 signal {name}")
     signals[name] = layout
