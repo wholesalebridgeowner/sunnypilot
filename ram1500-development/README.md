@@ -74,3 +74,33 @@ the EPS or whether a separately validated low-speed integration is feasible.
 The reporter has synthetic tests in `test_low_speed_report.py`, included
 in the GitHub `Ram offline telemetry analyzer tests` workflow. Actual route
 numeric results have **not yet** been generated or reviewed.
+
+
+## Route completeness and replay-input quality gate (November 17)
+
+Before any absolute-time (+171 s) attribution, ensure the input logs are from
+**one route**, use **one** of qlog or rlog, and cover the **independently known**
+segment range. Previously, a missing first or middle segment could silently
+produce the wrong route-relative timestamp, and mixing Q- and R-logs could
+count overlapping events twice. The new `route_integrity.py` refuses missing,
+duplicate, unreadable, empty, mixed-kind and mixed-route inputs. Reports omit
+private route identifiers and paths. This is a **file-level check**, not proof
+that each compressed log is decodable.
+
+For the November 14 51-segment route (run only against **private** files):
+```sh
+python3 ram1500-development/route_integrity.py \
+  --kind qlog --expected-segments 51 /private/route/*/qlog.zst
+python3 ram1500-development/analyze_route.py /private/route/*/qlog.zst \
+  --expected-segments 51 --focus-seconds 171 --window 30 \
+  --output-prefix /private/ram-171
+```
+
+The `analyze_route.py` CLI now requires `--expected-segments` and fails
+closed before decoding on invalid input; its JSON summary records the
+non-identifying integrity result. Supply the true count from route metadata;
+do **not** substitute the number of downloaded files. The same requirement
+applies when exporting a complete route for `low_speed_report.py`.
+
+Eight independent offline fixture tests passed locally for this input gate.
+No changes to vehicle control software or Comma installation were made.
