@@ -6,12 +6,12 @@ N = 1_000_000_000
 def row(service, seconds, **fields):
   return {"service": service, "t": round(seconds * N), "valid": True, "segment": 30, **fields}
 
-def cs(t, rate, speed=20, pressed=False):
-  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed, vEgo=speed)
+def cs(t, rate, speed=20, pressed=False, segment=30):
+  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed, vEgo=speed, segment=segment)
 
-def model(t, state, direction="left", valid=True):
+def model(t, state, direction="left", valid=True, segment=30):
   return row("drivingModelData", t, **{"meta.laneChangeState": state,
-          "meta.laneChangeDirection": direction, "valid": valid})
+          "meta.laneChangeDirection": direction, "valid": valid, "segment": segment})
 
 def test_entry_and_recenter_are_separate_complete_phases_without_crossing_claim():
   inputs = [model(0,"off"), model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
