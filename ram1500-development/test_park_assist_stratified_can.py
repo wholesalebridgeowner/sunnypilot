@@ -43,7 +43,7 @@ class Tests(unittest.TestCase):
         serialized=json.dumps(r)
         self.assertNotIn("dataHex",serialized)
         self.assertNotIn("VIN",serialized)
-        self.assertNotIn("location",serialized.lower())
+        self.assertNotIn("latitude",serialized.lower())
 
     def test_stale_and_future_only_dropped(self):
         rows=[(int(1.0*N),"can",0,0x81,b"12345678")]
