@@ -26,7 +26,7 @@ New ram1500-development/storage_presence_integrity.py consumes an **in-memory pr
 
 It distinguishes a complete scoped no-match from an incomplete paginated listing, detects ambiguous multiple matching routes rather than picking one, deduplicates segment extensions, validates selectors and segment arguments, rejects malformed objects, and reports missing/extra segment counts. Synthetic tests contain **no real route identifiers**. This Python helper is a reproducible independent check of listing interpretation, **not** evidence that it processed live Railway data in this run; the live listing came from the existing Bun function.
 
-Validation: **10/10 local synthetic unittest cases passed** before commit. New independent GitHub Actions workflow runs the same test suite on Python 3.12. Check the run for the final report commit separately before calling CI successful.
+Validation: **10/10 local synthetic unittest cases passed** before commit, and the independent GitHub Actions Python 3.12 job **passed all 10/10** on report commit 15aa2aaddba40814412a072a8595a30e215dd168. [CI run 44404019632](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44404019632). This only tests the offline aggregate helper; it does not rerun the Railway inventory or validate the truck.
 
 ## Next safe steps / release block
 
