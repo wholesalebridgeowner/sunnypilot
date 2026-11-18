@@ -121,3 +121,56 @@ def test_independent_same_segment_model_phases_remain_qualified():
   phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
   assert phase["counts"]["qualifiedWindows"]==2
   assert phase["counts"].get("censoredBySegmentBoundaryOrUnverified",0)==0
+
+
+def test_unknown_model_validity_censors_without_completion():
+  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
+          model(.3,"laneChangeStarting",valid=None),model(.4,"off")]
+  cars=[cs(.1,1),cs(.2,2),cs(.3,3)]
+  phase=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["censoredByGapOrInvalidModel"]==1
+  assert phase["counts"].get("qualifiedWindows",0)==0
+
+
+def test_unknown_car_validity_rejects_entire_phase():
+  rows=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+        model(.3,"laneChangeFinishing"),model(.4,"off")]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
+  rows[5]["valid"]=None
+  phase=analyze(rows)["phaseWindows"]["laneChangeFinishing"]
+  assert phase["counts"]["invalidCarState"]==1
+  assert phase["counts"].get("qualifiedWindows",0)==0
+
+
+def test_model_direction_flip_censors_whole_phase_not_two_maneuvers():
+  rows=[model(.1,"laneChangeStarting",direction="left"),
+        model(.2,"laneChangeStarting",direction="left"),
+        model(.3,"laneChangeStarting",direction="right"),
+        model(.4,"laneChangeStarting",direction="right"),
+        model(.5,"off",direction="none")]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3),cs(.4,4)]
+  phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["censoredByDirectionChangeOrUnknown"]==1
+  assert phase["counts"].get("qualifiedWindows",0)==0
+
+
+def test_unknown_start_direction_blocks_phase_until_exit():
+  rows=[model(.1,"laneChangeStarting",direction="none"),
+        model(.2,"laneChangeStarting",direction="left"),
+        model(.3,"laneChangeStarting",direction="left"),
+        model(.4,"off",direction="none")]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
+  phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["censoredByDirectionChangeOrUnknown"]==1
+  assert phase["counts"].get("qualifiedWindows",0)==0
+
+
+def test_direction_on_exit_does_not_invalidate_stable_right_phase():
+  rows=[model(.1,"laneChangeFinishing",direction="right"),
+        model(.2,"laneChangeFinishing",direction="right"),
+        model(.3,"laneChangeFinishing",direction="right"),
+        model(.4,"off",direction="none")]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
+  phase=analyze(rows)["phaseWindows"]["laneChangeFinishing"]
+  assert phase["counts"]["qualifiedWindows"]==1
+  assert phase["qualifiedByDirection"]=={"right":1}
