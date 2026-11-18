@@ -88,6 +88,37 @@ on the truck's computer until SSH is turned off or the username removed. No new 
 Not covered by this plan (separate approval each): capture while driving (`--allow-moving`), `--all-can-ids`, copying raw
 CAN frames off the device, any change under `/data/openpilot`, autostart.
 
+## G1–G2 results (2026-11-17, read-only; nothing written on the device)
+G1 done by Mark (SSH on, `wholesalebridgeowner` keys loaded). G2 = two SSH sessions running read-only commands only
+(`git --no-optional-locks`, `ps`, `df`, `free`, reading params and `/dev/shm` headers). Device identifiers are kept private.
+
+| Item | Measured |
+|---|---|
+| Hardware / OS | Comma 3 (`tici`), AGNOS 12.8, Linux 4.9.103 aarch64, 8 cores, 3.6 GB RAM |
+| Python | 3.12.3 at `/usr/bin/python3` (the sidecar needs ≥ 3.11 for `datetime.UTC`: OK) |
+| Installed code | `sunnypilot/sunnypilot` `staging-tici` @ `1f7233cb` (v0.10.1, Oct 13 2025), **prebuilt**, working tree **clean** (`status --porcelain` and `diff` empty). No pending update. |
+| Why logs said "dirty" | Branch `staging-tici` has **no upstream configured**; `system/version.py:49-53` returns dirty=True whenever `get_branch()` (`git rev-parse @{u}`, `common/git.py:22-23`) is empty. The Nov 14 drive ran exactly `1f7233cb` with no local edits. |
+| State during check | Onroad (ignition on, parked); load average 5–6 on 8 cores; ~0.8 GB RAM available; CPU ~63 °C; `/data` 82 % used, 5.2 GB free |
+| ADB | Enabled (`AdbEnabled=1`). Not needed for this work; recommend turning it off. |
+
+msgq reader counts (onroad, 15 slots per service; the sidecar subscribes to the first eleven):
+
+| can | sendcan | carState | carControl | carOutput | controlsState | selfdriveState | onroadEvents | longitudinalPlan | radarState | drivingModelData | pandaStates | modelV2 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 | 2 | **14** | 10 | 4 | 5 | 8 | 3 | 4 | 5 | 1 | **15** | 7 |
+
+Consequences for G3:
+- `carState` has **one** free slot, so the sidecar can run **once per device boot**. A second run before a reboot would evict
+  every `carState` subscriber, including controls. The preflight now blocks that.
+- **Preflight bug found and fixed by this check:** the drive build keeps queues at `/dev/shm/<service>`, not
+  `/dev/shm/msgq_<service>` (current upstream msgq). The first version of the preflight looked only at the upstream path,
+  would have read "no queue file" for everything and called it safe. It now checks both layouts and `--check-slots`
+  prints which file it read.
+- `pandaStates` is already full (15/15), so any new `pandaStates` subscriber would evict all of them. The sidecar does not
+  subscribe to it; keep it that way.
+- Memory and disk headroom are adequate for a 2-minute, 8 MB-capped capture. CPU is already busy onroad, which is why the
+  pass criterion caps the sidecar at 15 % of one core and it runs at `nice +10` below the real-time controls processes.
+
 ## Next diagnostics improvements
 - Build DBC-backed offline decoding and compare raw-frame interpretations to `carState.steeringTorqueEps`, `carState.vEgo`, `carOutput.actuatorsOutput.torqueOutputCan`.
 - Correlate factory ACC cruise-button and gap-selection traffic with observed distance and acceleration.
