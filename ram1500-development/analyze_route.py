@@ -13,7 +13,7 @@ from pathlib import Path
 
 STREAMS = {"carState", "carControl", "carOutput", "controlsState", "liveTorqueParameters", "selfdriveState"}
 COLUMNS = ("seconds", "monoTimeNs", "stream", "valid", "event", "vEgo_mps", "steeringAngleDeg",
-           "steeringTorque", "steeringTorqueEps", "steeringPressed", "requestedTorque",
+           "steeringTorque", "steeringTorqueEps", "steeringPressed", "requestedTorque", "carControlLatActive",
            "requestedSteeringAngleDeg", "outputTorque", "outputTorqueCan", "outputSteeringAngleDeg",
            "lateralState", "lateralActive", "lateralOutput", "lateralError",
            "lateralSaturated", "actualLateralAccel", "desiredLateralAccel",
@@ -43,6 +43,8 @@ def timeline(msg, kind):
     prefix = "requested" if kind == "carControl" else "output"
     row[prefix+"Torque"] = field(p,"actuators" if kind=="carControl" else "actuatorsOutput","torque")
     row[prefix+"SteeringAngleDeg"] = field(p,"actuators" if kind=="carControl" else "actuatorsOutput","steeringAngleDeg")
+    if kind == "carControl":
+      row["carControlLatActive"] = field(p, "latActive")
     if kind == "carOutput":
       row["outputTorqueCan"] = field(p,"actuatorsOutput","torqueOutputCan")
   elif kind == "controlsState":
