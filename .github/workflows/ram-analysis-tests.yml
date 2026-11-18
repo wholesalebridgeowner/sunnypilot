@@ -22,3 +22,17 @@ jobs:
       - name: Offline fixture tests
         run: |
           python3 -m unittest discover -s ram1500-development -p 'test_*.py' -v
+      - name: Verify actual recorded-build EPS status DBC and RAM address mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          pinned=1f7233cb983f3c13fdbba47a86f8fbc796ad9211
+          base="https://raw.githubusercontent.com/sunnypilot/sunnypilot/${pinned}/opendbc_repo/opendbc/dbc/generator/chrysler"
+          mkdir -p "$RUNNER_TEMP/ram-pinned-dbc"
+          curl --fail --location --silent --show-error --retry 3 --max-time 45 \
+            "$base/_stellantis_common.dbc" -o "$RUNNER_TEMP/ram-pinned-dbc/common.dbc"
+          curl --fail --location --silent --show-error --retry 3 --max-time 45 \
+            "$base/_stellantis_common_ram.py" -o "$RUNNER_TEMP/ram-pinned-dbc/ram.py"
+          python3 ram1500-development/oem_eps_dbc_provenance.py \
+            --common-dbc "$RUNNER_TEMP/ram-pinned-dbc/common.dbc" \
+            --ram-generator "$RUNNER_TEMP/ram-pinned-dbc/ram.py"
