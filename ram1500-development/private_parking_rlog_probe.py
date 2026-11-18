@@ -59,13 +59,16 @@ class Summary:
         self.bins = defaultdict(lambda: {"speed": [], "angle": [], "eps": [], "requested": [],
                                          "driverSteering": 0, "latActive": Counter(), "gear": Counter(),
                                          "stoppedAngles": [], "column": [], "autoParkControl": Counter(),
-                                         "autoParkTransitions": Counter()})
+                                         "autoParkTransitions": Counter(), "epsLkasState": Counter(),
+                                         "epsTorqueOverlayStatus": Counter()})
         self.frame_counts = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_changed = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_previous = {"baseline": {}, "parkCandidate": {}}
         self.events = Counter()
         self.segment_counts = Counter()
         self._last_auto_park = None
+        self.eps_status_by_auto_park = {"true": {"lkas": Counter(), "overlay": Counter()},
+                                        "false": {"lkas": Counter(), "overlay": Counter()}}
 
     def observe(self, segment: int, local_sec: float, event):
         sec = segment * 60 + local_sec
@@ -103,7 +106,19 @@ class Summary:
                 if name == "can":
                     flag = eps_auto_park_has_control(frame)
                     if flag is not None:
-                        state["autoParkControl"]["true" if flag else "false"] += 1
+                        phase_name = "true" if flag else "false"
+                        state["autoParkControl"][phase_name] += 1
+                        # Historical installed DBC EPS_2:
+                        # LKAS_STATE 23|4@0+ -> byte 2 bits 7..4,
+                        # TORQUE_OVERLAY_STATUS 6|4@0+ -> byte 0 bits 6..3.
+                        # These are read-only ordinal status values, NOT commands.
+                        eps_bytes = bytes(frame.dat)
+                        lkas_state = (eps_bytes[2] >> 4) & 0xF
+                        overlay_status = (eps_bytes[0] >> 3) & 0xF
+                        state["epsLkasState"][str(lkas_state)] += 1
+                        state["epsTorqueOverlayStatus"][str(overlay_status)] += 1
+                        self.eps_status_by_auto_park[phase_name]["lkas"][str(lkas_state)] += 1
+                        self.eps_status_by_auto_park[phase_name]["overlay"][str(overlay_status)] += 1
                         if self._last_auto_park is not None and flag != self._last_auto_park:
                             state["autoParkTransitions"]["enabled" if flag else "disabled"] += 1
                         self._last_auto_park = flag
@@ -149,6 +164,8 @@ class Summary:
                 "gearCounts": dict(row["gear"]),
                 "epsAutoParkHasControl2Samples": dict(row["autoParkControl"]),
                 "epsAutoParkControlTransitions": dict(row["autoParkTransitions"]),
+                "epsLkasStateCounts": dict(row["epsLkasState"]),
+                "epsTorqueOverlayStatusCounts": dict(row["epsTorqueOverlayStatus"]),
             })
         candidates=[]
         normal=self.frame_counts["baseline"]
@@ -175,6 +192,8 @@ class Summary:
             "canCandidateChanges":candidates[:45],
             "canFrameSummary":{"baseline":sum(normal.values()),"parkingCandidate":sum(parking.values())},
             "criticalEventCounts":dict(self.events),
+            "epsStateByAutoParkFlag": {state: {name: dict(counts) for name, counts in fields.items()}
+                                       for state, fields in self.eps_status_by_auto_park.items()},
             "messageCountsBySegmentAndService":[{"segment":k[0],"service":k[1],"count":v}
                                                  for k,v in sorted(self.segment_counts.items())],
             "scope":{"segments":list(TARGET_SEGMENTS),"binSeconds":BIN_SECONDS,
@@ -184,7 +203,7 @@ class Summary:
                 "Owner time indicates approximate parking activation, not independently verified vehicle mode.",
                 "Route-relative seconds are reconstructed using 60-second log segments; validate alignment.",
                 "Changes in CAN frequency/payload variability do not identify steering command ownership.",
-                "AUTO_PARK_HAS_CONTROL_2 is a named EPS_2 DBC bit, not proof of the entire factory command or third-party authorization protocol.",
+                "AUTO_PARK_HAS_CONTROL_2, LKAS_STATE and TORQUE_OVERLAY_STATUS are named EPS_2 DBC status bits; ordinal changes do not reveal the factory command or authorization protocol.",
                 "A stationary steering wheel-angle change with Comma lateral control off would support a distinct factory path, not authorize replay.",
                 "This is aggregate-only observational analysis; no physical actuation or steering software changed."
             ]
