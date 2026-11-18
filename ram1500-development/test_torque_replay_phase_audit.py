@@ -126,10 +126,12 @@ class CausalPhaseAuditTests(unittest.TestCase):
         self.assertEqual(p["baselineFitsWithoutOlderAlternative"], 1)
 
     def test_future_and_invalid_control_not_counted_as_alternatives(self):
-        rows = base_rows() + [
-            row(5_000_000, "carControl", requestedTorque="NaN", carControlLatActive=True),
-            row(10_000_000, "carOutput", outputTorqueCan=106),
-            row(11_000_000, "carControl", requestedTorque=0.8, carControlLatActive=True)]
+        rows = [row(0, "carOutput", outputTorqueCan=100),
+                row(1_000_000, "carState", steeringTorqueEps=50),
+                row(2_000_000, "carControl", requestedTorque="NaN", carControlLatActive=True),
+                row(5_000_000, "carControl", requestedTorque=1, carControlLatActive=True),
+                row(10_000_000, "carOutput", outputTorqueCan=106),
+                row(11_000_000, "carControl", requestedTorque=0.8, carControlLatActive=True)]
         report = mod.audit(rows)
         p = report["controlPhaseIdentifiability"]
         self.assertEqual(p["olderControlCandidatesEvaluated"], 0)
