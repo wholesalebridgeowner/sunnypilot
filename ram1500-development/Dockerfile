@@ -23,17 +23,13 @@ RUN mkdir -p /opt/sunnypilot && cd /opt/sunnypilot \
     && git checkout -q --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "${PINNED_SUNNYPILOT_COMMIT}"
 
-# The pinned cereal/car.capnp is a symlink into a gitlink submodule. Fetch
-# the *exact gitlink SHA* from the installed device commit, never opendbc master.
-RUN set -eu; \
-    dbc_sha="$(git -C /opt/sunnypilot rev-parse HEAD:opendbc_repo)"; \
-    mkdir -p /opt/sunnypilot/opendbc_repo; \
-    cd /opt/sunnypilot/opendbc_repo; \
-    git init -q; \
-    git remote add origin https://github.com/sunnypilot/opendbc.git; \
-    git fetch --depth=1 origin "$dbc_sha"; \
-    git checkout -q --detach FETCH_HEAD; \
-    test "$(git rev-parse HEAD)" = "$dbc_sha"
+# Pinned cereal/car.capnp points into the opendbc gitlink, whose historical
+# commit is no longer fetchable from the public upstream Git remote. A byte-
+# identical schema extracted through the connected GitHub API is vendored with
+# its MIT license. Verify the original Git blob identity before compiling it.
+RUN rm /opt/sunnypilot/cereal/car.capnp
+COPY pinned-schema/car.capnp /opt/sunnypilot/cereal/car.capnp
+RUN test "$(git hash-object /opt/sunnypilot/cereal/car.capnp)" = "d237e353d549800b2db6aff58f313e89799df958"
 
 # Fail at build time if the pinned schema cannot resolve its imported capnp files.
 RUN ls -la /opt/sunnypilot/cereal/ && test -s /opt/sunnypilot/cereal/car.capnp && test -s /opt/sunnypilot/cereal/log.capnp \
