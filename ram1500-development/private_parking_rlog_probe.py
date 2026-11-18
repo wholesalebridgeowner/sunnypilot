@@ -21,8 +21,8 @@ BIN_SECONDS = 5
 # The owner reported factory park assist activation near route second 720,
 # based on a route beginning approximately 11:20 UTC. These ranges are
 # candidates, not verified OEM operating-mode labels.
-BASELINE_SECONDS = (680, 705)
-PARK_CANDIDATE_SECONDS = (720, 755)
+BASELINE_SECONDS = (660, 680)
+PARK_CANDIDATE_SECONDS = (685, 710)
 
 
 def valid_number(x):
@@ -37,7 +37,8 @@ def valid_number(x):
 class Summary:
     def __init__(self):
         self.bins = defaultdict(lambda: {"speed": [], "angle": [], "eps": [], "requested": [],
-                                         "driverSteering": 0, "latActive": Counter(), "gear": Counter()})
+                                         "driverSteering": 0, "latActive": Counter(), "gear": Counter(),
+                                         "stoppedAngles": [], "column": []})
         self.frame_counts = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_changed = {"baseline": Counter(), "parkCandidate": Counter()}
         self.frame_previous = {"baseline": {}, "parkCandidate": {}}
@@ -58,6 +59,13 @@ class Summary:
                 v = valid_number(getattr(obj, attr, None))
                 if v is not None:
                     state[name_key].append(v)
+            speed = valid_number(getattr(obj, "vEgo", None))
+            angle = valid_number(getattr(obj, "steeringAngleDeg", None))
+            if speed is not None and angle is not None and speed <= .3:
+                state["stoppedAngles"].append(angle)
+            driver_column = valid_number(getattr(obj, "steeringTorque", None))
+            if driver_column is not None:
+                state["column"].append(driver_column)
             state["driverSteering"] += bool(obj.steeringPressed)
             state["gear"][str(obj.gearShifter)] += 1
         elif name == "carControl":
@@ -92,6 +100,8 @@ class Summary:
             angle=row["angle"]
             eps=row["eps"]
             req=row["requested"]
+            stopped_angles=row["stoppedAngles"]
+            column=row["column"]
             bins.append({
                 "relativeWindowSeconds": [idx*BIN_SECONDS, (idx+1)*BIN_SECONDS],
                 "carStateSamples": len(speed),
@@ -100,6 +110,9 @@ class Summary:
                 "stoppedSamplesLe0p3Mps": sum(x <= .3 for x in speed),
                 "steeringAngleRangeDeg": round(max(angle)-min(angle), 2) if angle else None,
                 "steeringAngleNetChangeDeg": round(angle[-1]-angle[0], 2) if angle else None,
+                "stoppedSteeringAngleRangeDeg": round(max(stopped_angles)-min(stopped_angles),2) if stopped_angles else None,
+                "stoppedSteeringAngleNetChangeDeg": round(stopped_angles[-1]-stopped_angles[0],2) if stopped_angles else None,
+                "columnTorqueAbsMaxNative": round(max(map(abs,column)),2) if column else None,
                 "epsMotorFeedbackAbsMaxRaw": round(max(map(abs,eps)), 2) if eps else None,
                 "commaNativeCommandAbsMax": round(max(map(abs,req)), 2) if req else None,
                 "commaLateralActiveSamples": dict(row["latActive"]),
