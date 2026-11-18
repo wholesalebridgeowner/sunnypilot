@@ -114,6 +114,28 @@ class Tests(unittest.TestCase):
         self.assertEqual(report["true"]["lkas"],{"7":2})
         self.assertEqual(report["true"]["overlay"],{"9":2})
 
+    def test_out_of_order_rlog_services_sorted_for_park_episode(self):
+        def eps(flag):
+            data=bytearray(8)
+            data[6]=8 if flag else 0
+            return SimpleNamespace(src=0,address=0x31,dat=bytes(data))
+        s=mod.Summary()
+        # Real Rlogs can interleave service messages out of timestamp order.
+        s.observe(12,1.04,E("carState",vEgo=0,steeringAngleDeg=80,
+                            steeringTorqueEps=50,steeringTorque=0,
+                            steeringPressed=False,gearShifter="reverse"))
+        s.observe(12,1.03,E("can",can=[eps(True)]))
+        s.observe(12,1.01,E("can",can=[eps(False)]))
+        s.observe(12,1.02,E("carControl",latActive=False))
+        s.observe(12,1.02,E("carOutput",actuatorsOutput=SimpleNamespace(torqueOutputCan=0)))
+        s.observe(12,1.06,E("can",can=[eps(True)]))
+        s.observe(12,1.07,E("can",can=[eps(False)]))
+        episode=s.result()["factoryControlEpisodes"]
+        self.assertEqual(episode["outOfOrderObservations"],0)
+        self.assertEqual(episode["factoryParkEpisodes"][0]["epsFlagTrueFrames"],2)
+        self.assertEqual(episode["factoryParkEpisodes"][0]["nearStopSamples"],1)
+        self.assertEqual(episode["factoryParkEpisodes"][0]["freshCommaTorqueSamples"],1)
+
     def test_no_fake_parking_claim_and_invalid_numbers(self):
         s=mod.Summary().result()
         self.assertEqual(s["status"],"unverified_oem_parking_annotation")
