@@ -56,3 +56,9 @@ The user has a Windows PC with Claude. Following PC restart:
 
 ## Immediate Claude deliverable
 Return a brief device compatibility assessment, local SSH connectivity status (without keys/secrets), exact commits for any fixes, fixture test results, and one **parked-session-only** reversible installation plan requiring the user's approval. Collaborate via the existing GitHub PR; avoid duplicating the existing files or silently modifying running vehicle software.
+
+## New on this continuation branch (post-restart-ready)
+- `ram1500-development/windows_preflight.ps1`: **read-only** Windows prerequisite check; reports installed git/OpenSSH tools, existence of SSH *public* key files, and optionally whether TCP/22 responds on a user-provided device IP. It does not read private keys, configure SSH, install anything, or alter the Comma.
+- Run in PowerShell, from the cloned repository: `powershell -NoProfile -ExecutionPolicy Bypass -File .\\ram1500-development\\windows_preflight.ps1`. Add `-DeviceIP <known-local-Commap-IP>` only when Comma is home on the same LAN and IP is verified.
+- `device_telemetry.py` now creates owner-only directories (0700) and telemetry capture files (0600); fixture test asserts permissions on POSIX.
+- Latest diagnostics work remains on branch `ram1500-steering-forensics-20261117` and draft PR #1; check CI on current HEAD, rather than relying on earlier SHA references.
