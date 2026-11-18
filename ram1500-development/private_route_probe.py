@@ -14,7 +14,7 @@ import re
 import tempfile
 from pathlib import Path
 
-LOG_KEY = re.compile(r"^logs/(.+)/(\\d+)/(rlog|qlog)\\.zst$")
+LOG_KEY = re.compile(r"^logs/(.+)/(\d+)/(rlog|qlog)\.zst$")
 SELECTED_SEGMENTS = (0, 29, 30, 31)
 MAX_COMPRESSED_BYTES = 25_000_000
 
@@ -91,7 +91,7 @@ def summarize(result, steering, coverage):
         "sourceMatchedWithinAgeSamples": steering["sourceMatchedWithinAgeSamples"],
         "quality": {
             "inputRows": coverage.get("inputRows"),
-            "eventEpisodes": coverage.get("eventEpisodeCount"),
+            "eventEpisodes": coverage.get("steerSaturatedEpisodeCount"),
         },
         "warning": "Selected segments only. Steering command, EPS feedback and event correlation cannot prove physical actuation or authorize a software release.",
     }
