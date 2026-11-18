@@ -90,6 +90,30 @@ The [2021 Ram 1500 official owner's manual](https://vehicleinfo.mopar.com/assets
 
 The truck's installed Ram software requires **initial Sunnypilot engagement around 14.5 m/s (~32 mph)**, but can continue actively steering once engaged at speeds below that. The user has personally confirmed this. Separately, the **factory parking system steers at near-zero speeds**. Therefore the 32 mph figure is not an EPS physical steering floor; it is a current LKAS engagement/software authorization condition, not proof the OEM park system uses LKAS `0xA6` or grants third-party software the same privileges.
 
+## High-resolution factory-control episode reconstruction (November 18 follow-up)
+
+A later independent one-shot replay (private Railway deployment `0f519093-3379-4fad-b99b-003255eea8c9`, **SUCCESS**, GitHub source commit `40bb763f941a6d3dc8c8b8464f64bb56b5d8379d`) reconstructed each contiguous `EPS_2.AUTO_PARK_HAS_CONTROL_2` control episode from 100-Hz records. It synchronized `carState`, `carControl`, and `carOutput` with **past-only as-of joins capped at 150 ms**.
+
+An initial attempt discarded some observations because different R-log services are interleaved out of timestamp order. That issue was identified through the production replay and corrected by sorting **only private, scalar signal observations** before constructing events. A synthetic regression test now reproduces out-of-order logger messages.
+
+| High-resolution measurement | Result |
+|---|---:|
+| Distinct factory auto-park control episodes in selected R-log segments | **1** |
+| Duration between decoded rising and falling EPS status edges | **14.6 s** |
+| `AUTO_PARK_HAS_CONTROL_2=true` EPS frames | **1,460** |
+| Matched `carState` samples inside this OEM-control episode | **1,460** |
+| Within-episode `vEgo <= 0.3 m/s` observations | **557** |
+| Steering-wheel angle range over those near-stop samples | **440.3°** |
+| Fresh Comma `carControl.latActive=false` samples | **1,460 of 1,460** |
+| Fresh Comma-native steering-output samples | **1,460 of 1,460** |
+| Nonzero Comma-native steering command samples | **0 of 1,460** |
+| Near-stop `steeringPressed` status samples | **102 of 557** |
+| Out-of-order observations after sorting | **0** |
+
+The near-stop range pools the near-stop points within the full 14.6-second factory-control episode; it is **not** proof that the truck made one continuous 440.3° steering movement while completely stationary. The `steeringPressed` status is driver-column torque detection, not a reliable measure of human hand contact.
+
+**This result is a stronger independent demonstration of actual factory parking control than any inferred CAN candidate.** It still does not identify which ECU produced factory-authorized EPS requests, whether that path is on a Comma-accessible bus, or whether a third-party controller could use it. No active steering software or Panda safety was modified.
+
 ## Next evidence, no active vehicle modification
 1. Independently cross-check the decoded `EPS_2.AUTO_PARK_HAS_CONTROL_2` flag against OEM ParkSense diagnostic state and identify the factory PAM steering-control message/bus through licensed service data, without transmitting test commands. The bytes of `0x81`, `0x1F6`, `0x26F` should not be guessed.
 2. Cross-correlate verified parking state with steering angle, EPS motor feedback and OEM-authorized modules; distinguish owner supervision, intervention or possible cancellation from normal operation.
