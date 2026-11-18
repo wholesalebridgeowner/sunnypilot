@@ -56,25 +56,42 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   if base is None:return {"status":"no_data","following":{},"laneChange":{}}
   lead=[]
   drop=Counter()
-  for rec in ix.by_service.get("radarState",[]):
+  # Rejected or invalid radar messages must break following episodes, even
+  # when the remaining valid samples happen to be <0.55s apart.
+  continuity=0
+  radars=sorted((r for r in records if r.get("service")=="radarState"
+                 and isinstance(r.get("t"),int)), key=lambda r:r["t"])
+  for rec in radars:
+    if rec.get("valid") is False:
+      drop["invalidRadarMessage"]+=1
+      continuity+=1
+      continue
     if rec.get("leadOne.status") is not True:
-      drop["leadNotValid"]+=1;continue
+      drop["leadNotValid"]+=1;continuity+=1;continue
     vehicle,age=ix.asof("carState",rec["t"],.15)
     if vehicle is None:
-      drop["staleCarState"]+=1;continue
+      drop["staleCarState"]+=1;continuity+=1;continue
     speed=_num(vehicle.get("vEgo"))
     dist=_num(rec.get("leadOne.dRel"))
     rel=_num(rec.get("leadOne.vRel"))
     if speed is None or speed<=2 or dist is None or not 0<dist<300:
-      drop["invalidSpeedOrDistance"]+=1;continue
+      drop["invalidSpeedOrDistance"]+=1;continuity+=1;continue
     if vehicle.get("cruiseState.enabled") is not True:
-      drop["cruiseInactive"]+=1;continue
+      drop["cruiseInactive"]+=1;continuity+=1;continue
     if vehicle.get("gasPressed") is not False or vehicle.get("brakePressed") is not False:
-      drop["driverPedalOrUnknown"]+=1;continue
+      drop["driverPedalOrUnknown"]+=1;continuity+=1;continue
     lead.append({"t":rec["t"],"gap":dist/speed,"dRel":dist,"vRel":rel,
                  "modelSource":rec.get("leadOne.radar") is not True,"speed":speed,
-                 "ageMs":age*1000})
-  groups=_segments(lead,lambda r: True,max_gap_s=.55)
+                 "ageMs":age*1000,"continuity":continuity})
+  # Do not join across an excluded observation (pedal use, invalid lead,
+  # stale state, missing radar data). Temporal adjacency alone is not proof
+  # that factory ACC continuously followed one valid lead.
+  groups=[]
+  for observation in lead:
+    if (not groups or observation["continuity"]!=groups[-1][-1]["continuity"] or
+        (observation["t"]-groups[-1][-1]["t"])/NS>.55):
+      groups.append([])
+    groups[-1].append(observation)
   long_follow=[group for group in groups if _duration(group)>=minimum_follow_s and len(group)>=3]
   # Falling below 1.5 s is merely a diagnostic bin, NOT a recommended gap target.
   follow_duration=sum(_duration(g) for g in long_follow)
