@@ -20,9 +20,11 @@ ROUTE_PREFIX = "000003dc"
 BIN_SECONDS = 5
 # The owner reported factory park assist activation near route second 720,
 # based on a route beginning approximately 11:20 UTC. These ranges are
-# candidates, not verified OEM operating-mode labels.
+# candidates, not verified OEM operating-mode labels. The candidate window
+# stops before observed speeds rise above ~5 mph, when the 2021 factory
+# ParkSense active steering guidance ordinarily deactivates.
 BASELINE_SECONDS = (660, 680)
-PARK_CANDIDATE_SECONDS = (685, 710)
+PARK_CANDIDATE_SECONDS = (685, 705)
 
 
 def valid_number(x):
