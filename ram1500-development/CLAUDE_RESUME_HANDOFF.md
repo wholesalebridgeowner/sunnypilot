@@ -1,0 +1,58 @@
+# CLAUDE: Resume Ram 1500 work after Windows PC restart
+
+**Open this first.** Updated November 17, 2026. This is a GitHub-only handoff, not a claim that the Comma device has been modified.
+
+## Repository and exact branch
+- Repository: `wholesalebridgeowner/sunnypilot`
+- **Current diagnostics and forensics work:** `ram1500-steering-forensics-20261117`
+- Base branch: `ram1500-custom-development`
+- Draft PR: https://github.com/wholesalebridgeowner/sunnypilot/pull/1
+- This branch contains the most recent tools. Read and review the PR before any device installation; do not assume the working copy already has these commits.
+
+## User goal
+Develop a Ram 1500-specific high-quality assisted-driving stack: smoother lane centering, curves and lane changes; improve observed following distance, ACC/throttle comfort and responsiveness; increase telemetry resolution; later examine low-speed and navigation functions only within genuinely supported and validated safety interfaces. Do not modify live actuation limits, Panda safety or OEM authorization.
+
+## Deliverables already saved in this branch
+- `ram1500-development/PROJECT_PLAN.md`: engineering scope and acceptance gates.
+- `ram1500-development/CLAUDE_REVIEW_PROMPT.md`: independent review request.
+- `ram1500-development/DEVICE_DIAGNOSTICS.md`: device capture design, guarded manual installation procedure, verified remote-access audit.
+- `ram1500-development/analyze_route.py`, `test_analyze_route.py`: offline saturation-event window extraction and tests.
+- `ram1500-development/analyze_comfort.py`, `test_analyze_comfort.py`: longitudinal ownership, lead headway, acceleration and lane-change analysis.
+- `ram1500-development/device_telemetry.py`, `test_device_telemetry.py`: **opt-in and passive** local diagnostic sidecar for selected Panda CAN and openpilot streams, capped local storage; no CAN transmission or remote upload.
+- `ram1500-development/summarize_can_capture.py`, `test_summarize_can_capture.py`: local read-only raw CAN message timing diagnostics.
+- `ram1500-development/reports/2026-11-14-steering-analysis.md`: known findings, hypotheses, open issues.
+- `ram1500-development/reports/2026-11-14-following-throttle-lane-change.md`: stock ACC attribution and comfort investigation.
+- `.github/workflows/ram-analysis-tests.yml`: offline fixture CI. Most recent run at commit `5b044e2f5ab7fb02852bf15ce3997ff34a32ae46` **passed**; new handoff commit itself is documentation-only.
+
+## Verified Comma connectivity
+From an authorized, read-only Athena JSON-RPC probe performed via existing Railway project `ram-drive-log-bridge`:
+- Comma API device reports type `three`; driving telemetry reports `tici`. Treat this as **Comma 3**, not Comma 2, for software/build compatibility.
+- The installed operating stack returned Sunnypilot `0.10.1`, remote `github.com/sunnypilot/sunnypilot`, branch `staging-tici`, commit `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`. Historical driving logs indicated a dirty working tree, so running code may differ.
+- Device was online during inspection.
+- `getGithubUsername` and `getSshAuthorizedKeys` both returned empty/unconfigured.
+- Comma Prime inactive.
+- No remote code-install capability was available through Railway/GitHub connectors or the supported Athena diagnostic RPCs. **Device diagnostic logger is not installed.**
+- Railway collector service already retrieves device logs using authorized Comma APIs; it is NOT an arbitrary remote shell.
+
+## Windows PC / Claude setup: next user-approved task
+The user has a Windows PC with Claude. Following PC restart:
+1. Confirm your working tree and SSH tools before making changes. Git fetch and switch to `ram1500-steering-forensics-20261117`.
+2. Read `DEVICE_DIAGNOSTICS.md`, inspect all new Python and tests. Run `python -m unittest discover -s ram1500-development -p "test_*.py" -v`. Check pinned schema and actual installed firmware before touching device.
+3. On Windows, check OpenSSH Client availability and generate an **operator-owned SSH key pair** if needed; never share or commit the private key. Only register the public key with the user's GitHub account through user-authorized action.
+4. Ask user to enable SSH on their parked Comma and set GitHub username `wholesalebridgeowner` using on-device settings. Make sure the Comma and PC share a reachable local network; do not assume the truck is home or automatically open a wide-area SSH port.
+5. Establish and verify SSH with host-key checking and user consent, and inspect device OS, working-tree version, free space and resource usage. No automatic deployment or unattended startup.
+6. Fix any device Python/cereal compatibility issues in a separate commit. Start with a short 1–2-minute **parked, read-only** capture using low sample rate, then verify timing, disk retention and system health; roll back if unstable.
+7. Keep raw CAN, GPS, VIN and dongle data local/private. Report only anonymized quantitative findings and code references back to PR.
+8. Do not flash device, reset the installed branch, deploy live controllers or attempt unauthorized safety-gate changes. Any future control candidate needs separate replay and independent validation.
+
+## Engineering evidence and next data work
+- Saturday November 14, 2026 route `000003cc--27a46b2116` yielded 51/51 Q-log segments, 728,719 readable messages; ~30,000 car state/control/output records, ~11,995 live torque records.
+- One `steerSaturated` alert sample at +171 s. Two `canError` and controls mismatch samples at about +3002 s around parking/shutdown; not yet demonstrated to be in-motion failures.
+- Counts such as `steerOverride` = 1,675 are **sample counts**, not independent interventions.
+- Need precise time-aligned numerical actual-vs-commanded steering, motor torque, driver torque and lateral tracking around +171 s.
+- For distance and throttle, pinned Chrysler Ram interface sends LKAS and cruise-control buttons, but does not emit direct throttle/brake CAN actuation; factory ACC appears to own longitudinal behavior. Confirm with `carParams.openpilotLongitudinalControl` and `carControl.longActive` from the recorded build.
+- For lane change, source fades lane-line probability 0.5 s on initiation and ~1 s during finishing; evaluate measured steering-rate and jerk before considering changes.
+- Source submodule pinned in this GitHub branch: `opendbc_repo` at commit `df807f8be394231b2366a1ecd9c9265ab51d2400`; actual device install must be checked before applying this assumption.
+
+## Immediate Claude deliverable
+Return a brief device compatibility assessment, local SSH connectivity status (without keys/secrets), exact commits for any fixes, fixture test results, and one **parked-session-only** reversible installation plan requiring the user's approval. Collaborate via the existing GitHub PR; avoid duplicating the existing files or silently modifying running vehicle software.
