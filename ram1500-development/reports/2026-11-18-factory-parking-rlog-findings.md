@@ -1,6 +1,6 @@
 # November 18 — factory parallel-parking evidence from private 100 Hz Ram R-logs
 
-**Status: real recorded-drive measurements. Read-only analysis only; OEM activation time is owner-reported, not decoded as an independent parking-mode bit.**
+**Status: real recorded-drive measurements with the factory automatic-parking EPS control flag independently decoded from the pinned original Ram DBC. Read-only; no vehicle modification.**
 
 ## Provenance
 - Owner reported activating factory automatic parallel parking at approximately **05:32 Central** on November 18, 2026. The owner's vehicle has functional factory self-steering parallel parking.
@@ -9,6 +9,31 @@
 - One-shot isolated Railway private analyzer service `ram-factory-parking-private-analysis`, final successful deployment `250e3a06-9079-45d6-bd76-077019d795e2`, source commit `5526975353a9ea3ebe41ba0d3ee4349cac5de8fb`. No vehicle communication or CAN transmission from this process.
 - On each R-log segment, timing is anchored to **its first CAN event**, excluding a replayed `initData` header whose old timestamp would otherwise double the apparent route time. A fixture regression test catches that mistake.
 - The report contains no GPS, exact location, VIN, dongle ID, raw CAN payload or full route key.
+
+## Confirmed OEM EPS parking-control status — major result
+
+The **exact installed driving build** includes a Chrysler RAM DT DBC that defines `EPS_2.AUTO_PARK_HAS_CONTROL_2`. Its signal is **one bit at DBC start bit 51** in the source Stellantis `EPS_2` frame (ID 544). The RAM DT DBC generator maps this EPS status frame to **CAN ID 49 (`0x31`) on bus 0**. For this 1-bit Motorola field, the status value is payload byte 6, bit 3. The read-only private analyzer now decodes this single known bit from every recorded bus-0 EPS status frame.
+
+**Source pinned to the actual installed commit `1f7233cb`:**
+- `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common.dbc`: `BO_ 544 EPS_2`, `SG_ AUTO_PARK_HAS_CONTROL_2 : 51|1@0+`
+- `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common_ram.py`: address mapping `544: 49`
+
+Private reanalysis deployment `e214cb58-0252-4cc0-b1d6-de7c23445d70` **SUCCESS**, source commit `0186f8ea5c900c4df9e9b4bc69991939d9b59ea6`; GitHub CI passed all diagnostics fixtures including the bit-position/transition test.
+
+| Route-relative interval | EPS `AUTO_PARK_HAS_CONTROL_2` true / observed | State transition |
+|---|---:|---|
+| 660–680 s | 0 / ~2,001 | Factory parking control not reported |
+| **680–685 s** | **400 / 500** | **Factory auto-park control enabled** |
+| **685–690 s** | **500 / 500** | Remained enabled |
+| **690–695 s** | **500 / 500** | Remained enabled, including near-stopped steering |
+| **695–700 s** | **60 / 500** | **Factory auto-park control disabled** |
+| 700–780 s | 0 / subsequent ~8,000 | Not under factory parking control |
+
+The EPS reported factory auto-park control active for **approximately 15.6 seconds**, during the owner-identified low-speed maneuver. **Comma lateral control remained inactive and Comma native LKAS torque was zero throughout.** In the 690–695 s interval, 200 samples with reported speed ≤ 0.3 m/s spanned **354.1° of steering wheel angle**, while the factory control bit was active for that entire five-second bin.
+
+**Important attribution correction:** later large steering changes at 700–705 s occurred **after the EPS auto-park control bit had switched off**; they must *not* be attributed to active factory automated steering. They may reflect driver-controlled maneuver completion or other steering activity. Similarly, high `steeringPressed` torque flags cannot by themselves establish hand contact or program cancellation.
+
+This independently confirms the OEM EPS was in its automatic parking control mode, not merely that its wheels turned while Comma was inactive. It **does not** identify the originating PAM-to-EPS command message, authorize a third-party steering controller, or establish that Comma's 0xA6 LKAS command can activate that mode.
 
 ## Confirmed vehicle behavior
 
@@ -57,9 +82,9 @@ The [2021 Ram 1500 official owner's manual](https://vehicleinfo.mopar.com/assets
 The truck's installed Ram software requires **initial Sunnypilot engagement around 14.5 m/s (~32 mph)**, but can continue actively steering once engaged at speeds below that. The user has personally confirmed this. Separately, the **factory parking system steers at near-zero speeds**. Therefore the 32 mph figure is not an EPS physical steering floor; it is a current LKAS engagement/software authorization condition, not proof the OEM park system uses LKAS `0xA6` or grants third-party software the same privileges.
 
 ## Next evidence, no active vehicle modification
-1. Independently locate factory ParkSense active-state or PAM status messages and their originating CAN bus using licensed service information or safely collected diagnostics. The bytes of `0x81`, `0x1F6`, `0x26F` should not be guessed.
+1. Independently cross-check the decoded `EPS_2.AUTO_PARK_HAS_CONTROL_2` flag against OEM ParkSense diagnostic state and identify the factory PAM steering-control message/bus through licensed service data, without transmitting test commands. The bytes of `0x81`, `0x1F6`, `0x26F` should not be guessed.
 2. Cross-correlate verified parking state with steering angle, EPS motor feedback and OEM-authorized modules; distinguish owner supervision, intervention or possible cancellation from normal operation.
 3. Validate whether the OEM PAM-to-EPS command path is observable on the Comma harness. A distinct OEM bus may not be represented by its camera-side CAN view; absence of a message is not proof it doesn't exist.
 4. Keep any future analysis passive. Do not replay OEM commands, spoof firmware/gear/mode, modify Panda safety or attempt third-party zero-speed steering from these findings alone.
 
-**Conclusion:** strong recorded proof of EPS steering movement at near-stopped speeds **without Sunnypilot steering actuation**. Together with the owner's factory automatic-parking observation and service documentation, the evidence supports investigating the OEM PAM/EPS control architecture rather than seeking another EPS firmware flash. Exact parking-mode status, command address, ECU ownership and authorization remain unresolved.
+**Conclusion:** direct recorded confirmation that the EPS reported `AUTO_PARK_HAS_CONTROL_2` during near-stopped automated steering **without Sunnypilot LKAS actuation**. Together with the owner's experience and service information, this establishes OEM parking-control capability on the truck. The precise factory PAM steering-command address, authorization protocol and supported third-party access remain unresolved. No EPS firmware flash or safety-gate change is justified by these data.
