@@ -1,6 +1,7 @@
 """Fixture-only tests for Ram read-only diagnostic sidecar; no Comma device needed."""
 import importlib.util
 import tempfile
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -46,6 +47,9 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
       files=list(Path(folder).glob("ram-telemetry-*.jsonl"))
       self.assertEqual(len(files),2)
       self.assertTrue(all(f.stat().st_size<=4096 for f in files))
+      if os.name == "posix":
+        self.assertEqual(os.stat(folder).st_mode & 0o777,0o700)
+        self.assertTrue(all((f.stat().st_mode & 0o777)==0o600 for f in files))
   def test_invalid_limits(self):
     with self.assertRaises(ValueError):
       mod.RotatingWriter(Path("ignored"),max_bytes=10,keep=2)
