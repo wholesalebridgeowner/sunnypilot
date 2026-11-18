@@ -2,7 +2,7 @@
 """Read-only Comma Q-/R-log analyzer. Use matching pinned cereal schema.
 
 From repository root:
- python3 ram1500-development/analyze_route.py /private/route/{0,1,2}/qlog.zst --focus-seconds 171 --window 30 --output-prefix /tmp/ram-171
+ python3 ram1500-development/analyze_route.py /private/route/*/qlog.zst --expected-segments 51 --focus-seconds 171 --window 30 --output-prefix /tmp/ram-171
 Supply all 51 ordered segments for absolute time relative to route start.
 """
 import argparse
