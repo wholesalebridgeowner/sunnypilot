@@ -90,5 +90,54 @@ class CausalPhaseAuditTests(unittest.TestCase):
         self.assertEqual(counts["unmatchedAtNormalizedCeiling"], 1)
 
 
+    def test_different_requests_can_yield_identical_limited_command(self):
+        rows = base_rows() + [
+            row(5_000_000, "carControl", requestedTorque=0.8, carControlLatActive=True),
+            row(10_000_000, "carOutput", outputTorqueCan=106)]
+        report = mod.audit(rows)
+        p = report["controlPhaseIdentifiability"]
+        self.assertEqual(p["eligibleChangedOutputs"], 1)
+        self.assertEqual(p["multipleControlOptionsFit"], 1)
+        self.assertEqual(p["baselineFitsWithOlderAlternative"], 1)
+        self.assertEqual(p["differentRequestsSamePredictedCommand"], 1)
+        self.assertEqual(p["allControlOptionsPredictSameCommand"], 1)
+        self.assertEqual(report["counts"]["baselineMatched"], 1)
+
+    def test_unmatched_baseline_has_exactly_one_older_fit(self):
+        rows = base_rows() + [
+            row(5_000_000, "carControl", requestedTorque=0, carControlLatActive=True),
+            row(10_000_000, "carOutput", outputTorqueCan=106)]
+        report = mod.audit(rows)
+        p = report["controlPhaseIdentifiability"]
+        self.assertEqual(p["outputsWithDistinctPredictedCommands"], 1)
+        self.assertEqual(p["oneControlOptionFits"], 1)
+        self.assertEqual(p["baselineMissOlderAlternativeFits"], 1)
+        self.assertEqual(report["counts"]["olderControlOnly"], 1)
+
+    def test_baseline_fits_and_disagrees_with_older_request(self):
+        rows = [row(0, "carOutput", outputTorqueCan=100),
+                row(1_000_000, "carState", steeringTorqueEps=50),
+                row(2_000_000, "carControl", requestedTorque=0, carControlLatActive=True),
+                row(5_000_000, "carControl", requestedTorque=1, carControlLatActive=True),
+                row(10_000_000, "carOutput", outputTorqueCan=106)]
+        p = mod.audit(rows)["controlPhaseIdentifiability"]
+        self.assertEqual(p["outputsWithDistinctPredictedCommands"], 1)
+        self.assertEqual(p["oneControlOptionFits"], 1)
+        self.assertEqual(p["baselineFitsWithoutOlderAlternative"], 1)
+
+    def test_future_and_invalid_control_not_counted_as_alternatives(self):
+        rows = base_rows() + [
+            row(5_000_000, "carControl", requestedTorque="NaN", carControlLatActive=True),
+            row(10_000_000, "carOutput", outputTorqueCan=106),
+            row(11_000_000, "carControl", requestedTorque=0.8, carControlLatActive=True)]
+        report = mod.audit(rows)
+        p = report["controlPhaseIdentifiability"]
+        self.assertEqual(p["olderControlCandidatesEvaluated"], 0)
+        self.assertEqual(p["outputsWithoutOlderControlOptions"], 1)
+        self.assertEqual(p["oneControlOptionFits"], 1)
+        self.assertNotIn("monoTimeNs", json.dumps(report))
+        self.assertEqual(report["counts"]["baselineMatched"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
