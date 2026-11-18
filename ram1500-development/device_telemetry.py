@@ -9,7 +9,9 @@ Safety guards (added in Claude review, 2026-11-17):
   * Subscriber-slot preflight. msgq allows NUM_READERS=15 subscribers per service and never frees a slot
     when a process exits; the 16th subscriber EVICTS EVERY subscriber of that service (msgq.cc,
     msgq_init_subscriber), including card/controlsd. The sidecar reads the reader count from the first
-    8 bytes of /dev/shm/msgq_<service> (read-only) and refuses to subscribe if that would evict anyone.
+    8 bytes of the queue file (read-only; /dev/shm/<service> on the drive build, /dev/shm/msgq_<service> upstream)
+    and refuses to subscribe if that would evict anyone. Measured on the truck's Comma 2026-11-17 (onroad):
+    carState had 14 of 15 readers, so the sidecar fits ONCE per device boot.
   * Parked-only by default: capture stops as soon as carState reports motion, unless --allow-moving.
   * Runs at reduced CPU priority (nice +10) and logs its own CPU/memory use every 10 s.
 
@@ -168,27 +170,39 @@ class RotatingWriter:
       self.f = None
 
 
-def msgq_path(service, shm_dir="/dev/shm", prefix=None):
-  """Shared-memory file of a msgq service (msgq.cc msgq_new_queue: /dev/shm/msgq_[<prefix>/]<service>)."""
+def msgq_path(service, shm_dir="/dev/shm", prefix=None, layout="drive_build"):
+  """Shared-memory file of a msgq service.
+
+  layout "drive_build": /dev/shm/[<prefix>/]<service> -- what the Comma running sunnypilot 1f7233cb uses
+                        (verified on the device 2026-11-17: /dev/shm/carState, /dev/shm/can, ...).
+  layout "upstream":    /dev/shm/msgq_[<prefix>/]<service> -- current commaai/msgq master.
+  """
+  if layout == "drive_build":
+    return Path(shm_dir) / (f"{prefix}/{service}" if prefix else service)
   base = f"msgq_{prefix}/" if prefix else "msgq_"
   return Path(shm_dir) / f"{base}{service}"
 
 
-def msgq_reader_counts(services, shm_dir="/dev/shm", prefix=None):
+def msgq_reader_counts(services, shm_dir="/dev/shm", prefix=None, with_paths=False):
   """Registered-reader count per service, read-only from the msgq header's first uint64 (little-endian).
 
-  None = queue file does not exist yet (no publisher/subscriber has created it; subscribing is safe).
+  Both known file layouts are checked. None = no queue file in either layout (nothing has created the queue yet,
+  so subscribing cannot evict anyone). A wrong layout would read as None and look safe, hence both are checked.
   """
-  counts = {}
+  counts, paths = {}, {}
   for service in services:
-    p = msgq_path(service, shm_dir, prefix)
-    try:
-      with p.open("rb") as f:
-        head = f.read(8)
+    counts[service], paths[service] = None, None
+    for layout in ("drive_build", "upstream"):
+      p = msgq_path(service, shm_dir, prefix, layout)
+      try:
+        with p.open("rb") as f:
+          head = f.read(8)
+      except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        continue
       counts[service] = struct.unpack("<Q", head)[0] if len(head) == 8 else None
-    except FileNotFoundError:
-      counts[service] = None
-  return counts
+      paths[service] = str(p)
+      break
+  return (counts, paths) if with_paths else counts
 
 
 def slot_problems(counts, num_readers=NUM_READERS):
@@ -320,9 +334,9 @@ def main():
                       help="only print msgq reader counts per service and exit (read-only)")
   args = parser.parse_args()
   if args.check_slots:
-    counts = msgq_reader_counts(SERVICES, prefix=os.environ.get("OPENPILOT_PREFIX"))
-    print(json.dumps({"readerCounts": counts, "wouldEvict": slot_problems(counts), "numReaders": NUM_READERS},
-                     sort_keys=True))
+    counts, paths = msgq_reader_counts(SERVICES, prefix=os.environ.get("OPENPILOT_PREFIX"), with_paths=True)
+    print(json.dumps({"readerCounts": counts, "queueFiles": paths, "wouldEvict": slot_problems(counts),
+                      "numReaders": NUM_READERS}, sort_keys=True))
     return
   if not (1 <= args.minutes <= 120 and 1 <= args.sample_hz <= 20 and 1 <= args.max_mb <= 64
           and 1 <= args.keep_files <= 20):

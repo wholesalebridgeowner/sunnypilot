@@ -74,9 +74,24 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     self.assertEqual(mod.slot_problems({"carState": 14, "can": 15, "x": None}), {"can": 15})
     self.assertEqual(mod.slot_problems({"carState": 14}), {})  # 15th reader still fits
 
-  def test_openpilot_prefix_path(self):
-    self.assertEqual(mod.msgq_path("can", "/dev/shm", "abc").as_posix(), "/dev/shm/msgq_abc/can")
-    self.assertEqual(mod.msgq_path("can", "/dev/shm").as_posix(), "/dev/shm/msgq_can")
+  def test_queue_file_layouts(self):
+    # drive build (verified on the device): /dev/shm/<service>; upstream msgq master: /dev/shm/msgq_<service>
+    self.assertEqual(mod.msgq_path("can", "/dev/shm").as_posix(), "/dev/shm/can")
+    self.assertEqual(mod.msgq_path("can", "/dev/shm", "abc").as_posix(), "/dev/shm/abc/can")
+    self.assertEqual(mod.msgq_path("can", "/dev/shm", layout="upstream").as_posix(), "/dev/shm/msgq_can")
+    self.assertEqual(mod.msgq_path("can", "/dev/shm", "abc", layout="upstream").as_posix(), "/dev/shm/msgq_abc/can")
+
+  def test_reader_counts_find_either_layout(self):
+    import struct
+    with tempfile.TemporaryDirectory() as folder:
+      Path(folder, "carState").write_bytes(struct.pack("<Q", 14) + b"\x00" * 64)       # drive-build layout
+      Path(folder, "msgq_onroadEvents").write_bytes(struct.pack("<Q", 3) + b"\x00" * 64)  # upstream layout
+      counts, paths = mod.msgq_reader_counts(("carState", "onroadEvents", "can"), shm_dir=folder, with_paths=True)
+      self.assertEqual(counts, {"carState": 14, "onroadEvents": 3, "can": None})
+      self.assertTrue(paths["carState"].endswith("carState") and "msgq_" not in paths["carState"])
+      self.assertEqual(mod.slot_problems(counts), {})  # 14 -> one free slot: exactly one sidecar fits
+      Path(folder, "carState").write_bytes(struct.pack("<Q", 15) + b"\x00" * 64)       # after one sidecar run
+      self.assertEqual(mod.slot_problems(mod.msgq_reader_counts(("carState",), shm_dir=folder)), {"carState": 15})
 
   def test_parked_guard(self):
     moving = {"service": "carState", "vEgo": 1.2}
