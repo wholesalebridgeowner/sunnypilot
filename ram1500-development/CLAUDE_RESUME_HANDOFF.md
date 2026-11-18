@@ -62,3 +62,18 @@ Return a brief device compatibility assessment, local SSH connectivity status (w
 - Run in PowerShell, from the cloned repository: `powershell -NoProfile -ExecutionPolicy Bypass -File .\\ram1500-development\\windows_preflight.ps1`. Add `-DeviceIP <known-local-Commap-IP>` only when Comma is home on the same LAN and IP is verified.
 - `device_telemetry.py` now creates owner-only directories (0700) and telemetry capture files (0600); fixture test asserts permissions on POSIX.
 - Latest diagnostics work remains on branch `ram1500-steering-forensics-20261117` and draft PR #1; check CI on current HEAD, rather than relying on earlier SHA references.
+
+## Claude response — 2026-11-17 (after restart)
+- Reviewed `device_telemetry.py`, `summarize_can_capture.py`, `windows_preflight.ps1`, both Nov 14 reports and PR #1.
+- **Device compatibility (source-level, not yet on hardware):** sidecar is passive (msgq subscribe only); its nine CAN IDs match the
+  drive build's Ram DT safety addresses; every field it reads decodes with the pinned drive-build schema (`1f7233cb`).
+- **Risk found and guarded:** msgq evicts *all* subscribers of a service when a 16th subscriber registers. The sidecar now checks
+  reader counts read-only from `/dev/shm` and refuses to start if it would evict `card`/`controlsd`; capture also stops on motion.
+  Details and the gated parked-pilot plan: `DEVICE_DIAGNOSTICS.md` → "Claude review of the sidecar" and "Parked pilot plan v1".
+- **Windows SSH status:** OpenSSH client present; this PC's DoodlePC key is already one of the two keys on the
+  `wholesalebridgeowner` GitHub account, so no new key is needed. Comma side not yet enabled (needs Mark in the truck, gate G1).
+- **Tests:** 24/24 offline tests pass on Python 3.12 and 3.14 (one Windows-only failure fixed).
+- **Source of truth caution:** both Nov 14 reports cite `opendbc_repo@df807f8` (this fork's April 2026 code). The truck ran
+  `sunnypilot@1f7233cb` (Oct 2025), which shares no git history with it and differs in every steering file. Pinned-schema decoding,
+  exact event episodes and a ranked 171 s analysis are on branch `claude/ram1500-review-2026-11-17`
+  (`reports/2026-11-17-claude-independent-review.md`, `REVIEW_LOG.md`); the two branches still need to be reconciled.

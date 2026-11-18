@@ -20,7 +20,7 @@ Do not treat API access to log uploads as permission to run arbitrary commands, 
 ## Purpose
 Develop a safe path from one-off Q-log review toward higher-fidelity engineering observability. The connected Comma device already receives Panda CAN packets and runs `loggerd`, which saves raw/decimated `can` and `sendcan` streams in R-/Q-logs. We should use the existing paths instead of creating a competing CAN device driver.
 
-The opt-in script `device_telemetry.py` subscribes (never publishes) to existing cereal messaging services, retaining selected Ram DT identifiers from `opendbc/safety/modes/chrysler.h`. It also captures car state, requested and applied steering, model lane-change state, cruise status, and lead estimates. It emits local NDJSON files under an explicitly selected directory, rotates at 16 MiB each and retains eight by default. No upload, camera, microphone or vehicle command capability is implemented.
+The opt-in script `device_telemetry.py` subscribes (never publishes) to existing cereal messaging services, retaining selected Ram DT identifiers from `opendbc/safety/modes/chrysler.h`. It also captures car state, requested and applied steering, model lane-change state, cruise status, and lead estimates. It emits local NDJSON files under an explicitly selected directory, rotates at 16 MiB each and retains eight by default. No upload, camera, microphone or vehicle command capability is implemented. It refuses to start if subscribing would evict existing subscribers, and stops when the vehicle moves unless explicitly allowed (see "Claude review of the sidecar").
 
 ## Features delivered
 - `device_telemetry.py`: passive subscriptions to `can`, `sendcan`, `carState`, `carControl`, `carOutput`, `controlsState`, `selfdriveState`, `onroadEvents`, `longitudinalPlan`, `radarState`, `drivingModelData`.
@@ -38,16 +38,55 @@ The opt-in script `device_telemetry.py` subscribes (never publishes) to existing
 5. If acceptable, use a defined, supervised longer recording. Do not auto-start, run unattended or stream CAN off-device until reviewed and authorized separately.
 6. Extract data from the device using a private channel **only with explicit permission**. Never commit raw logs, VIN, GPS, or dongle IDs to a public repo. Confirm file permissions and storage retention.
 
-## Suggested offline run (only after parked hardware validation)
+## Suggested run (only after parked hardware validation)
+Copy the two scripts to `/data/ram-diag/` — **not** into `/data/openpilot`, which would dirty the installed git tree
+and can be cleaned by the updater. Run them against the device's own `cereal`:
 ```bash
-python3 ram1500-development/device_telemetry.py \
-  --output-dir /data/media/0/ram-telemetry \
-  --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
-
-python3 ram1500-development/summarize_can_capture.py \
-  /data/media/0/ram-telemetry/ram-telemetry-*.jsonl \
-  --output /data/media/0/ram-telemetry-summary.json
+cd /data/openpilot && PYTHONPATH=/data/openpilot python3 /data/ram-diag/device_telemetry.py --check-slots
+cd /data/openpilot && PYTHONPATH=/data/openpilot timeout 150 python3 /data/ram-diag/device_telemetry.py \
+  --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
+python3 /data/ram-diag/summarize_can_capture.py /data/ram-telemetry/ram-telemetry-*.jsonl \
+  --output /data/ram-telemetry/summary.json
 ```
+
+## Claude review of the sidecar (2026-11-17)
+Verified against the drive build `sunnypilot@1f7233cb` (what the Comma reports it runs):
+- **Passive design confirmed.** Subscribes through cereal/msgq only; never opens the panda, never publishes, no `sendcan`.
+- **CAN IDs correct.** All nine match `CHRYSLER_RAM_DT_ADDRS` in the drive build's `opendbc/safety/modes/chrysler.h:193-203`.
+- **Schema compatible.** Every field the sidecar reads was exercised with real Cap'n Proto messages built from the pinned
+  drive-build schema; all decode (enums as text, CAN filtered by ID). Nothing returned missing.
+- **Risk found and guarded — msgq subscriber eviction.** msgq allows 15 subscribers per service (`msgq.h NUM_READERS`) and
+  never frees a slot when a process exits; the 16th subscriber **evicts every subscriber of that service**
+  (`msgq.cc msgq_init_subscriber`), including `card`/`controlsd`, which then drop messages while they resync. The sidecar now
+  reads each service's reader count from the first 8 bytes of `/dev/shm/msgq_<service>` (read-only) and refuses to start if
+  subscribing would evict anyone (`--check-slots` prints the counts). Rule regardless: **start it only while parked; never
+  start or restart it while driving.**
+- **Parked-only enforced.** Capture stops when `carState.vEgo > 0.3 m/s` unless `--allow-moving` (not part of the pilot).
+- **Overhead measured, not assumed.** Runs at `nice +10`; writes a `sidecar_health` row every 10 s (own CPU % of one core,
+  RSS, load average) plus `sidecar_start` / `sidecar_stop` rows with reader counts before/after and the stop reason.
+- **Fixed:** the file-size cap counted `\n` as 1 byte but Windows wrote `\r\n` (test failed on Windows; harmless on device).
+- Decode errors (including pycapnp `KjException`) are counted instead of ending the capture.
+
+## Parked pilot plan v1 (Claude) — each gate needs Mark's explicit GO
+Scope: one 2-minute capture, truck parked, nothing installed into openpilot, nothing that starts on its own.
+
+| Gate | Who | Action | Reversible by |
+|---|---|---|---|
+| G1 | Mark, in the parked truck (ignition on; engine off, or engine running only outdoors) | Settings → Network → Advanced: turn **Enable SSH** on; **SSH Keys** → Add → `wholesalebridgeowner`. Note the Wi-Fi IP shown there. The truck must be on the same home Wi-Fi as the PC. | Same screen: remove keys, turn SSH off |
+| G2 | Claude, read-only | `windows_preflight.ps1 -DeviceIP <ip>`; first SSH as `comma@<ip>` with host-key prompt, record fingerprint privately. Read-only commands only: `git --no-optional-locks rev-parse HEAD`, `git --no-optional-locks status --porcelain`, `git --no-optional-locks diff --stat` (identifies the dirty-tree changes that actually ran Nov 14), `python3 --version`, `cat /VERSION`, `df -h /data`, `free -m`, `uptime`, `top -bn1`, msgq reader counts. | Nothing written |
+| G3 | Claude | `mkdir /data/ram-diag /data/ram-telemetry`, copy the two scripts, `--check-slots`, then the 2-minute run above with `timeout 150` as a hard stop, while snapshotting `top` and confirming `pandad`, `card`, `controlsd`, `loggerd` stay up. | `rm -rf /data/ram-diag /data/ram-telemetry` |
+| G4 | Claude | Run `summarize_can_capture.py` on the device; copy back **only** `summary.json` and the health/stop rows to a private folder outside git. | Delete the private copy |
+
+Pass criteria: stop reason "duration reached"; sidecar CPU ≤ 15 % of one core; reader counts after = before + 1 per
+service (no eviction); no `commIssue`, `canError`, `controlsMismatch` or on-screen alert during the run; expected CAN IDs at
+their nominal rates. **Abort** on any alert, any of those events, a failed slot check, or CPU above the limit.
+
+Access note for G1: the Comma trusts **every** public key on the GitHub account it is given. `wholesalebridgeowner` currently
+has two authentication keys (the "pop-os xps15" laptop and the DoodlePC key already on this PC), so both machines get a shell
+on the truck's computer until SSH is turned off or the username removed. No new key is needed for this PC.
+
+Not covered by this plan (separate approval each): capture while driving (`--allow-moving`), `--all-can-ids`, copying raw
+CAN frames off the device, any change under `/data/openpilot`, autostart.
 
 ## Next diagnostics improvements
 - Build DBC-backed offline decoding and compare raw-frame interpretations to `carState.steeringTorqueEps`, `carState.vEgo`, `carOutput.actuatorsOutput.torqueOutputCan`.
