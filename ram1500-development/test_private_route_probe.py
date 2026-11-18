@@ -73,8 +73,11 @@ class PrivateProbeTests(unittest.TestCase):
                "eligibleActiveLowDriverSamples": 2, "delaysMs": {}}}}
         report = mod.summarize(
             result, steering, {"inputRows": 3, "steerSaturatedEpisodeCount": 1},
-            eps, {"controllerSamples": 2})
+            eps, {"controllerSamples": 2},
+            {"controller": {"outputAtNormalizedCeiling": 5},
+             "canCommand": {"nearNativeReference": 0}})
         self.assertEqual(report["nearCommandLimitControllerSamplesInWindow"], 3)
+        self.assertEqual(report["normalizedVsNativeTorqueCapAudit"]["controller"]["outputAtNormalizedCeiling"], 5)
         self.assertEqual(report["quality"]["eventEpisodes"], 1)
         self.assertEqual(report["windowNumericMetrics"]["outputTorqueCan"]["maxAbs"], 3.0)
         self.assertEqual(report["epsDirectionCorrelationsBySpeed"]["low_5_to_10"]["carStateSamples"], 3)
