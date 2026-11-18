@@ -112,5 +112,53 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     r = mod.record_for_message(event("carState", NS(vEgo=0.0, gearShifter="park", cruiseState=None)), "carState")
     self.assertEqual(r["gearShifter"], "park")
 
+  def test_run_loop_with_fake_bus_parked_then_moving(self):
+    """Regression for G3 run 1 (KeyError): msgq's Poller.poll() returns NEW objects, not the subscribed sockets."""
+    import contextlib
+    import json
+    import sys
+    import types
+    from unittest import mock
+
+    events = {
+      b"cs0": event("carState", NS(vEgo=0.0, gearShifter="park", cruiseState=None)),
+      b"can0": event("can", [NS(address=0x31, src=0, dat=b"\x01\x02")]),
+      b"cs1": event("carState", NS(vEgo=2.0, gearShifter="drive", cruiseState=None)),
+    }
+
+    class FakeSock:
+      def __init__(self, queue):
+        self.queue = list(queue)
+
+      def receive(self, non_blocking=False):
+        return self.queue.pop(0) if self.queue else None
+
+    queues = {"carState": [b"cs0", b"cs1"], "can": [b"can0"]}
+
+    class FakePoller:
+      def poll(self, timeout_ms):
+        return [object()]  # fresh object every time, exactly like msgq's ipc_pyx Poller
+
+    fake_messaging = types.ModuleType("cereal.messaging")
+    fake_messaging.Poller = FakePoller
+    fake_messaging.sub_sock = lambda service, poller: FakeSock(queues.get(service, []))
+    fake_log = types.ModuleType("cereal.log")
+    fake_log.Event = NS(from_bytes=lambda raw: contextlib.nullcontext(events[raw]))
+    fake_cereal = types.ModuleType("cereal")
+    fake_cereal.messaging, fake_cereal.log = fake_messaging, fake_log
+
+    with tempfile.TemporaryDirectory() as folder, \
+         mock.patch.dict(sys.modules, {"cereal": fake_cereal, "cereal.messaging": fake_messaging, "cereal.log": fake_log}):
+      args = NS(output_dir=Path(folder), max_mb=1, keep_files=2, sample_hz=20, minutes=0.05,
+                all_can_ids=False, allow_moving=False)
+      result = mod.run(args)
+      rows = [json.loads(line) for f in sorted(Path(folder).glob("*.jsonl")) for line in f.read_text().splitlines()]
+    self.assertIn("moving", result["stopReason"])
+    self.assertEqual(result["rows"].get("carState"), 1)  # parked sample kept; moving sample stopped the capture
+    services = [r["service"] for r in rows]
+    self.assertEqual(services[0], "sidecar_start")
+    self.assertEqual(services[-1], "sidecar_stop")
+    self.assertIn("moving", rows[-1]["reason"])
+
 if __name__=="__main__":
   unittest.main()

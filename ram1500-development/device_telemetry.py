@@ -17,7 +17,7 @@ Safety guards (added in Claude review, 2026-11-17):
 
 Install OUTSIDE /data/openpilot (e.g. /data/ram-diag/) so the openpilot git tree stays untouched, and run with
 the device's own cereal:
-  cd /data/openpilot && PYTHONPATH=/data/openpilot python3 /data/ram-diag/device_telemetry.py \
+  cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py \
     --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 --keep-files 2
 
 Local NDJSON contains sensitive vehicle and trip telemetry: keep it private.
@@ -265,9 +265,9 @@ def run(args):
 
   writer = RotatingWriter(args.output_dir, args.max_mb * 1024 * 1024, args.keep_files)
   poller = messaging.Poller()
-  subs = {}
-  for service in SERVICES:
-    subs[messaging.sub_sock(service, poller)] = service
+  # (socket, service) pairs. Never look sockets up by the objects poller.poll() returns: msgq's Poller hands back NEW
+  # wrapper objects, so a dict keyed by the subscribed socket raised KeyError on the device (G3 run 1, 2026-11-17).
+  socks = [(messaging.sub_sock(service, poller), service) for service in SERVICES]
   counts = Counter()
   last_sample = {}
   interval_ns = int(1e9 / args.sample_hz)
@@ -279,8 +279,8 @@ def run(args):
                 "sampleHz": args.sample_hz, "allowMoving": args.allow_moving, "allCanIds": args.all_can_ids})
   try:
     while time.monotonic() < end and stop_reason == "duration reached":
-      for sock in poller.poll(100):
-        service = subs[sock]
+      poller.poll(100)  # wait (<= 100 ms) until any socket has data; then drain every socket
+      for sock, service in socks:
         while (raw := sock.receive(non_blocking=True)) is not None:   # drain so the reader never lags
           try:
             with cereal_log.Event.from_bytes(raw) as evt:
@@ -311,6 +311,9 @@ def run(args):
         next_health += HEALTH_INTERVAL_S
   except KeyboardInterrupt:
     stop_reason = "interrupted by operator"
+  except Exception as e:
+    stop_reason = f"error: {type(e).__name__}: {e}"[:200]
+    raise
   finally:
     writer.write(health_row(started_wall, started_cpu, counts))
     writer.write({"monoTimeNs": boot_ns(), "service": "sidecar_stop", "reason": stop_reason,
@@ -321,7 +324,7 @@ def run(args):
 
 def main():
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument("--output-dir", type=Path, required=True)
+  parser.add_argument("--output-dir", type=Path, help="capture directory (required unless --check-slots)")
   parser.add_argument("--minutes", type=int, default=20)
   parser.add_argument("--sample-hz", type=int, default=10)
   parser.add_argument("--max-mb", type=int, default=16)
@@ -338,6 +341,8 @@ def main():
     print(json.dumps({"readerCounts": counts, "queueFiles": paths, "wouldEvict": slot_problems(counts),
                       "numReaders": NUM_READERS}, sort_keys=True))
     return
+  if args.output_dir is None:
+    parser.error("--output-dir is required for a capture")
   if not (1 <= args.minutes <= 120 and 1 <= args.sample_hz <= 20 and 1 <= args.max_mb <= 64
           and 1 <= args.keep_files <= 20):
     parser.error("Capture limits exceeded")
