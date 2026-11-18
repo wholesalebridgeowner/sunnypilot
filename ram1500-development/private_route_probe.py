@@ -69,7 +69,7 @@ def reader_from_cereal(schema_path):
     return read
 
 
-def summarize(result, steering, coverage, eps, torque_window, cap_audit=None):
+def summarize(result, steering, coverage, eps, torque_window, cap_audit=None, command_replay=None):
     # Deliberately do not include absolute timestamps, route IDs, source paths,
     # VIN, raw samples, geoposition, or command traces in process output.
     groups = steering["groups"]
@@ -91,6 +91,7 @@ def summarize(result, steering, coverage, eps, torque_window, cap_audit=None):
         "windowNumericMetrics": numbers,
         "focusedTorqueWindow": torque_window,
         "normalizedVsNativeTorqueCapAudit": cap_audit,
+        "causalCommandReplay": command_replay,
         "epsDirectionCorrelationsBySpeed": speed_bands,
         "status": "partial_observational_analysis_only",
         "segments": list(SELECTED_SEGMENTS),
@@ -123,6 +124,7 @@ def main():
     import telemetry_coverage
     import eps_feedback_lag
     import torque_limit_coverage
+    import torque_command_replay
 
     env = os.environ
     required = ("S3_BUCKET", "S3_ENDPOINT", "S3_ACCESS_KEY_ID",
@@ -179,8 +181,10 @@ def main():
         }
         cap_audit = torque_limit_coverage.audit(result["rows"],
                 begin_seconds=1800.0, end_seconds=1807.0)
+        command_replay = torque_command_replay.analyze(result["rows"],
+                start=1800.0, end=1807.0)
         print("RAM_PRIVATE_PROBE " + json.dumps(
-            summarize(result, steering, coverage, eps, torque_window, cap_audit),
+            summarize(result, steering, coverage, eps, torque_window, cap_audit, command_replay),
             separators=(",", ":"), allow_nan=False), flush=True)
 
 
