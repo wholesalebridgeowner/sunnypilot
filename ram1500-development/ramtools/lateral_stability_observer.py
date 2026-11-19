@@ -20,6 +20,8 @@ MAX_STRAIGHT_CURVATURE=0.00065
 MAX_NATIVE_OUTPUT=300.0
 RATE_SIGN_THRESHOLD_DEG_S=1.5
 MIN_SIGN_DWELL_NS=250_000_000
+# Observational detector continuity rule, NOT a vehicle control/actuator limit.
+MAX_CONFIRMED_SIGN_BRIDGE_NS=1_000_000_000
 
 
 def _num(x):
@@ -47,6 +49,7 @@ def analyze_segment(state,controls,curvature,outputs):
     streak_sign=0
     streak_start=None
     strong_last_sign=0
+    strong_last_at=None
     reversals=0
     elapsed_ns=0
     for row in sorted(state,key=lambda r:r[0]):
@@ -81,6 +84,7 @@ def analyze_segment(state,controls,curvature,outputs):
             streak_sign=0
             streak_start=None
             strong_last_sign=0
+            strong_last_at=None
             continue
         counts["eligibleSamples"]+=1
         times.append(t)
@@ -93,22 +97,33 @@ def analyze_segment(state,controls,curvature,outputs):
                 streak_sign=0
                 streak_start=None
                 strong_last_sign=0
+                strong_last_at=None
         else:
             streak_sign=0
             streak_start=None
             strong_last_sign=0
+            strong_last_at=None
         last=t
         sign=1 if rate>=RATE_SIGN_THRESHOLD_DEG_S else -1 if rate<=-RATE_SIGN_THRESHOLD_DEG_S else 0
+        # Threshold crossings must sustain *consecutive* above-threshold rate
+        # observations. A long near-zero rate cannot be counted as directional
+        # dwell, nor can two remote bouts be a single oscillatory reversal.
+        if strong_last_at is not None and t-strong_last_at>MAX_CONFIRMED_SIGN_BRIDGE_NS:
+            strong_last_sign=0
+            strong_last_at=None
         if sign==0:
-            # A short neutral interval does not itself make a new oscillation.
+            streak_sign=0
+            streak_start=None
             continue
         if sign!=streak_sign:
             streak_sign=sign
             streak_start=t
-        if streak_start is not None and t-streak_start>=MIN_SIGN_DWELL_NS and sign!=strong_last_sign:
-            if strong_last_sign and sign==-strong_last_sign:
-                reversals+=1
-            strong_last_sign=sign
+        if streak_start is not None and t-streak_start>=MIN_SIGN_DWELL_NS:
+            if sign!=strong_last_sign:
+                if strong_last_sign and sign==-strong_last_sign:
+                    reversals+=1
+                strong_last_sign=sign
+            strong_last_at=t
     # Count *usable contiguous exposures*, not just summed accepted inter-sample dt.
     # A zero-reversal result from fragmented subsecond windows cannot constrain
     # lane-centering oscillation; rejected observations must split runs.
@@ -153,6 +168,7 @@ def analyze_segment(state,controls,curvature,outputs):
         "Curvature is the controller desired estimate; actual lane boundary tracking is unobserved.",
         "Driver torque and EPS limiting filters may exclude valid behavior; report coverage.",
         "Short fragmented eligible runs may be too short for sustained sign-reversal detection; assess longest run and >=2s exposure.",
+        "Each direction needs consecutive >=250ms rate above threshold; confirmed opposing directions must be <=1s apart, even during otherwise eligible neutral-rate driving.",
         "No tuning value, physical actuator latency estimate or on-device control change is implied.",
       ]
     }
@@ -190,5 +206,6 @@ def combine(summaries):
               "Metric cannot determine steering calibration optimum, physical lane-center error or true ping-pong.",
               "Summed valid time excludes invalid/driver-override and torque-limited data, not complete driving exposure.",
               "Eligible seconds split across short runs may be insufficient to assess sustained steering reversals.",
+              "Neutral steering-rate samples interrupt directional dwell; opposing confirmed directions separated by >1s are not counted as a local reversal.",
               "No parameter release without independent held-out routes, stability/override safety checks and owner approval.",
             ]}
