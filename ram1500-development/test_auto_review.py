@@ -555,5 +555,105 @@ class BoundedObservationTrialTests(unittest.TestCase):
         self.assertNotIn("latest.json", json.dumps(s3.reports))
 
 
+class FactoryACCDataQualityTests(unittest.TestCase):
+    """Anonymous synthetic observations; never use device data or identifiers."""
+
+    @staticmethod
+    def car(*, accel=0.2, cruise=True, gas=False, brake=False, can=True):
+        return {"vEgo": 20.0, "aEgo": accel,
+                "cruiseState": {"enabled": cruise}, "gasPressed": gas,
+                "brakePressed": brake, "canValid": can}
+
+    @staticmethod
+    def configure(a, *, op_long=False, pcm=True):
+        a.ingest("carParams", 0, {
+            "openpilotLongitudinalControl": op_long, "pcmCruise": pcm})
+
+    def test_factory_qualified_headway_and_motion_are_observational(self):
+        a = RouteMetrics()
+        self.configure(a)
+        a.ingest("carState", 1.0, self.car(accel=.2))
+        a.ingest("carState", 1.1, self.car(accel=.3))
+        a.ingest("radarState", 1.12,
+                 {"leadOne": {"status": True, "dRel": 30.0}})
+        result = a.report()
+        self.assertTrue(result["cruiseOwnership"]["factoryAccSourceConsistent"])
+        self.assertEqual(result["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.assertEqual(result["leadHeadway"]["medianSeconds"], 1.5)
+        self.assertEqual(result["factoryAccObservedMotion"]["eligibleJerkSamples"], 1)
+        self.assertEqual(result["factoryAccObservedMotion"]["p90AbsObservedJerkMps3"], 1.0)
+        self.assertIn("not OEM", result["leadHeadway"]["caution"])
+
+    def test_no_headway_from_unknown_pedals_can_or_unverified_source(self):
+        cases = [
+            {"car": {"gas": None}}, {"car": {"brake": None}},
+            {"car": {"gas": True}}, {"car": {"brake": True}},
+            {"car": {"can": None}}, {"car": {"can": False}},
+            {"car": {"cruise": False}}, {"source": {"op_long": True}},
+            {"source": {"pcm": False}}, {"source": None},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                a = RouteMetrics()
+                if case.get("source", {}) is not None:
+                    self.configure(a, **case.get("source", {}))
+                a.ingest("carState", 1.0, self.car(**case.get("car", {})))
+                a.ingest("carState", 1.1, self.car(**case.get("car", {})))
+                a.ingest("radarState", 1.12,
+                         {"leadOne": {"status": True, "dRel": 32.0}})
+                result = a.report()
+                self.assertEqual(result["leadHeadway"]["eligibleCruiseSamples"], 0)
+                self.assertEqual(result["factoryAccObservedMotion"]["eligibleJerkSamples"], 0)
+
+    def test_pedal_interruption_never_bridges_derivative(self):
+        a = RouteMetrics()
+        self.configure(a)
+        a.ingest("carState", 1.0, self.car(accel=.1))
+        a.ingest("carState", 1.1, self.car(accel=2.0, brake=True))
+        a.ingest("carState", 1.2, self.car(accel=.3))
+        self.assertEqual(a.report()["factoryAccObservedMotion"]["eligibleJerkSamples"], 0)
+        a.ingest("carState", 1.3, self.car(accel=.5))
+        self.assertEqual(a.report()["factoryAccObservedMotion"]["eligibleJerkSamples"], 1)
+
+    def test_later_contradictory_carparams_invalidates_all_prior_factory_metrics(self):
+        a = RouteMetrics()
+        self.configure(a)
+        a.ingest("carState", 1.0, self.car(accel=.1))
+        a.ingest("carState", 1.1, self.car(accel=.2))
+        a.ingest("radarState", 1.12, {"leadOne": {"status": True, "dRel": 25}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.configure(a, op_long=True, pcm=False)
+        r = a.report()
+        self.assertTrue(r["cruiseOwnership"]["carParamsConflict"])
+        self.assertFalse(r["cruiseOwnership"]["factoryAccSourceConsistent"])
+        self.assertEqual(r["leadHeadway"]["eligibleCruiseSamples"], 0)
+        self.assertIsNone(r["leadHeadway"]["medianSeconds"])
+        self.assertEqual(r["factoryAccObservedMotion"]["eligibleJerkSamples"], 0)
+        self.configure(a)  # restored values cannot erase contradictory provenance
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+
+    def test_factory_comparison_requires_same_version_and_provenance(self):
+        def healthy():
+            a = RouteMetrics()
+            self.configure(a)
+            a.ingest("carState", 1.0, self.car(accel=.1))
+            a.ingest("carState", 1.1, self.car(accel=.2))
+            a.ingest("radarState", 1.12,
+                     {"leadOne": {"status": True, "dRel": 30}})
+            return a.report()
+        new = healthy()
+        old = {"leadHeadway": {"medianSeconds": 0.2},
+               "factoryAccObservedMotion": {"p90AbsObservedJerkMps3": 0.1}}
+        self.assertNotIn("leadHeadway.medianSeconds", compare(new, old)["metrics"])
+        self.assertNotIn("factoryAccObservedMotion.p90AbsObservedJerkMps3",
+                         compare(new, old)["metrics"])
+        other = healthy()
+        self.assertIn("leadHeadway.medianSeconds", compare(new, other)["metrics"])
+        self.assertIn("factoryAccObservedMotion.p90AbsObservedJerkMps3",
+                      compare(new, other)["metrics"])
+        other["cruiseOwnership"]["factoryAccSourceConsistent"] = False
+        self.assertNotIn("leadHeadway.medianSeconds", compare(new, other)["metrics"])
+
+
 if __name__ == "__main__":
     unittest.main()
