@@ -46,12 +46,27 @@ class RouteMetrics:
         self.last_car = None
         self.last_accel = None
         self.active_lane = None
+        self.last_lat = None
+        self.lane_rejections = Counter()
         self.lanes = []
         self.headway = []
         self.jerk = []
         self.lateral_rates = []
         self.steering_saturated_samples = 0
         self.steering_activity_samples = 0
+
+    def _fresh_lateral(self, t):
+        return (self.last_lat is not None
+                and self.last_lat["active"] is True
+                and 0 <= t - self.last_lat["t"] <= .15)
+
+    def _fresh_healthy_car(self, t):
+        return (self.last_car is not None
+                and self.last_car["healthy"] is True
+                and 0 <= t - self.last_car["t"] <= .15)
+
+    def _lane_observation_ok(self, t):
+        return self._fresh_lateral(t) and self._fresh_healthy_car(t)
 
     def ingest(self, kind, t, data):
         """Process one message in log-monotonic order, including boundaries."""
@@ -68,7 +83,13 @@ class RouteMetrics:
                  "accel": get(data, "aEgo"),
                  "cruise": get(data, "cruiseState", "enabled"),
                  "gas": get(data, "gasPressed"),
-                 "brake": get(data, "brakePressed")}
+                 "brake": get(data, "brakePressed"),
+                 "healthy": (get(data, "canValid") is True
+                             and get(data, "steerFaultTemporary") is False
+                             and get(data, "steerFaultPermanent") is False
+                             and get(data, "steeringPressed") is False)}
+            if self.active_lane is not None and not self._lane_observation_ok(t):
+                self.active_lane["invalid"] = True
             a = self.last_car["accel"]
             if number(a):
                 if self.last_accel is not None:
@@ -81,13 +102,22 @@ class RouteMetrics:
             rate = get(data, "steeringRateDeg")
             if number(rate):
                 self.lateral_rates.append(abs(rate))
-                if self.active_lane is not None:
+                if self.active_lane is not None and not self.active_lane["invalid"]:
                     self.active_lane["peakSteeringRate"] = max(
                         self.active_lane["peakSteeringRate"], abs(rate))
                     self.active_lane["steeringSamples"] += 1
         elif kind == "carControl":
             self.long[str(get(data, "longActive"))] += 1
-            self.lat[str(get(data, "latActive"))] += 1
+            active = get(data, "latActive")
+            self.lat[str(active)] += 1
+            if self.active_lane is not None:
+                # A transition, discontinuity or missing health evidence
+                # anywhere in the model window permanently disqualifies it.
+                if (active is not True or self.last_lat is None
+                        or not 0 <= t - self.last_lat["t"] <= .15
+                        or not self._fresh_healthy_car(t)):
+                    self.active_lane["invalid"] = True
+            self.last_lat = {"t": t, "active": active}
         elif kind == "carParams":
             self.car_params["openpilotLongitudinalControl"] = get(data, "openpilotLongitudinalControl")
             self.car_params["pcmCruise"] = get(data, "pcmCruise")
@@ -110,13 +140,28 @@ class RouteMetrics:
             if state == "laneChangeStarting":
                 if self.active_lane is None:
                     self.active_lane = {"start": t, "direction": direction,
+                                        "invalid": (direction not in ("left", "right")
+                                                    or not self._lane_observation_ok(t)),
                                         "peakSteeringRate": 0.0, "steeringSamples": 0}
+                elif (direction != self.active_lane["direction"]
+                      or not self._lane_observation_ok(t)):
+                    self.active_lane["invalid"] = True
             elif self.active_lane is not None:
                 duration = t - self.active_lane["start"]
-                if 0 < duration <= 30 and self.active_lane["steeringSamples"]:
+                if (state == "laneChangeFinishing"
+                        and not self.active_lane["invalid"]
+                        and self._lane_observation_ok(t)
+                        and 0 < duration <= 30
+                        and self.active_lane["steeringSamples"]):
                     self.lanes.append({"duration": duration,
                                        "direction": self.active_lane["direction"],
                                        "peakSteeringRate": self.active_lane["peakSteeringRate"]})
+                else:
+                    # This remains a sampled model-phase proxy, not physical
+                    # lane crossing or confirmed trajectory completion.
+                    reason = ("model_phase_interrupted" if state != "laneChangeFinishing"
+                              else "missing_active_or_healthy_evidence")
+                    self.lane_rejections[reason] += 1
                 self.active_lane = None
         elif kind == "onroadEvents":
             events = get(data, "onroadEvents") or data
@@ -167,10 +212,13 @@ class RouteMetrics:
                 "caution": "Factory ACC may control braking/throttle; model plan does not prove actuation",
             },
             "laneChange": {
+                "qualification": "model_start_to_finish_fresh_active_healthy_qlog_v2",
                 "completeStartingWindows": len(durations),
                 "medianStartingSeconds": percentile(durations, .5),
                 "p90StartingSeconds": percentile(durations, .9),
                 "p90PeakSteeringRateDegPerSecond": percentile(lane_rates, .9),
+                "rejectedModelWindows": dict(self.lane_rejections),
+                "caution": "Model start-to-finish only; sampled Comma lateral-active and CAN/EPS health required. Physical lane crossing and full-resolution comfort are unverified.",
             },
             "leadHeadway": {
                 "eligibleCruiseSamples": len(self.headway),
@@ -222,6 +270,11 @@ def compare(current, previous):
     ]
     result = {}
     for section, name in specs:
+        if section == "laneChange":
+            marker = "model_start_to_finish_fresh_active_healthy_qlog_v2"
+            if (current.get(section, {}).get("qualification") != marker
+                    or previous.get(section, {}).get("qualification") != marker):
+                continue  # do not compare the old unqualified model-phase metric
         a, b = current.get(section, {}).get(name), previous.get(section, {}).get(name)
         if number(a) and number(b):
             result[f"{section}.{name}"] = {
