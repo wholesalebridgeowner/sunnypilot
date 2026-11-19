@@ -48,6 +48,7 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         "privateRssGrowthMiBPerMinute": None,
         "sharedRssEndMiB": None, "readersAddedWithoutEviction": False,
         "decodeErrorFree": False, "telemetryStreamProgressConfirmed": False,
+        "requestedRateEvidenceConfirmed": False,
         "reasons": [],
         "separateGatesNotEvaluated": [
             "vehicle_parked_attestation", "driver_alerts_and_can_validity",
@@ -71,7 +72,8 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         start, stop = starts[0], stops[0]
         if start.get("allowMoving") is not False or start.get("allCanIds") is not False:
             problems.append("parked_low_overhead_mode_not_confirmed")
-        if start.get("sampleHz") not in (1, 2, 3, 4, 5):
+        sample_hz = start.get("sampleHz")
+        if type(sample_hz) is not int or not 1 <= sample_hz <= 5:
             problems.append("unreviewed_sample_rate")
         result["readersAddedWithoutEviction"] = _counts_are_valid(
             start.get("readerCountsBefore"), stop.get("readerCountsAfter"))
@@ -104,6 +106,13 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
             problems.append("too_few_health_observations")
         if any((b-a) > 20.0 for a, b in zip(durations, durations[1:])):
             problems.append("health_sample_gap_excessive")
+        # Window CPU is elapsed CPU / elapsed wall time since the previous
+        # periodic emission. Source advances next_health by 10s even after
+        # an overdue emission, so it can emit a catch-up burst of near-zero
+        # windows. Such windows cannot establish sustained resource overhead.
+        if any(end - begin < 5.0 for begin, end in
+               zip([0.0] + durations[:-2], durations[:-1])):
+            problems.append("cpu_window_duration_too_short")
         cpu_values = [h.get("windowCpuPercentOneCore") for h in health]
         valid_windows = [v for v in cpu_values if _number(v)]
         result["cpuWindows"] = len(valid_windows)
@@ -180,6 +189,25 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
                 problems.append("parked_capture_stream_progress_missing")
             else:
                 result["telemetryStreamProgressConfirmed"] = True
+            # Monotone counters alone admit one carState message per 10s,
+            # which is not representative of a requested 1-5 Hz sample
+            # rate. Gate on >=50% of requested carState rate per CPU window.
+            # A CAN-silent/idle parked truck can fail this evidence gate
+            # without being diagnosed as faulty; raw CAN rates are unknown.
+            if type(sample_hz) is int and 1 <= sample_hz <= 5:
+                rate_sufficient = True
+                for i, row in enumerate(timed):
+                    interval = durations[i] - (durations[i-1] if i else 0.0)
+                    previous = timed[i-1].get("carState", 0) if i else 0
+                    observed = row.get("carState", 0) - previous
+                    minimum = max(1, math.floor(0.5 * sample_hz * interval))
+                    if observed < minimum:
+                        rate_sufficient = False
+                        break
+                if not rate_sufficient:
+                    problems.append("carstate_rate_not_representative")
+                else:
+                    result["requestedRateEvidenceConfirmed"] = True
 
         result["metricGate"] = "passed" if not problems else "failed_or_incomplete"
         result["status"] = "metrics_pass_other_gates_pending" if not problems else "not_validated"
