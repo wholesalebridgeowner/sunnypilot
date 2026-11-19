@@ -17,6 +17,7 @@ from pathlib import Path
 from investigate_route import expand, inside_repo
 from ramtools.comfort import metrics
 from ramtools.comfort_episodes import evaluate
+from ramtools.acc_motion_integrity import analyze as analyze_acc_motion
 from ramtools.lane_phase_quality import analyze as analyze_lane_phases
 from ramtools.logio import load_records
 from ramtools.schema import verify_schema_dir, load_log_schema
@@ -35,6 +36,7 @@ def main():
   records,read_results=load_records(paths,load_log_schema(args.schema_dir.expanduser()))
   result=metrics(records)
   result["comfortEpisodes"]=evaluate(records)
+  result["accMotionIntegrity"]=analyze_acc_motion(records)
   result["laneModelPhases"]=analyze_lane_phases(records)
   result["readFiles"]=len(read_results)
   result["truncatedFiles"]=sum(bool(r.error) for r in read_results)
