@@ -565,8 +565,8 @@ class FactoryACCDataQualityTests(unittest.TestCase):
                 "brakePressed": brake, "canValid": can}
 
     @staticmethod
-    def configure(a, *, op_long=False, pcm=True):
-        a.ingest("carParams", 0, {
+    def configure(a, *, op_long=False, pcm=True, at=0):
+        a.ingest("carParams", at, {
             "openpilotLongitudinalControl": op_long, "pcmCruise": pcm})
 
     def test_factory_qualified_headway_and_motion_are_observational(self):
@@ -622,14 +622,14 @@ class FactoryACCDataQualityTests(unittest.TestCase):
         a.ingest("carState", 1.1, self.car(accel=.2))
         a.ingest("radarState", 1.12, {"leadOne": {"status": True, "dRel": 25}})
         self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 1)
-        self.configure(a, op_long=True, pcm=False)
+        self.configure(a, op_long=True, pcm=False, at=1.2)
         r = a.report()
         self.assertTrue(r["cruiseOwnership"]["carParamsConflict"])
         self.assertFalse(r["cruiseOwnership"]["factoryAccSourceConsistent"])
         self.assertEqual(r["leadHeadway"]["eligibleCruiseSamples"], 0)
         self.assertIsNone(r["leadHeadway"]["medianSeconds"])
         self.assertEqual(r["factoryAccObservedMotion"]["eligibleJerkSamples"], 0)
-        self.configure(a)  # restored values cannot erase contradictory provenance
+        self.configure(a, at=1.3)  # restored values cannot erase contradictory provenance
         self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
 
     def test_factory_comparison_requires_same_version_and_provenance(self):
