@@ -130,6 +130,7 @@ def public_lane_summary(lanes: dict) -> dict:
         "completedTransitions", "invalidDuration", "insufficientCarState",
         "invalidCarState", "driverOverrideOrUnknown", "incompleteCarCoverage",
         "carStateGap", "missingKinematics", "lowSpeedExcluded",
+        "invalidOrUnknownCan", "epsFaultOrUnknown",
         "qualifiedWindows", "censoredByGapOrInvalidModel", "censoredAtEnd",
         "censoredBySegmentBoundaryOrUnverified", "carStateSegmentMismatch",
         "censoredByDirectionChangeOrUnknown",
