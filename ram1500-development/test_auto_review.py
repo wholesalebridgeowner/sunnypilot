@@ -7,9 +7,11 @@ import json
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
-from auto_review_job import (group_routes, route_key, clock_audit_key, anonymous_clock_counts,
-                             MAX_COMPRESSED, pinned_qlog_messages, SourcePinError, run, PREFIX)
+from auto_review_job import (group_routes, route_key, clock_audit_key, bounded_trial_key,
+                             anonymous_clock_counts, MAX_COMPRESSED, pinned_qlog_messages,
+                             SourcePinError, run, PREFIX)
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
+from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
 
 T = datetime(2026, 11, 19, 15, 0, tzinfo=timezone.utc)
 
@@ -280,7 +282,56 @@ class AnonymousClockAuditTests(unittest.TestCase):
         self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
         self.assertEqual(s3.reports[clock_audit_key(cand)]["inversionsOverHalfSecond"], 1)
         self.assertNotIn("secret-", json.dumps(s3.reports))
+        trial = run(s3, "fake", T, reversed_clock)
+        self.assertEqual(trial["status"], "bounded_trial_saved")
+        self.assertFalse(trial["releaseAuthorized"])
+        self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
+        self.assertEqual(s3.reports[bounded_trial_key(cand)]["status"],
+                         "experimental_bounded_observation")
+        self.assertNotIn("secret-", json.dumps(s3.reports))
         self.assertEqual(run(s3, "fake", T, reversed_clock)["status"], "no_new_eligible_routes")
+
+
+class BoundedObservationTrialTests(unittest.TestCase):
+    def test_stable_event_time_reordering_within_verified_segment(self):
+        def reader(_):
+            yield source_header(-900)
+            yield car_state(10)
+            yield car_state(11)
+            yield car_state(10.25)
+            yield car_state(12)
+        counters = {}
+        observed = list(source_pinned_bounded_messages(
+            [Path("0/qlog.zst")], reader, counters))
+        self.assertEqual([x.logMonoTime / 1e9 for x in observed],
+                         [10, 10.25, 11, 12])
+        self.assertEqual(counters["verifiedSegments"], 1)
+        self.assertEqual(counters["arrivalInversionsOverHalfSecond"], 1)
+        self.assertLessEqual(counters["maxBufferedEvents"], 10000)
+
+    def test_rejects_late_outside_two_second_window(self):
+        def reader(_):
+            yield source_header()
+            yield car_state(10)
+            yield car_state(12.5)
+            yield car_state(10)
+        with self.assertRaises(OrderingTrialError):
+            list(source_pinned_bounded_messages([Path("0/qlog.zst")], reader, {}))
+
+    def test_rejects_even_small_cross_segment_clock_regression(self):
+        def reader(path):
+            yield source_header()
+            yield car_state(10 if Path(path).parent.name == "0" else 9.9)
+        with self.assertRaises(OrderingTrialError):
+            list(source_pinned_bounded_messages(
+                [Path("0/qlog.zst"), Path("1/qlog.zst")], reader, {}))
+
+    def test_rejects_source_mismatch_without_publishing_metrics(self):
+        def reader(_):
+            yield source_header(commit="unverified")
+            yield car_state(10)
+        with self.assertRaises(OrderingTrialError):
+            list(source_pinned_bounded_messages([Path("0/qlog.zst")], reader, {}))
 
 
 if __name__ == "__main__":
