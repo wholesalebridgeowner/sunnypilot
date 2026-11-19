@@ -1,0 +1,27 @@
+name: Ram automated review offline tests
+on:
+  push:
+    branches: [ram1500-auto-review-20261119]
+    paths:
+      - 'ram1500-development/auto_review.py'
+      - 'ram1500-development/auto_review_job.py'
+      - 'ram1500-development/test_auto_review.py'
+      - 'ram1500-development/Dockerfile.auto-review'
+      - '.github/workflows/ram-auto-review-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/auto_review.py'
+      - 'ram1500-development/auto_review_job.py'
+      - 'ram1500-development/test_auto_review.py'
+      - '.github/workflows/ram-auto-review-tests.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -m unittest discover -s ram1500-development -p 'test_auto_review.py' -v
