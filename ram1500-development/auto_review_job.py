@@ -32,16 +32,20 @@ def group_routes(objects, now, *, quiet_hours=QUIET_HOURS, lookback_days=LOOKBAC
             continue
         updated = o.get("LastModified")
         size = o.get("Size")
-        if (not isinstance(updated, datetime) or updated.tzinfo is None
-                or not isinstance(size, int) or not (0 < size <= MAX_COMPRESSED)):
-            continue
-        if not (now - timedelta(days=lookback_days) <= updated <= now - timedelta(hours=quiet_hours)):
-            continue
         route, segment = match.groups()
+        # Retain all objects so recent or invalid segments invalidate the route.
         groups[route].append((int(segment), o))
     candidates = []
     for route, segments in groups.items():
         if not 1 <= len(segments) <= MAX_SEGMENTS:
+            continue
+        if any(not isinstance(o.get("LastModified"), datetime)
+               or o["LastModified"].tzinfo is None
+               or not (now - timedelta(days=lookback_days) <= o["LastModified"]
+                       <= now - timedelta(hours=quiet_hours))
+               or not isinstance(o.get("Size"), int)
+               or not (0 < o["Size"] <= MAX_COMPRESSED)
+               for _, o in segments):
             continue
         nums = sorted(s for s, _ in segments)
         if nums != list(range(len(nums))):
