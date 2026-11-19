@@ -21,32 +21,126 @@ def obj(route, segment, hours_ago=12, size=100, etag="v1"):
             "ETag": etag}
 
 class AnalysisTests(unittest.TestCase):
+    @staticmethod
+    def healthy_car(rate=1.5, **overrides):
+        row = {"vEgo": 20.0, "aEgo": 0.2, "gasPressed": False,
+               "brakePressed": False, "cruiseState": {"enabled": True},
+               "canValid": True, "steerFaultTemporary": False,
+               "steerFaultPermanent": False, "steeringPressed": False,
+               "steeringRateDeg": rate}
+        row.update(overrides)
+        return row
+
     def test_measures_lane_change_headway_and_discrete_alert(self):
         a = RouteMetrics()
         a.ingest("carParams", 0, {"openpilotLongitudinalControl": False, "pcmCruise": True})
-        a.ingest("carState", 1, {"vEgo": 20.0, "aEgo": 0.2,
-                 "gasPressed": False, "brakePressed": False, "cruiseState": {"enabled": True},
-                 "steeringRateDeg": 1.5})
+        a.ingest("carState", 1, self.healthy_car())
         a.ingest("radarState", 1.1, {"leadOne": {"status": True, "dRel": 32}})
-        a.ingest("drivingModelData", 1.15, {"meta": {"laneChangeState": "laneChangeStarting",
-                                                      "laneChangeDirection": "left"}})
-        a.ingest("carState", 1.2, {"vEgo": 20.0, "aEgo": 0.25, "gasPressed": False,
-                 "brakePressed": False, "cruiseState": {"enabled": True},
-                 "steeringRateDeg": 4.5})
-        a.ingest("onroadEvents", 1.3, ["steerSaturated"])
-        a.ingest("onroadEvents", 1.4, ["steerSaturated"])
-        a.ingest("drivingModelData", 2.5, {"meta": {"laneChangeState": "laneChangeFinishing",
-                                                      "laneChangeDirection": "left"}})
-        # A new alert episode requires an observed published absence.
+        a.ingest("carControl", 1.12, {"latActive": True})
+        a.ingest("carState", 1.13, self.healthy_car())
+        a.ingest("drivingModelData", 1.15, {"meta": {
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+        for i in range(12, 25):
+            t = i / 10
+            a.ingest("carState", t, self.healthy_car(rate=4.5 if i == 12 else 1.5))
+            a.ingest("carControl", t + .01, {"latActive": True})
+            if i in (13, 14):
+                a.ingest("onroadEvents", t + .02, ["steerSaturated"])
+        a.ingest("carState", 2.45, self.healthy_car())
+        a.ingest("carControl", 2.46, {"latActive": True})
+        a.ingest("drivingModelData", 2.5, {"meta": {
+            "laneChangeState": "laneChangeFinishing", "laneChangeDirection": "left"}})
         a.ingest("onroadEvents", 2.6, [])
         a.ingest("onroadEvents", 3.1, ["steerSaturated"])
         result = a.report()
         self.assertEqual(result["leadHeadway"]["medianSeconds"], 1.6)
         self.assertEqual(result["laneChange"]["completeStartingWindows"], 1)
         self.assertEqual(result["laneChange"]["p90PeakSteeringRateDegPerSecond"], 4.5)
+        self.assertEqual(result["laneChange"]["rejectedModelWindows"], {})
         self.assertEqual(result["steering"]["steerSaturatedEventEpisodes"], 2)
         self.assertFalse(result["cruiseOwnership"]["carParams"]["openpilotLongitudinalControl"])
         self.assertNotIn("route", result)
+
+    def test_model_phase_without_comma_control_never_counts(self):
+        a = RouteMetrics()
+        a.ingest("carState", 1, self.healthy_car())
+        a.ingest("drivingModelData", 1.05, {"meta": {
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+        a.ingest("carState", 1.1, self.healthy_car(rate=7))
+        a.ingest("drivingModelData", 1.15, {"meta": {
+            "laneChangeState": "laneChangeFinishing", "laneChangeDirection": "left"}})
+        self.assertEqual(a.report()["laneChange"]["completeStartingWindows"], 0)
+        self.assertEqual(a.report()["laneChange"]["rejectedModelWindows"],
+                         {"missing_active_or_healthy_evidence": 1})
+
+    def test_lateral_disengagement_mid_window_is_irreversible(self):
+        a = RouteMetrics()
+        a.ingest("carState", 1, self.healthy_car())
+        a.ingest("carControl", 1.01, {"latActive": True})
+        a.ingest("drivingModelData", 1.04, {"meta": {
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "right"}})
+        a.ingest("carState", 1.1, self.healthy_car(rate=8))
+        a.ingest("carControl", 1.11, {"latActive": False})
+        a.ingest("carState", 1.2, self.healthy_car())
+        a.ingest("carControl", 1.21, {"latActive": True})
+        a.ingest("drivingModelData", 1.24, {"meta": {
+            "laneChangeState": "laneChangeFinishing", "laneChangeDirection": "right"}})
+        self.assertEqual(a.report()["laneChange"]["completeStartingWindows"], 0)
+
+    def test_stale_lateral_or_health_blocks_model_window(self):
+        for stale in ("lateral", "health"):
+            with self.subTest(stale=stale):
+                a = RouteMetrics()
+                a.ingest("carState", 1, self.healthy_car())
+                a.ingest("carControl", 1.01, {"latActive": True})
+                a.ingest("drivingModelData", 1.04, {"meta": {
+                    "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+                if stale == "lateral":
+                    a.ingest("carState", 1.3, self.healthy_car(rate=6))
+                else:
+                    a.ingest("carControl", 1.3, {"latActive": True})
+                a.ingest("drivingModelData", 1.32, {"meta": {
+                    "laneChangeState": "laneChangeFinishing", "laneChangeDirection": "left"}})
+                self.assertEqual(a.report()["laneChange"]["completeStartingWindows"], 0)
+
+    def test_unsafe_can_eps_or_driver_input_disqualifies_window(self):
+        for change in ({"canValid": False}, {"steerFaultTemporary": True},
+                       {"steerFaultPermanent": True}, {"steeringPressed": True},
+                       {"canValid": None}):
+            with self.subTest(change=change):
+                a = RouteMetrics()
+                a.ingest("carState", 1, self.healthy_car())
+                a.ingest("carControl", 1.01, {"latActive": True})
+                a.ingest("drivingModelData", 1.04, {"meta": {
+                    "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+                a.ingest("carState", 1.1, self.healthy_car(rate=6, **change))
+                a.ingest("carControl", 1.11, {"latActive": True})
+                a.ingest("drivingModelData", 1.14, {"meta": {
+                    "laneChangeState": "laneChangeFinishing", "laneChangeDirection": "left"}})
+                self.assertEqual(a.report()["laneChange"]["completeStartingWindows"], 0)
+
+    def test_model_phase_aborted_never_counts_as_crossing(self):
+        a = RouteMetrics()
+        a.ingest("carState", 1, self.healthy_car())
+        a.ingest("carControl", 1.01, {"latActive": True})
+        a.ingest("drivingModelData", 1.04, {"meta": {
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+        a.ingest("carState", 1.1, self.healthy_car(rate=3))
+        a.ingest("carControl", 1.11, {"latActive": True})
+        a.ingest("drivingModelData", 1.14, {"meta": {
+            "laneChangeState": "off", "laneChangeDirection": "left"}})
+        self.assertEqual(a.report()["laneChange"]["completeStartingWindows"], 0)
+        self.assertEqual(a.report()["laneChange"]["rejectedModelWindows"],
+                         {"model_phase_interrupted": 1})
+
+    def test_old_lane_metrics_are_not_comparable_to_qualified_new_schema(self):
+        a = RouteMetrics().report()
+        old = {"laneChange": {"medianStartingSeconds": 1.0,
+                               "p90PeakSteeringRateDegPerSecond": 10.0},
+               "steering": {"steerSaturatedEventEpisodes": 2}}
+        result = compare(a, old)
+        self.assertNotIn("laneChange.medianStartingSeconds", result["metrics"])
+        self.assertNotIn("laneChange.p90PeakSteeringRateDegPerSecond", result["metrics"])
 
     def test_prevents_false_headway_when_driver_presses_pedal(self):
         a = RouteMetrics()
