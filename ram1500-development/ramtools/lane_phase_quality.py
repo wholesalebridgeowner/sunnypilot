@@ -8,6 +8,7 @@ Only aggregate statistics are returned (no event times, locations, CAN or VIN).
 from __future__ import annotations
 
 from collections import Counter
+from bisect import bisect_right
 from math import isfinite
 
 NS = 1_000_000_000
@@ -62,7 +63,8 @@ def _coalesce_equal_time(rows, fields):
 
 
 def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
-            min_steering_samples=3, min_speed_mps=5.0):
+            min_steering_samples=3, min_speed_mps=5.0,
+            require_lateral_active=False, max_control_gap_s=0.15):
   """Summarize completed model starting/finishing intervals with explicit gates.
 
   A phase is complete only if a later valid model observation exits the state.
@@ -72,7 +74,9 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   """
   if (not 0 < max_model_gap_s <= 5 or not 0 < max_car_gap_s <= 2 or
       isinstance(min_steering_samples, bool) or not isinstance(min_steering_samples, int) or
-      min_steering_samples < 2 or not 0 <= min_speed_mps <= 50):
+      min_steering_samples < 2 or not 0 <= min_speed_mps <= 50 or
+      type(require_lateral_active) is not bool or
+      not 0 < max_control_gap_s <= 1):
     raise ValueError("invalid offline quality gates")
 
   # A conflicting same-time model record censors an interrupted maneuver;
@@ -87,6 +91,15 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
      and type(r.get("t")) is int),
     ("segment", "valid", "steeringRateDeg", "steeringPressed", "vEgo",
      "canValid", "steerFaultTemporary", "steerFaultPermanent"))
+  # Vehicle steering kinematics alone do not establish that Comma was
+  # controlling lateral motion. This optional evidence gate is explicitly
+  # enabled in private/CLI research callers; existing synthetic-only legacy
+  # invocations retain their historical no-ownership contract.
+  controls = _coalesce_equal_time(
+    (r for r in records if r.get("service") == "carControl"
+     and type(r.get("t")) is int),
+    ("segment", "valid", "latActive")) if require_lateral_active else []
+  control_times = [r["t"] for r in controls]
   phase_counts = {phase: Counter() for phase in PHASES}
   peak_rates = {phase: [] for phase in PHASES}
   rate_derivatives = {phase: [] for phase in PHASES}
@@ -145,6 +158,38 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
            r.get("steerFaultPermanent") is not False for r in selected):
       phase_counts[name]["epsFaultOrUnknown"] += 1
       return
+    if require_lateral_active:
+      # Past-only, same-segment ownership on phase entry, every kinematic
+      # sample, and exit. A transient inactive/invalid update inside the
+      # window also disqualifies it even if the surrounding samples are good.
+      checkpoints = [start, *(r["t"] for r in selected), end_t]
+      first_idx = bisect_right(control_times, start) - 1
+      last_idx = bisect_right(control_times, end_t) - 1
+      owned = first_idx >= 0 and last_idx >= first_idx
+      if owned:
+        for point in checkpoints:
+          idx = bisect_right(control_times, point) - 1
+          if idx < first_idx or (point - controls[idx]["t"]) / NS > max_control_gap_s:
+            owned = False
+            break
+          r = controls[idx]
+          if (r.get("valid") is not True or
+              type(r.get("segment")) is not int or
+              r["segment"] != phase["segment"] or
+              r.get("latActive") is not True):
+            owned = False
+            break
+      if owned:
+        window = controls[first_idx:last_idx + 1]
+        owned = (all(r.get("valid") is True and
+                     type(r.get("segment")) is int and
+                     r["segment"] == phase["segment"] and
+                     r.get("latActive") is True for r in window) and
+                 all((b["t"] - a["t"]) / NS <= max_control_gap_s
+                     for a, b in zip(window, window[1:])))
+      if not owned:
+        phase_counts[name]["lateralInactiveOrUnverified"] += 1
+        return
     if any(r.get("steeringPressed") is not False for r in selected):
       phase_counts[name]["driverOverrideOrUnknown"] += 1
       return
@@ -270,6 +315,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
       "Only complete, same-segment, healthy-CAN, EPS-fault-free and driver-not-steering windows enter comfort percentiles.",
       "Same-timestamp identical samples count once; conflicting samples censor rather than depend on input order.",
+      "When enabled, lateral ownership requires fresh past-only same-segment Comma carControl.latActive evidence through the whole phase.",
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
       "After model gaps, invalid records or segment changes, a valid off/preLaneChange observation must anchor new phase entries.",
