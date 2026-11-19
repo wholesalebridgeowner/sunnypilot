@@ -114,10 +114,42 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             radar_by_segment[segment].append(r)
         else:
             unscoped_radar_rows += 1
-    radar_index = {
-        seg: (rows, [r["t"] for r in rows])
-        for seg, rows in radar_by_segment.items()
-    }
+    # A causal as-of join must not let the ordering of duplicate R-log
+    # observations determine the lead label. Exact duplicates coalesce;
+    # conflicting observations at the same timestamp become unavailable.
+    # This is a source-integrity gate, NOT OEM radar/ACC attribution.
+    radar_index = {}
+    repeated_radar_rows = 0
+    ambiguous_radar_timestamps = 0
+    evidence_fields = ("valid", "leadOne.status", "leadOne.dRel",
+                       "leadOne.vRel", "leadOne.radar")
+    for seg, rows in radar_by_segment.items():
+        unique = []
+        i = 0
+        while i < len(rows):
+            j = i + 1
+            while j < len(rows) and rows[j]["t"] == rows[i]["t"]:
+                j += 1
+            group = rows[i:j]
+            if len(group) > 1:
+                repeated_radar_rows += len(group) - 1
+                first = group[0]
+                consistent = all(
+                    all(type(r.get(field)) is type(first.get(field)) and
+                        r.get(field) == first.get(field)
+                        for field in evidence_fields)
+                    for r in group[1:])
+                if not consistent:
+                    ambiguous_radar_timestamps += 1
+                    # Preserve the timestamp as invalid rather than falling
+                    # back to an older, potentially stale lead observation.
+                    unique.append({"t": first["t"], "valid": False})
+                else:
+                    unique.append(first)
+            else:
+                unique.append(group[0])
+            i = j
+        radar_index[seg] = (unique, [r["t"] for r in unique])
     rejects = Counter()
     episodes = []
     current = []
@@ -184,6 +216,8 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
         "source": "pinned_log_carState.aEgo_and_observational_radarState",
         "quality": {"carStateRows": len(states), "radarStateRows": len(radar),
                     "unscopedRadarRows": unscoped_radar_rows,
+                    "repeatedRadarTimestampRows": repeated_radar_rows,
+                    "ambiguousRadarTimestampGroups": ambiguous_radar_timestamps,
                     "excludedRowsByReason": dict(rejects),
                     "continuousCandidateRuns": len(episodes),
                     "qualifiedEpisodes": len(accepted),
@@ -210,6 +244,7 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             "Disengagement, manual pedal use, invalid CAN/vehicle data and discontinuous segments are excluded, not joined.",
             "A qualifying episode is one correlated time interval, not an independent experiment or validated control target.",
             "Radar observations must match the carState segment. An absent, stale or unscoped radar sample is unavailable.",
+            "Equal-time conflicting radar evidence is unavailable regardless of record order; exact duplicates are coalesced.",
             "Callers must supply a single recorded route; segment numbers are only unique within one route.",
             "No per-sample timestamps, segment identities, VIN, GPS or raw CAN are exported.",
         ],
