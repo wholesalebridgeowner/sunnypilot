@@ -42,3 +42,29 @@ The committed analyzer and test file were independently reconstructed in an isol
 Execution: `PYTHONPATH=/tmp/ramtest python -m pytest -q /tmp/ramtest/tests/test_lateral_stability_observer.py` yielded **13 passed in 0.08 seconds**, including six newly added synthetic fixtures. The first attempt detected a `NameError` in the new shifted-time test fixture; this was corrected in commit `a419d7dbe7a7fdb15589ca2b3c949022d5af58a1`, and the exact corrected GitHub file hash was then tested to completion.
 
 GitHub Actions was configured for the isolated branch, but a read of the GitHub Actions workflow-runs collection returned **zero registered runs** at verification time. Therefore **CI is not reported as passed**. The successful independent local test does not replace cross-platform CI, the private pinned-log rerun, held-out drive qualification or independent safety review.
+
+
+## Verified private replay of the revised continuity gate (November 18, 2026)
+
+**Execution:** Private, source-pinned Railway study service `ram-full-route-cruise-private-once`, new isolated research deployment `2efa6701-2e9b-4263-bc53-05a864aa82c7`, **SUCCESS**. The service was explicitly pinned to the code/test/report parent commit `1de0b2653f7c1f7088ad5312cee090877f007f59` from this draft PR. This is a repeat of the **same 20 retained consecutive morning R-log segments**, not an independent route, a new drive, or a full morning route. The normal five-minute `comma-log-sync` collector and the vehicle were not modified.
+
+**Source and completeness:** 20/20 completed R-logs decoded, 2,005,758 messages processed, 20/20 recorded `initData` source pins matching `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`, zero truncated/failed files. The container's pinned Docker build executed **108 tests successfully** (`108 passed in 0.25s` in Railway build logs), including the revised steering observer fixtures. GitHub Actions had **zero registered runs** on the analysis commit at the last query; a private container test pass is not mislabeled as a GitHub Actions pass. The dirty historical installed working tree remains independently unverified.
+
+| Steering-wheel-rate observability metric | Private measured result |
+|---|---:|
+| Eligible clean samples (unchanged) | 1,903 |
+| Accepted continuous interval seconds (unchanged) | 18.859 s |
+| Qualified contiguous runs | 17 |
+| Runs >= 0.5 s | 7 |
+| Runs >= 1.0 s | 6 |
+| Runs >= 2.0 s | **4** |
+| Longest contiguous eligible run | **5.889 s** |
+| Exposure within runs >= 2.0 s | **14.549 s** |
+| Sustained steering-rate-sign reversals under the existing strict proxy | **0** |
+| Observability classification | `limited_proxy_only` |
+
+All prior sample counts, rejection tallies, and the zero-reversal measurement match the earlier 20-segment private audit; the newly calculated exposure metrics are now independently observed rather than synthetic-only. The >2-second runs mean there **were** limited windows in which the chosen stable-rate-reversal proxy could have registered events. This corrects the earlier uncertainty about *whether any* qualifying sustained runs existed. It does **not** establish an absence of lane-centering ping-pong, good lane tracking, acceptable real-world steering dynamics, or any optimum actuator delay: the proxy uses steering-wheel rate without an independent lane-center error reference and excludes substantial portions of the route. It has no validated sensitivity/specificity for lane oscillation. Serially correlated samples and four eligible runs are not independent held-out driving evaluations.
+
+**Unchanged blockers:** No independent held-out active-lateral route meeting equivalent telemetry quality, no physical lane-tracking error or model-to-EPS latency identification, no verified Nov 14 +171 s high-resolution segment, no OEM PAM-to-EPS command-owner identity/authorization, no successful approved parked sidecar resource rerun, no independent OEM/Panda control safety review, no hardware installation or supervised closed-course approval. No steering, brake, throttle, CAN, OEM/Panda safety, or truck-device operation was changed.
+
+**Operational scope:** For this private replay only, the existing *one-shot read-only Railway research service* was repinned from its earlier draft-PR #18 commit to the source-exact draft-PR #20 commit. The service had already been configured for the private stored segment window; no raw logs or private identifiers were moved to GitHub, and no existing collector settings were changed.
