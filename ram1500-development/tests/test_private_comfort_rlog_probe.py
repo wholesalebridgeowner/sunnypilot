@@ -219,3 +219,45 @@ def test_comfort_source_integrity_never_exports_private_record_fields():
         rows, [_read_result(29), _read_result(30)])
     assert "SECRET_PRIVATE" not in json.dumps(output)
     assert set(output) == {"sourceVerifiedSegments", "sourceVerifiedHeaderCount"}
+
+
+# The uploaded, source-matched morning window is twenty retained segments,
+# not an assertion that missing earlier segments were recovered.
+def test_twenty_segment_selector_is_bounded_and_lossless():
+    wanted = tuple(range(27, 47))
+    assert parse_segments(",".join(map(str, wanted))) == wanted
+    objects = [obj(i) for i in reversed(wanted)] + [obj(50)]
+    selected = select_keys(objects, route_prefix=PREFIX, segments=wanted)
+    assert selected == [obj(i)["Key"] for i in wanted]
+    # No silent truncation to the old four-segment maximum.
+    assert len(selected) == 20
+
+
+def test_twenty_one_segments_or_oversized_selector_fail_closed():
+    with pytest.raises(ValueError):
+        parse_segments(",".join(map(str, range(21))))
+    with pytest.raises(ValueError):
+        parse_segments("9" * 100)
+    with pytest.raises(ValueError):
+        select_keys([obj(i) for i in range(21)], route_prefix=PREFIX,
+                    segments=tuple(range(21)))
+
+
+def test_twenty_segment_selection_missing_one_fails_without_private_key():
+    wanted = tuple(range(27, 47))
+    with pytest.raises(ValueError) as ex:
+        select_keys([obj(i) for i in wanted[:-1]], route_prefix=PREFIX,
+                    segments=wanted)
+    assert ROUTE not in str(ex.value)
+
+
+def test_twenty_segment_recorded_source_requires_every_header():
+    wanted = tuple(range(27, 47))
+    out = require_comfort_segment_source_pins(
+        [_source_record(i) for i in wanted], [_read_result(i) for i in wanted])
+    assert out == {"sourceVerifiedSegments": 20, "sourceVerifiedHeaderCount": 20}
+    with pytest.raises(ValueError) as ex:
+        require_comfort_segment_source_pins(
+            [_source_record(i) for i in wanted[:-1]],
+            [_read_result(i) for i in wanted])
+    assert ROUTE not in str(ex.value)
