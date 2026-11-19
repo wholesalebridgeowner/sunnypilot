@@ -18,6 +18,7 @@ from ramtools.comfort_episodes import evaluate as analyze_episodes
 from ramtools.lane_phase_quality import analyze as analyze_lanes
 from ramtools.logio import load_records
 from ramtools.schema import load_log_schema, verify_schema_dir
+from ramtools.recorded_source_integrity import require_exact_recorded_commits
 
 PINNED_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 KEY_PATTERN = re.compile(r"^logs/([^/]+)/([0-9]+)/rlog\.zst$")
@@ -80,16 +81,43 @@ def select_keys(objects, *, route_prefix: str, segments: tuple[int, ...]) -> lis
 
 def pinned_recorded_build(records: list[dict]) -> dict:
     """A matching decoder schema does not establish an identical dirty runtime."""
-    commits = [str(r.get("gitCommit") or "").lower().strip()
-               for r in records if r.get("service") == "initData"]
-    commits = [v for v in commits if v]
-    matches = all(len(v) >= 8 and (PINNED_COMMIT.startswith(v) or v == PINNED_COMMIT)
-                  for v in commits)
+    commits = [r.get("gitCommit") for r in records
+               if r.get("service") == "initData"]
+    matches = bool(commits) and all(type(v) is str and v == PINNED_COMMIT
+                                    for v in commits)
     return {
         "initDataCommitObservations": len(commits),
-        "recordedCommitMatchedPinned": bool(commits) and matches,
+        "recordedCommitMatchedPinned": matches,
         "sourceWorkingTreeStillUnverified": True,
     }
+
+
+def require_comfort_segment_source_pins(records: list[dict], read_results) -> dict:
+    """Fail closed unless every selected R-log has its own full source header.
+
+    A valid header in one segment cannot silently cover another segment with
+    absent or shorter recorded-build metadata. Only safe counts are returned.
+    """
+    if not read_results:
+        raise ValueError("missing selected R-log provenance")
+    segments = []
+    for file in read_results:
+        segment = getattr(file, "segment", None)
+        if type(segment) is not int or segment < 0 or segment in segments:
+            raise ValueError("invalid or duplicate selected segment provenance")
+        segments.append(segment)
+    observed = {seg: [] for seg in segments}
+    for rec in records:
+        if rec.get("service") != "initData":
+            continue
+        seg = rec.get("segment")
+        if type(seg) is not int or seg not in observed:
+            raise ValueError("unscoped recorded source metadata")
+        observed[seg].append(rec.get("gitCommit"))
+    verified = sum(require_exact_recorded_commits(values, PINNED_COMMIT)
+                   for values in observed.values())
+    return {"sourceVerifiedSegments": len(segments),
+            "sourceVerifiedHeaderCount": verified}
 
 
 def public_lane_summary(lanes: dict) -> dict:
@@ -261,7 +289,9 @@ def main() -> None:
             }, sort_keys=True), flush=True)
             raise RuntimeError("private R-log decode incomplete")
         stage("summary")
+        source_evidence = require_comfort_segment_source_pins(records, read_results)
         payload = summarize(records, read_results)
+        payload["provenance"].update(source_evidence)
         print("RAM_PRIVATE_COMFORT " + json.dumps(payload, sort_keys=True, allow_nan=False),
               flush=True)
 
