@@ -76,6 +76,21 @@ The latest private 20-segment morning replay deployment `bc5f1509-2ab3-4f49-9c5c
 
 Our earlier 16-segment sample of the later afternoon route found no confirmed cruise. That result was correct **for those samples**, but extrapolating it to “the drive today” would have been wrong. The source-reconciled morning log proves that cruise and Sunnypilot lateral control were engaged on a different drive. This report explicitly distinguishes recorded-route identity, duration and availability.
 
+
+## Final independent exact-source and Docker replay verification
+
+The final isolated private replay was pinned to GitHub code commit `dcdb57aee80f6025efff80399c7c626124bc5be3` and Railway deployment `bb1b5b19-7d9f-491b-90b5-f59e722e10e2`. The container first downloaded the **three original public source files at the truck's installed Sunnypilot commit** and independently checked their exact git blob hashes and expected field definitions:
+
+| Installed public source | Exact git blob SHA-1 |
+|---|---|
+| `opendbc_repo/opendbc/car/chrysler/carstate.py` | `0aa6d83fabca773186f3e913fb5192d7dd28cfea` |
+| `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common.dbc` | `df913561de2fad009ba27288cd8d5ec00a36ca02` |
+| `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common_ram.py` | `fa408f1315f34feffad23c4637c7df905b5f8d7c` |
+
+The pinned build verified that RAM CarState uses camera **bus 2**, message `DAS_3` remapped to `0x99`, `ACC_ACTIVE 21|1@0+` and `ACC_AVAILABLE 20|1@0+`. The private Docker build **passed 102/102 synthetic tests**, including negative mismatch cases, exact-source verification, source/segment integrity and the highly selective steering reversal proxy. The private job then **SUCCEEDED** on all 20 preserved morning R-logs with the same **10,861 factory ACC enabled**, **10,764 Comma lateral active**, **0 of 114,011 raw-versus-parsed mismatches**, and **18.859 seconds of eligible steering stability proxy time**. The replay did not change code on the Comma or issue CAN messages.
+
+**Evidence status:** exact public *source definitions* and recorded log build-identifiers verified; the physical on-device runtime's previously dirty working tree and a reproducible full installed executable are **not** verified. This is enough to correct the erroneous all-day no-cruise inference, not enough to release a new steering calibration.
+
 ## Ongoing parameter study, with no unsafe writes
 
 - `steerActuatorDelay` configured at 0.20 seconds versus learned observation around 0.32 seconds remains a **hypothesis grid**, not an optimum. The owner's concern that shorter delay may increase lane-centering oscillation is a required stability acceptance check.
