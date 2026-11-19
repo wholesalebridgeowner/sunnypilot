@@ -84,6 +84,19 @@ class Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"invalid private log size"):
             mod.select_complete_route([{"Key":x(0)["Key"],"Size":-5}],"000003e6")
 
+    def test_historical_missing_early_segments_must_be_labeled_partial(self):
+        def obj(n):
+            return {"Key":f"logs/private|000003dd--0123456789/{n}/rlog.zst","Size":3000}
+        found=mod.select_complete_route([obj(27),obj(28),obj(29),obj(30)],"000003dd",selected=(27,28,29,30))
+        self.assertEqual(len(found),4)
+        with self.assertRaisesRegex(ValueError,"missing contiguous"):
+            mod.select_complete_route([obj(27),obj(28),obj(29),obj(30)],"000003dd")
+        with self.assertRaisesRegex(ValueError,"missing contiguous"):
+            mod.select_complete_route([obj(27),obj(29),obj(30)],"000003dd",selected=(27,28,29,30))
+        for bad in ((27,29),(30,29),(),(True,),(0,1,2,3,4,5,6,7,8)):
+            with self.assertRaises(ValueError):
+                mod.select_complete_route([obj(27)],"000003dd",selected=bad)
+
     def test_grouped_output_has_no_route_or_raw_can(self):
         summary=aggregate_segments([{"cruiseEnabledTrue":10,"carStateRows":20} for _ in range(31)])
         self.assertEqual(summary["completeSegments"],31)
