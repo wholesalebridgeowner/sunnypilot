@@ -12,10 +12,12 @@ def fixture():
     for i in range(1, 13):
         events.append({"service": "sidecar_health", "wallElapsedS": i*10.0,
                        "windowCpuPercentOneCore": 8.0, "rssAnonKiB": 30000+i*10,
-                       "rssShmemKiB": 25000+i*1000})
+                       "rssShmemKiB": 25000+i*1000,
+                       "rows": {"carState": 100*i, "can": 1000*i}})
     events.append({"service": "sidecar_health", "wallElapsedS": 120.01,
                    "windowCpuPercentOneCore": None, "rssAnonKiB": 30125,
-                   "rssShmemKiB": 37100})
+                   "rssShmemKiB": 37100,
+                   "rows": {"carState": 1200, "can": 12000}})
     events.append({"service": "sidecar_stop", "readerCountsAfter": after,
                    "reason": "duration reached"})
     return events
@@ -116,6 +118,61 @@ class AuditTests(unittest.TestCase):
     def test_no_boolean_masquerade_as_numbers(self):
         s = fixture(); s[2]["rssAnonKiB"] = True
         self.assertIn("split_memory_metrics_missing_or_invalid", assess(s)["reasons"])
+
+    def test_idle_sidecar_cannot_pass_resource_evidence(self):
+        s = fixture()
+        for h in s[2:-1]:
+            h["rows"] = dict(s[1]["rows"])
+        r = assess(s)
+        self.assertEqual(r["status"], "not_validated")
+        self.assertIn("parked_capture_stream_progress_missing", r["reasons"])
+        self.assertFalse(r["telemetryStreamProgressConfirmed"])
+
+    def test_partial_capture_freeze_is_rejected(self):
+        s = fixture()
+        s[6]["rows"] = dict(s[5]["rows"])
+        r = assess(s)
+        self.assertIn("parked_capture_stream_progress_missing", r["reasons"])
+
+    def test_decode_errors_in_any_window_fail_even_if_cpu_low(self):
+        s = fixture()
+        for h in s[5:-1]:
+            h["rows"]["decode_errors"] = 1
+        r = assess(s)
+        self.assertIn("telemetry_decode_errors_observed", r["reasons"])
+        self.assertFalse(r["decodeErrorFree"])
+        self.assertEqual(r["cpuPeakPercentOneCore"], 8.0)
+
+    def test_invalid_missing_and_boolean_counters_fail_closed(self):
+        for modify in (
+            lambda h: h.pop("rows"),
+            lambda h: h["rows"].update({"carState": True}),
+            lambda h: h["rows"].update({"can": -1}),
+            lambda h: h["rows"].update({"unknown": 1}),
+        ):
+            s = fixture()
+            modify(s[5])
+            self.assertIn("missing_or_invalid_telemetry_counters", assess(s)["reasons"])
+
+    def test_counter_rollback_invalidates_session(self):
+        s = fixture()
+        s[7]["rows"]["carState"] = 1
+        self.assertIn("telemetry_counter_regression", assess(s)["reasons"])
+
+    def test_terminal_counters_may_equal_last_periodic(self):
+        s = fixture()
+        self.assertEqual(s[-2]["rows"], s[-3]["rows"])
+        r = assess(s)
+        self.assertEqual(r["metricGate"], "passed")
+        self.assertTrue(r["telemetryStreamProgressConfirmed"])
+        self.assertTrue(r["decodeErrorFree"])
+
+    def test_counter_metadata_does_not_echo_sensitive_inputs(self):
+        s = fixture()
+        s[4]["rows"]["privateIdentifier"] = "SECRET-VEHICLE"
+        r = assess(s)
+        self.assertIn("missing_or_invalid_telemetry_counters", r["reasons"])
+        self.assertNotIn("SECRET-VEHICLE", str(r))
 
     def test_invalid_thresholds_fail_fast(self):
         for x in [float('nan'), float('inf'), 0, -1]:
