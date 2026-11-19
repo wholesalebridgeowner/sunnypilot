@@ -322,9 +322,46 @@ class BoundedObservationTrialTests(unittest.TestCase):
         def reader(path):
             yield source_header()
             yield car_state(10 if Path(path).parent.name == "0" else 9.9)
-        with self.assertRaises(OrderingTrialError):
+        with self.assertRaisesRegex(OrderingTrialError,
+                                    "^cross-segment-clock-regression$"):
             list(source_pinned_bounded_messages(
                 [Path("0/qlog.zst"), Path("1/qlog.zst")], reader, {}))
+
+    def test_in_segment_bounded_inversion_still_succeeds_without_false_boundary(self):
+        def reader(path):
+            yield source_header()
+            if Path(path).parent.name == "0":
+                yield car_state(10)
+                yield car_state(11)
+                yield car_state(10.25)
+            else:
+                yield car_state(11.01)
+                yield car_state(12)
+        counts = {}
+        ordered = list(source_pinned_bounded_messages(
+            [Path("0/qlog.zst"), Path("1/qlog.zst")], reader, counts))
+        self.assertEqual([m.logMonoTime / 1e9 for m in ordered],
+                         [10, 10.25, 11, 11.01, 12])
+        self.assertEqual(counts["verifiedSegments"], 2)
+
+    def test_private_boundary_rejection_never_promotes_quarantine(self):
+        s3 = FixtureS3([obj("SECRET_VEHICLE_AND_ROUTE", 0),
+                        obj("SECRET_VEHICLE_AND_ROUTE", 1)])
+        candidate = group_routes(s3.objects, T)[0]
+        s3.reports[route_key(candidate)] = {"status": "quarantined"}
+        s3.reports[clock_audit_key(candidate)] = {
+            "status": "clock_order_audited", "inversionsOverHalfSecond": 1}
+        def reader(path):
+            yield source_header()
+            yield car_state(11 if Path(path).parent.name == "0" else 10.99)
+        outcome = run(s3, "private-synthetic", T, reader)
+        self.assertEqual(outcome["status"], "bounded_trial_rejected")
+        self.assertEqual(outcome["reason"], "segment_boundary_regression")
+        self.assertEqual(s3.reports[bounded_trial_key(candidate)]["reason"],
+                         "segment_boundary_regression")
+        self.assertEqual(s3.reports[route_key(candidate)]["status"], "quarantined")
+        self.assertNotIn(PREFIX + "latest.json", s3.reports)
+        self.assertNotIn("SECRET_", json.dumps(s3.reports))
 
     def test_rejects_source_mismatch_without_publishing_metrics(self):
         def reader(_):
@@ -338,6 +375,8 @@ class BoundedObservationTrialTests(unittest.TestCase):
         cases = {
             "late-event-beyond-window": "lateness_exceeds_window",
             "cross-segment-or-watermark-regression": "event_clock_regression",
+            "cross-segment-clock-regression": "segment_boundary_regression",
+            "emitted-watermark-regression": "emitted_order_regression",
             "missing-segment-source-header": "source_unverified",
             "recorded-source-not-verified": "source_unverified",
             "invalid-event-clock": "invalid_clock",
