@@ -566,6 +566,7 @@ class FactoryACCDataQualityTests(unittest.TestCase):
 
     @staticmethod
     def configure(a, *, op_long=False, pcm=True, at=0):
+        a.segment_boundary()  # synthetic stand-in for an explicit source-pinned file boundary
         a.ingest("carParams", at, {
             "openpilotLongitudinalControl": op_long, "pcmCruise": pcm})
 
@@ -749,6 +750,21 @@ class SegmentIsolationTests(unittest.TestCase):
         self.assertEqual(counters["verifiedSegments"], 2)
         self.assertEqual(report["coverage"]["segmentBoundariesSeen"], 2)
         self.assertEqual(report["leadHeadway"]["eligibleCruiseSamples"], 0)
+
+    def test_unsegmented_direct_metrics_cannot_impersonate_pinned_joins(self):
+        a = RouteMetrics()
+        a.ingest("carParams", 0, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True})
+        a.ingest("carState", 1, self.factory_car(1, .1).carState)
+        a.ingest("radarState", 1.05, {
+            "leadOne": {"status": True, "dRel": 30}})
+        result = a.report()
+        self.assertEqual(result["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.assertFalse(result["coverage"]["segmentIsolatedMetrics"])
+        self.assertNotEqual(result["leadHeadway"]["qualification"],
+                            "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2")
+        self.assertEqual(compare(result, result)["metrics"].get(
+            "leadHeadway.medianSeconds"), None)
 
     def test_segment_reset_never_waives_clock_order(self):
         def reader(path):
