@@ -233,3 +233,33 @@ def test_equal_time_disagreement_in_lead_source_or_validity_censors():
     following=evaluate([*baseline,conflicting])["following"]
     assert following["leadFilteringRejections"]["ambiguousRadarTimestamp"]==1
     assert following["qualifyingEpisodeCount"]==0
+
+
+
+def test_identical_equal_time_carstate_coalesces_without_extra_follow_weight():
+  source=_uninterrupted_factory_cruise_fixture()
+  original=next(r for r in source if r["service"]=="carState"
+                and r["t"]==round(1.7*NS))
+  expected=evaluate(source)["following"]
+  observed=evaluate([*source,original.copy()])["following"]
+  assert observed["qualifyingEpisodeCount"]==1
+  assert observed["validCruiseLeadObservations"]==expected["validCruiseLeadObservations"]
+  assert observed["medianObservedGapSeconds"]==expected["medianObservedGapSeconds"]
+  assert observed["repeatedCarStateTimestampRows"]==1
+  assert observed["ambiguousCarStateTimestampGroups"]==0
+
+
+def test_conflicting_equal_time_cruise_and_kinematics_never_join_following():
+  source=_uninterrupted_factory_cruise_fixture()
+  original=next(r for r in source if r["service"]=="carState"
+                and r["t"]==round(1.7*NS))
+  for field,value in (("cruiseState.enabled",False),("vEgo",30.),
+                      ("gasPressed",True),("canValid",False),("segment",31)):
+    invalid={**original,field:value}
+    for records in ([*source,invalid],[invalid,*source]):
+      following=evaluate(records)["following"]
+      assert following["repeatedCarStateTimestampRows"]==1
+      assert following["ambiguousCarStateTimestampGroups"]==1
+      assert following["validCruiseLeadObservations"]==33
+      assert following["leadFilteringRejections"]["carStateSegmentMismatch"]==1 or following["leadFilteringRejections"]["invalidCarStateOrCan"]==1
+      assert following["qualifyingEpisodeCount"]==0
