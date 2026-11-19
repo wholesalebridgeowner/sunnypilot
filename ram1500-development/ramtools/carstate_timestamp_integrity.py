@@ -49,6 +49,7 @@ def canonical_car_states(records):
             output.append({
                 "service": "carState", "t": timestamp,
                 "segment": None, "valid": False, "canValid": False,
+                "_ambiguousCarStateSameTimestamp": True,
             })
         else:
             output.append(first)
