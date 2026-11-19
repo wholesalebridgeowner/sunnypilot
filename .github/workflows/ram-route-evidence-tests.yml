@@ -12,7 +12,7 @@ on:
       - 'ram1500-development/ramtools/lateral_stability_observer.py'
       - 'ram1500-development/private_full_route_cruise_audit.py'
       - 'ram1500-development/tests/test_full_route_cruise_audit.py'
-      - 'ram1500-development/tests/test_lateral_stability_observer.py'
+      - 'ram1500-development/tests/test_lateral_stability_observer.py tests/test_acc_source_provenance.py'
       - '.github/workflows/ram-route-evidence-tests.yml'
 jobs:
   offline:
