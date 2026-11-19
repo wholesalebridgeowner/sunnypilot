@@ -182,7 +182,8 @@ def test_comfort_rejects_prefix_malformed_or_disagreeing_source(bad_commit):
         require_comfort_segment_source_pins(
             [_source_record(29, PINNED_COMMIT), _source_record(30, bad_commit)],
             [_read_result(29), _read_result(30)])
-    assert str(bad_commit) not in str(ex.value)
+    if bad_commit:
+        assert str(bad_commit) not in str(ex.value)
     assert "segment 30" not in str(ex.value)
 
 
