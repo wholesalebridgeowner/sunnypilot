@@ -7,8 +7,9 @@ import json
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
-from auto_review_job import (group_routes, route_key, MAX_COMPRESSED,
+from auto_review_job import (group_routes, route_key, clock_audit_key, MAX_COMPRESSED,
                              pinned_qlog_messages, SourcePinError, run, PREFIX)
+from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 
 T = datetime(2026, 11, 19, 15, 0, tzinfo=timezone.utc)
 
@@ -194,7 +195,11 @@ class ContinuityTests(unittest.TestCase):
         self.assertNotIn("SENSITIVE", json.dumps(s3.reports))
         self.assertNotIn("synthetic|", json.dumps(s3.reports))
         second = run(s3, "fake-bucket", T, fail)
-        self.assertEqual(second["status"], "no_new_eligible_routes")
+        self.assertEqual(second["status"], "clock_diagnostic_saved")
+        self.assertEqual(second["diagnostic"], "reader_or_clock_invalid")
+        self.assertNotIn("SENSITIVE", json.dumps(s3.reports))
+        third = run(s3, "fake-bucket", T, fail)
+        self.assertEqual(third["status"], "no_new_eligible_routes")
 
     def test_same_route_reupload_is_not_an_independent_comparison(self):
         s3 = FixtureS3([obj("synthetic|000003d8--abc", 0, etag="v2")])
@@ -214,6 +219,55 @@ class ContinuityTests(unittest.TestCase):
         self.assertNotIn("largeDifference", str(compare(
             {"steering": {"steerSaturatedEventEpisodes": 1}},
             {"steering": {"steerSaturatedEventEpisodes": 0}})))
+
+
+class AnonymousClockAuditTests(unittest.TestCase):
+    def test_old_clock_metadata_is_ignored_but_inversions_are_counted(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header(-900)
+            if seg == 0:
+                yield car_state(10)
+                yield car_state(8)  # a within-segment reversal
+            else:
+                yield car_state(5)  # a cross-segment reversal
+                yield car_state(6)
+        result = audit_clock_order([Path("0/qlog.zst"),
+                                    Path("1/qlog.zst")], reader)
+        self.assertEqual(result["segmentsVerified"], 2)
+        self.assertEqual(result["observations"], 4)
+        self.assertEqual(result["inversionsOverHalfSecond"], 2)
+        self.assertEqual(result["withinSegmentInversions"], 1)
+        self.assertEqual(result["crossSegmentInversions"], 1)
+        self.assertEqual(result["inversionSizeBands"]["twoToTenSeconds"], 2)
+        self.assertNotIn("route", json.dumps(result).lower())
+        self.assertNotIn("900", json.dumps(result))
+
+    def test_clock_audit_source_pin_fails_closed(self):
+        def read(_):
+            yield source_header(commit="unverified")
+            yield car_state(10)
+        with self.assertRaises(ClockAuditSourceError):
+            audit_clock_order([Path("0/qlog.zst")], read)
+
+    def test_private_diagnostic_does_not_turn_quarantine_into_driving_report(self):
+        s3 = FixtureS3([obj("secret-device|secret-route", 0)])
+        def reversed_clock(_):
+            yield source_header()
+            yield car_state(10)
+            yield car_state(8)
+        first = run(s3, "fake", T, reversed_clock)
+        self.assertEqual(first["status"], "route_quarantined")
+        cand = group_routes(s3.objects, T)[0]
+        self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
+        second = run(s3, "fake", T, reversed_clock)
+        self.assertEqual(second["status"], "clock_diagnostic_saved")
+        self.assertEqual(second["diagnostic"], "clock_order_audited")
+        self.assertEqual(second["inversions"], 1)
+        self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
+        self.assertEqual(s3.reports[clock_audit_key(cand)]["inversionsOverHalfSecond"], 1)
+        self.assertNotIn("secret-", json.dumps(s3.reports))
+        self.assertEqual(run(s3, "fake", T, reversed_clock)["status"], "no_new_eligible_routes")
 
 
 if __name__ == "__main__":
