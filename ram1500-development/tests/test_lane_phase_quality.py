@@ -438,3 +438,91 @@ def test_boolean_timestamp_does_not_supply_model_or_vehicle_evidence():
   base = analyze(models + cars)
   invalid = dict(models[1], t=True, valid=False, segment=None)
   assert analyze(models + cars + [invalid]) == base
+
+
+# Source-pinned read-only ownership checks. A model lane phase can occur while
+# the actual Comma lateral controller is inactive; it is not a comfort result.
+def cc(t, active=True, *, segment=30, valid=True):
+  return row("carControl", t, latActive=active, segment=segment, valid=valid)
+
+
+def ownership_window():
+  models = [model(0, "off"), model(.1, "laneChangeStarting"),
+            model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  controls = [cc(t) for t in (0, .1, .2, .3, .4)]
+  return models + cars + controls
+
+
+def lane_start_counts(rows):
+  return analyze(rows, require_lateral_active=True)["phaseWindows"]["laneChangeStarting"]["counts"]
+
+
+def test_lateral_ownership_gate_requires_past_only_active_witness():
+  rows = ownership_window()
+  assert lane_start_counts(rows)["qualifiedWindows"] == 1
+  no_controls = [r for r in rows if r["service"] != "carControl"]
+  assert lane_start_counts(no_controls)["lateralInactiveOrUnverified"] == 1
+  # A command after the start cannot establish entry ownership.
+  late = [r for r in rows if r["service"] != "carControl" or r["t"] >= round(.2*N)]
+  assert lane_start_counts(late)["lateralInactiveOrUnverified"] == 1
+
+
+def test_lateral_ownership_censors_transient_inactive_and_unknown():
+  rows = ownership_window()
+  for candidate in (False, None, 1):
+    changed = [dict(r) for r in rows]
+    for r in changed:
+      if r["service"] == "carControl" and r["t"] == round(.2*N):
+        r["latActive"] = candidate
+    counts = lane_start_counts(changed)
+    assert counts["lateralInactiveOrUnverified"] == 1
+    assert counts.get("qualifiedWindows", 0) == 0
+  invalid = [dict(r) for r in rows]
+  for r in invalid:
+    if r["service"] == "carControl" and r["t"] == round(.2*N):
+      r["valid"] = False
+  assert lane_start_counts(invalid)["lateralInactiveOrUnverified"] == 1
+
+
+def test_lateral_ownership_censors_source_gap_and_cross_segment():
+  rows = ownership_window()
+  sparse = [r for r in rows if r["service"] != "carControl"
+            or r["t"] in (0, round(.1*N), round(.4*N))]
+  assert lane_start_counts(sparse)["lateralInactiveOrUnverified"] == 1
+  mismatch = [dict(r) for r in rows]
+  for r in mismatch:
+    if r["service"] == "carControl" and r["t"] == round(.2*N):
+      r["segment"] = 31
+  assert lane_start_counts(mismatch)["lateralInactiveOrUnverified"] == 1
+
+
+def test_lateral_ownership_equal_time_conflict_is_order_invariant_private():
+  import json
+  rows = ownership_window()
+  duplicate = dict(next(r for r in rows if r["service"] == "carControl"
+                        and r["t"] == round(.2*N)))
+  assert lane_start_counts(rows + [duplicate])["qualifiedWindows"] == 1
+  conflicting = dict(duplicate, latActive=False,
+                     gps="SYNTHETIC_PRIVATE_LOCATION",
+                     vin="SYNTHETIC_PRIVATE_VIN")
+  for order in (rows + [conflicting], list(reversed(rows + [conflicting]))):
+    report = analyze(order, require_lateral_active=True)
+    counts = report["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts["lateralInactiveOrUnverified"] == 1
+    assert counts.get("qualifiedWindows", 0) == 0
+    assert "SYNTHETIC_PRIVATE_" not in json.dumps(report)
+
+
+def test_lateral_ownership_bad_configuration_fails_without_source_details():
+  rows = ownership_window()
+  for options in ({"require_lateral_active": 1},
+                  {"require_lateral_active": True, "max_control_gap_s": 0},
+                  {"require_lateral_active": True, "max_control_gap_s": float("nan")}):
+    try:
+      analyze(rows, **options)
+    except ValueError:
+      pass
+    else:
+      raise AssertionError("invalid gate accepted")
