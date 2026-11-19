@@ -28,6 +28,8 @@ def percentile(values, frac):
     i = (len(values) - 1) * frac
     lower = int(i)
     upper = min(lower + 1, len(values) - 1)
+    if lower == upper:
+        return round(values[lower], 4)
     return round(values[lower] * (upper - i) + values[upper] * (i - lower), 4)
 
 class RouteMetrics:
