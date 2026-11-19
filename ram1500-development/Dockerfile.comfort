@@ -32,7 +32,7 @@ COPY . /opt/ram/
 RUN python -c 'from pathlib import Path; from ramtools.schema import verify_schema_dir, load_log_schema; p=Path("/opt/sunnypilot/cereal"); assert all(v=="ok" for v in verify_schema_dir(p).values()); load_log_schema(p)'
 RUN python -m pytest tests/test_private_comfort_rlog_probe.py \
     tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py \
-    tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py \\
+    tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py \
     tests/test_full_route_cruise_audit.py -q
 
 # All private credentials are runtime-only and are never build arguments.
