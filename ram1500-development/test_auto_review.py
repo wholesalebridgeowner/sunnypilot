@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
 from auto_review_job import (group_routes, route_key, clock_audit_key, bounded_trial_key,
                              anonymous_clock_counts, MAX_COMPRESSED, pinned_qlog_messages,
-                             SourcePinError, run, PREFIX)
+                             SourcePinError, run, PREFIX, safe_trial_rejection_reason)
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
 
@@ -332,6 +332,54 @@ class BoundedObservationTrialTests(unittest.TestCase):
             yield car_state(10)
         with self.assertRaises(OrderingTrialError):
             list(source_pinned_bounded_messages([Path("0/qlog.zst")], reader, {}))
+
+
+    def test_private_trial_rejection_categories_are_allowlisted(self):
+        cases = {
+            "late-event-beyond-window": "lateness_exceeds_window",
+            "cross-segment-or-watermark-regression": "event_clock_regression",
+            "missing-segment-source-header": "source_unverified",
+            "recorded-source-not-verified": "source_unverified",
+            "invalid-event-clock": "invalid_clock",
+            "bounded-memory-ceiling": "bounded_memory_exceeded",
+        }
+        for code, category in cases.items():
+            with self.subTest(code=code):
+                self.assertEqual(safe_trial_rejection_reason(OrderingTrialError(code)),
+                                 category)
+        # An unexpected exception, even one raised by a decoder, must never
+        # expose arbitrary text that might contain location or raw identifiers.
+        secret = "SENSITIVE_ROUTE_OR_VIN_SHOULD_NEVER_LEAVE_PRIVATE_DECODER"
+        self.assertEqual(safe_trial_rejection_reason(OrderingTrialError(secret)),
+                         "bounded_order_or_source_invalid")
+        self.assertEqual(safe_trial_rejection_reason(RuntimeError(secret)),
+                         "decode_or_metrics_invalid")
+        self.assertNotIn(secret, json.dumps([
+            safe_trial_rejection_reason(OrderingTrialError(secret)),
+            safe_trial_rejection_reason(RuntimeError(secret)),
+        ]))
+
+    def test_live_trial_failure_is_categorized_but_keeps_quarantine(self):
+        s3 = FixtureS3([obj("SECRET_ORIGINAL_DEVICE_AND_ROUTE", 0)])
+        candidate = group_routes(s3.objects, T)[0]
+        s3.reports[route_key(candidate)] = {"status": "quarantined"}
+        s3.reports[clock_audit_key(candidate)] = {
+            "status": "clock_order_audited",
+            "inversionsOverHalfSecond": 1,
+        }
+        def reader(_):
+            yield source_header()
+            yield car_state(10)
+            yield car_state(13)
+            yield car_state(10.1)  # >2s watermark lateness
+        result = run(s3, "synthetic-bucket", T, reader)
+        self.assertEqual(result["status"], "bounded_trial_rejected")
+        self.assertEqual(result["reason"], "lateness_exceeds_window")
+        self.assertEqual(s3.reports[bounded_trial_key(candidate)]["reason"],
+                         "lateness_exceeds_window")
+        self.assertEqual(s3.reports[route_key(candidate)]["status"], "quarantined")
+        self.assertNotIn("SECRET_ORIGINAL_DEVICE_AND_ROUTE", json.dumps(s3.reports))
+        self.assertNotIn("latest.json", json.dumps(s3.reports))
 
 
 if __name__ == "__main__":
