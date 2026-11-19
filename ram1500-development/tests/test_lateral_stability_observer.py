@@ -137,3 +137,44 @@ def test_combine_cannot_turn_two_short_runs_into_one_long_run():
     assert merged["exposureSecondsInRunsAtLeastTwoSeconds"]==0
     assert merged["longestEligibleRunSeconds"]==0.21
     assert merged["sustainedReversalObservability"]=="insufficient_contiguous_exposure"
+
+
+def _with_rate_profile(profile):
+    """Pure synthetic steering-rate observations; no real CAN or identifiers."""
+    states, controls, curves, outputs = route(reversing=False)
+    states = [(*row[:5], profile(i), *row[6:]) for i, row in enumerate(states)]
+    return states, controls, curves, outputs
+
+
+def test_long_neutral_rate_does_not_bridge_separated_direction_bouts():
+    # 1 s positive, 3.5 s nearly stationary wheel, then 1.5 s negative.
+    # Previously the detector counted one false sustained reversal despite
+    # the long no-rate interval being a valid uninterrupted exposure.
+    out = analyze_segment(*_with_rate_profile(
+        lambda i: 2.5 if i < 100 else -2.5 if i >= 450 else 0.0
+    ))
+    assert out["eligibleSamples"] == 600
+    assert out["longestEligibleRunSeconds"] == 5.99
+    assert out["stableSignReversals"] == 0
+
+
+def test_isolated_same_sign_spikes_cannot_fake_250ms_directional_dwell():
+    # Only two isolated positive rate samples (3.5 s apart); an otherwise
+    # sustained negative portion must not convert them into a reversal.
+    out = analyze_segment(*_with_rate_profile(
+        lambda i: 2.5 if i in (0, 350) else -2.5 if i >= 400 else 0.0
+    ))
+    assert out["eligibleSamples"] == 600
+    assert out["stableSignReversals"] == 0
+
+
+def test_short_zero_crossing_between_confirmed_opposing_bouts_is_detected():
+    # A short 200 ms neutral-rate crossing may separate two actual
+    # directional bouts. Both have >250 ms of consecutive valid samples.
+    out = analyze_segment(*_with_rate_profile(
+        lambda i: 2.5 if i < 150 else -2.5 if i >= 170 else 0.0
+    ))
+    assert out["eligibleSamples"] == 600
+    assert out["stableSignReversals"] == 1
+    assert out["sustainedReversalObservability"] == "limited_proxy_only"
+    assert "Neutral steering-rate" in str(combine([out])["limitations"])
