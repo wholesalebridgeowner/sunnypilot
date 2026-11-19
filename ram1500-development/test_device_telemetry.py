@@ -183,6 +183,19 @@ class RamDeviceDiagnosticsTests(unittest.TestCase):
     self.assertIn("private memory", reason)
     self.assertIsNone(mod.limit_breach({"rssAnonKiB": 40 * 1024, "rssShmemKiB": 900 * 1024}, 15.0, 150, False)[0])
 
+  def test_health_schedule_skips_missed_slots_after_stall(self):
+    # on time: fixed 10 s cadence, no drift
+    self.assertEqual(mod.next_health_deadline(10.0, 10.04), 20.0)
+    # a 35 s stall must yield one long window, not catch-up rows 50 ms apart with noise CPU figures
+    deadline, now, rows = 10.0, 45.0, 0
+    while now < 46.0:
+      if now >= deadline:
+        rows += 1
+        deadline = mod.next_health_deadline(deadline, now)
+      now += 0.05
+    self.assertEqual(rows, 1)
+    self.assertAlmostEqual(deadline, 55.0)
+
   def test_carstate_full_record_only_at_sample_rate(self):
     import contextlib
     events = {}

@@ -266,6 +266,14 @@ def health_row(started_wall, started_cpu, counts, window=None):
   return row
 
 
+def next_health_deadline(deadline, now, interval=HEALTH_INTERVAL_S):
+  """Next health-row time after `now`. After a stall longer than one interval, skip the missed slots so one row
+  covers the whole gap; stepping by a fixed interval would emit a burst of ~drain-length windows whose CPU figures
+  are noise and could trip (or clear) the two-window CPU limit. Found in review on PR #19."""
+  deadline += interval
+  return deadline if deadline > now else now + interval
+
+
 def limit_breach(row, max_cpu_pct, max_private_mb, prev_cpu_breach):
   """Return (reason or None, cpu_breach_this_window). CPU must exceed its limit in two consecutive windows."""
   cpu = row.get("windowCpuPercentOneCore")
@@ -368,7 +376,7 @@ def run(args):
         row = health_row(started_wall, started_cpu, counts, window=(now - win_wall, cpu_now - win_cpu))
         writer.write(row)
         win_wall, win_cpu = now, cpu_now
-        next_health += HEALTH_INTERVAL_S
+        next_health = next_health_deadline(next_health, now)
         reason, cpu_breach = limit_breach(row, args.max_cpu_pct, args.max_private_mb, cpu_breach)
         if reason and stop_reason == "duration reached":
           stop_reason = reason
