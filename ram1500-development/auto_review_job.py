@@ -19,7 +19,7 @@ from auto_review import SCHEMA_COMMIT, compare, summarize_log_messages
 PATH = re.compile(r"^logs/(.+)/([0-9]+)/qlog\.zst$")
 MAX_SEGMENTS = 96
 MAX_COMPRESSED = 25_000_000
-QUIET_HOURS = 6
+QUIET_HOURS = 0.5  # 30-minute upload quiet period; later uploads produce a new fingerprint
 LOOKBACK_DAYS = 14
 PREFIX = "automated-ram-reviews/v1/"
 
@@ -117,7 +117,7 @@ def run(s3, bucket, now, reader):
         "analyzedAt": now.isoformat(),
         "routeUpdatedAt": selected["updated"].isoformat(),
         "segments": len(selected["items"]),
-        "completeness": "contiguous-from-zero-after-six-hours-quiet; final-route-count-unverified",
+        "completeness": "contiguous-from-zero-after-30-minutes-quiet; final-route-count-unverified",
         "metrics": metrics, "comparison": delta,
         "recommendation": "Observational review only. No automatic steering or braking code deployment.",
     }
