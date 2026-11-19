@@ -80,11 +80,11 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   # Ignore bool timestamps (bool is a Python int subclass).
   models = _coalesce_equal_time(
     (r for r in records if r.get("service") == "drivingModelData"
-     and type(r.get("t")) is int and r["t"] >= 0),
+     and type(r.get("t")) is int),
     ("segment", "valid", "meta.laneChangeState", "meta.laneChangeDirection"))
   car = _coalesce_equal_time(
     (r for r in records if r.get("service") == "carState"
-     and type(r.get("t")) is int and r["t"] >= 0),
+     and type(r.get("t")) is int),
     ("segment", "valid", "steeringRateDeg", "steeringPressed", "vEgo",
      "canValid", "steerFaultTemporary", "steerFaultPermanent"))
   phase_counts = {phase: Counter() for phase in PHASES}
