@@ -31,3 +31,14 @@ Next privacy-safe action: run the source-pinned read-only analyzer over the same
 No vehicle CAN output, steering/braking/throttle command, Panda or OEM permission, device SSH, installed software, private log, VIN, road location or credentials are changed or published. This research branch is stacked on PR #18; it does not modify the shared `ram1500-custom-development` branch, PR #1 steering/PAM work, PR #2 comfort work or the existing Railway collector.
 
 **Release gate:** unchanged. No production calibration or installer; owner-approved parked checks, independent safety review and controlled-area supervised testing still required.
+
+## Exact-source independent local regression execution
+
+The committed analyzer and test file were independently reconstructed in an isolated local Python test environment and their `git hash-object` digests **matched** the GitHub blob SHAs:
+
+- `ramtools/lateral_stability_observer.py`: `c01e68cbed6dbabee94f11c822d66c7b6ac82670`
+- `tests/test_lateral_stability_observer.py`: `4b49fa0ba989ca599ebcfd389c4c09f2add6df9d`
+
+Execution: `PYTHONPATH=/tmp/ramtest python -m pytest -q /tmp/ramtest/tests/test_lateral_stability_observer.py` yielded **13 passed in 0.08 seconds**, including six newly added synthetic fixtures. The first attempt detected a `NameError` in the new shifted-time test fixture; this was corrected in commit `a419d7dbe7a7fdb15589ca2b3c949022d5af58a1`, and the exact corrected GitHub file hash was then tested to completion.
+
+GitHub Actions was configured for the isolated branch, but a read of the GitHub Actions workflow-runs collection returned **zero registered runs** at verification time. Therefore **CI is not reported as passed**. The successful independent local test does not replace cross-platform CI, the private pinned-log rerun, held-out drive qualification or independent safety review.
