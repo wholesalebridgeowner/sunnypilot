@@ -8,6 +8,7 @@ from collections import Counter
 import math
 
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
+FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_qlog_v1"
 
 def get(o, *names):
     for name in names:
@@ -45,6 +46,9 @@ class RouteMetrics:
         self.last = None
         self.last_car = None
         self.last_accel = None
+        self.last_factory_accel = None
+        self.factory_acc_jerk = []
+        self.long_source_conflict = False
         self.active_lane = None
         self.last_lat = None
         self.lane_rejections = Counter()
@@ -68,6 +72,17 @@ class RouteMetrics:
     def _lane_observation_ok(self, t):
         return self._fresh_lateral(t) and self._fresh_healthy_car(t)
 
+    def _factory_acc_eligible(self):
+        """Conservative observed-motion gate; never attributes actuation to Comma."""
+        car = self.last_car
+        return (not self.long_source_conflict
+                and self.car_params.get("openpilotLongitudinalControl") is False
+                and self.car_params.get("pcmCruise") is True
+                and car is not None and car["canValid"] is True
+                and car["cruise"] is True
+                and car["gas"] is False and car["brake"] is False
+                and number(car["speed"]) and car["speed"] > 2)
+
     def ingest(self, kind, t, data):
         """Process one message in log-monotonic order, including boundaries."""
         if not number(t):
@@ -82,6 +97,7 @@ class RouteMetrics:
                  "speed": get(data, "vEgo"),
                  "accel": get(data, "aEgo"),
                  "cruise": get(data, "cruiseState", "enabled"),
+                 "canValid": get(data, "canValid"),
                  "gas": get(data, "gasPressed"),
                  "brake": get(data, "brakePressed"),
                  "healthy": (get(data, "canValid") is True
@@ -99,6 +115,19 @@ class RouteMetrics:
                         if number(j):
                             self.jerk.append(abs(j))
                 self.last_accel = (t, a)
+            # Separate strictly factory-ACC-conditional observed jerk from
+            # the legacy *all driving* trend. A dropout resets the derivative;
+            # never bridge a pedal press, cruise-off period or invalid CAN.
+            if self._factory_acc_eligible() and number(a):
+                if self.last_factory_accel is not None:
+                    delta = t - self.last_factory_accel[0]
+                    if 0.03 <= delta <= 0.3:
+                        value = abs((a - self.last_factory_accel[1]) / delta)
+                        if number(value):
+                            self.factory_acc_jerk.append(value)
+                self.last_factory_accel = (t, a)
+            else:
+                self.last_factory_accel = None
             rate = get(data, "steeringRateDeg")
             if number(rate):
                 self.lateral_rates.append(abs(rate))
@@ -119,18 +148,22 @@ class RouteMetrics:
                     self.active_lane["invalid"] = True
             self.last_lat = {"t": t, "active": active}
         elif kind == "carParams":
-            self.car_params["openpilotLongitudinalControl"] = get(data, "openpilotLongitudinalControl")
-            self.car_params["pcmCruise"] = get(data, "pcmCruise")
+            incoming = {"openpilotLongitudinalControl": get(data, "openpilotLongitudinalControl"),
+                        "pcmCruise": get(data, "pcmCruise")}
+            if self.car_params and incoming != self.car_params:
+                # Mixed source/ownership evidence invalidates the ENTIRE
+                # route-level factory attribution, including earlier samples.
+                self.long_source_conflict = True
+            self.car_params = incoming
+            if self.long_source_conflict:
+                self.last_factory_accel = None
         elif kind == "radarState":
             lead = get(data, "leadOne")
             car = self.last_car
             d = get(lead, "dRel")
-            if (get(lead, "status") is True and car is not None
+            if (get(lead, "status") is True and self._factory_acc_eligible()
                     and 0 <= t - car["t"] <= .35
-                    and number(d) and d > 0
-                    and number(car["speed"]) and car["speed"] > 2
-                    and car["cruise"] is True
-                    and car["gas"] is not True and car["brake"] is not True):
+                    and number(d) and d > 0):
                 gap = d / car["speed"]
                 if number(gap) and 0 <= gap <= 20:
                     self.headway.append(gap)
@@ -194,6 +227,12 @@ class RouteMetrics:
 
     def report(self):
         durations = [a["duration"] for a in self.lanes]
+        source_ok = (not self.long_source_conflict
+                     and self.car_params.get("openpilotLongitudinalControl") is False
+                     and self.car_params.get("pcmCruise") is True)
+        # Later contradictory CarParams invalidates even earlier observations.
+        qualified_headway = self.headway if source_ok else []
+        qualified_acc_jerk = self.factory_acc_jerk if source_ok else []
         lane_rates = [a["peakSteeringRate"] for a in self.lanes]
         return {
             "schemaCommit": SCHEMA_COMMIT,
@@ -207,6 +246,8 @@ class RouteMetrics:
             },
             "cruiseOwnership": {
                 "carParams": self.car_params,
+                "factoryAccSourceConsistent": source_ok,
+                "carParamsConflict": self.long_source_conflict,
                 "longActiveSamples": dict(self.long),
                 "latActiveSamples": dict(self.lat),
                 "caution": "Factory ACC may control braking/throttle; model plan does not prove actuation",
@@ -221,11 +262,18 @@ class RouteMetrics:
                 "caution": "Model start-to-finish only; sampled Comma lateral-active and CAN/EPS health required. Physical lane crossing and full-resolution comfort are unverified.",
             },
             "leadHeadway": {
-                "eligibleCruiseSamples": len(self.headway),
-                "medianSeconds": percentile(self.headway, .5),
-                "p10Seconds": percentile(self.headway, .1),
-                "p90Seconds": percentile(self.headway, .9),
-                "caution": "May be model-derived lead, not factory ACC gap target",
+                "qualification": FACTORY_ACC_QUALITY,
+                "eligibleCruiseSamples": len(qualified_headway),
+                "medianSeconds": percentile(qualified_headway, .5),
+                "p10Seconds": percentile(qualified_headway, .1),
+                "p90Seconds": percentile(qualified_headway, .9),
+                "caution": "Sampled observed headway to model-flagged lead during factory ACC; not OEM selected gap or confirmed radar authority",
+            },
+            "factoryAccObservedMotion": {
+                "qualification": FACTORY_ACC_QUALITY,
+                "eligibleJerkSamples": len(qualified_acc_jerk),
+                "p90AbsObservedJerkMps3": percentile(qualified_acc_jerk, .9),
+                "caution": "Sampled vehicle aEgo derivative under factory ACC conditions, not OEM throttle/brake command; no filtering, no causal smoothness claim",
             },
             "comfort": {
                 "observedAccelerationJerkSamples": len(self.jerk),
@@ -265,16 +313,22 @@ def compare(current, previous):
         ("laneChange", "medianStartingSeconds"),
         ("laneChange", "p90PeakSteeringRateDegPerSecond"),
         ("leadHeadway", "medianSeconds"),
+        ("factoryAccObservedMotion", "p90AbsObservedJerkMps3"),
         ("comfort", "p90AbsJerkMps3"),
         ("steering", "steerSaturatedEventEpisodes"),
     ]
     result = {}
     for section, name in specs:
-        if section == "laneChange":
-            marker = "model_start_to_finish_fresh_active_healthy_qlog_v2"
+        if section in ("laneChange", "leadHeadway", "factoryAccObservedMotion"):
+            marker = ("model_start_to_finish_fresh_active_healthy_qlog_v2"
+                      if section == "laneChange" else FACTORY_ACC_QUALITY)
             if (current.get(section, {}).get("qualification") != marker
                     or previous.get(section, {}).get("qualification") != marker):
-                continue  # do not compare the old unqualified model-phase metric
+                continue  # Never compare old unqualified or differently gated values
+            if (section != "laneChange"
+                    and (current.get("cruiseOwnership", {}).get("factoryAccSourceConsistent") is not True
+                         or previous.get("cruiseOwnership", {}).get("factoryAccSourceConsistent") is not True)):
+                continue
         a, b = current.get(section, {}).get(name), previous.get(section, {}).get(name)
         if number(a) and number(b):
             result[f"{section}.{name}"] = {
