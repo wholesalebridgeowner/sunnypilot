@@ -261,5 +261,5 @@ def test_conflicting_equal_time_cruise_and_kinematics_never_join_following():
       assert following["repeatedCarStateTimestampRows"]==1
       assert following["ambiguousCarStateTimestampGroups"]==1
       assert following["validCruiseLeadObservations"]==33
-      assert following["leadFilteringRejections"]["carStateSegmentMismatch"]==1 or following["leadFilteringRejections"]["invalidCarStateOrCan"]==1
+      assert following["leadFilteringRejections"]["ambiguousCarStateTimestamp"]==1
       assert following["qualifyingEpisodeCount"]==0
