@@ -49,6 +49,27 @@ The remaining retained late morning segments outside the active interval showed 
 
 **Additional source-pinned private comfort replay:** one four-segment window within this morning drive, Railway deployment `b4a77307-35d9-43df-b151-b44a1a8dfec0`, passed the original schema/source checks and decoded **421,759 messages** from **4 complete R-logs**, reporting **six** sustained observational following episodes totaling **86.444 seconds**, with **2.259 s** median observed sample headway (and 1.543 s p10). **This is not a decoded factory ACC distance setting.** The visible lead source was model flagged in those episodes; that does not identify OEM radar/ACC actuation or selected gap.
 
+
+## Additional on-road steering oscillation proxy: limited coverage, no new tuning
+
+A new strictly read-only `ramtools/lateral_stability_observer.py` uses source-pinned carState steering rate and speed, `carControl.latActive`, actual Comma-native output and `controlsState.desiredCurvature` joined past-only within 120 ms. It excludes driver steering intervention, vehicle/CAN invalidity, ECU fault, tight turns, insufficient speed, unknown/stale control and near-native-torque-limit observations. It counts only sustained steering wheel **rate-sign reversals**, **not lane-centered physical ping-pong**.
+
+The latest private 20-segment morning replay deployment `bc5f1509-2ab3-4f49-9c5c-c8936d13b38f` **SUCCEEDED**, and the isolated pinned Docker build passed **97/97** synthetic tests, including the new logger state and stability gates.
+
+| Read-only steering stability proxy | Result |
+|---|---:|
+| Selected partial-morning R-log segments with correct source pin | 20/20 |
+| Eligible clean/straight/lateral-active samples | **1,903** |
+| Total continuously eligible observation time | **18.859 seconds** |
+| Persistently reversing steering-wheel-rate signs in eligible windows | **0** |
+| Excluded because of driver steering or steering fault status | 38,884 samples |
+| Excluded because lateral control was not independently confirmed | 38,944 |
+| Excluded because of speed/gear gate | 34,256 |
+| Excluded because requested curvature did not qualify as near-straight | 46 |
+| Vehicle/CAN invalidity exclusions | 43 |
+
+**Interpretation:** 18.9 seconds of highly selective clean driving across a partially retained route, with zero qualifying steering reversals under this proxy, **cannot establish that the truck never ping-pongs**. It also cannot identify the best actuator-delay, `latAccelFactor`, or friction value. This is a baseline instrument and data-coverage measurement only. The owner's hypothesis that filtering/lag may intentionally improve steering stability remains plausible but unproven. To rank 0.20–0.32-second delay hypotheses, we require multiple independently qualified routes with real lateral tracking, speed/curvature-matched oscillation/overshoot, and controlled source-consistent offline replay; no available result passes that release gate.
+
 ## Important response correction
 
 Our earlier 16-segment sample of the later afternoon route found no confirmed cruise. That result was correct **for those samples**, but extrapolating it to “the drive today” would have been wrong. The source-reconciled morning log proves that cruise and Sunnypilot lateral control were engaged on a different drive. This report explicitly distinguishes recorded-route identity, duration and availability.
