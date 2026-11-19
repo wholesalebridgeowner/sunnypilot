@@ -133,6 +133,51 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(a.report()["laneChange"]["rejectedModelWindows"],
                          {"model_phase_interrupted": 1})
 
+    def test_finish_direction_must_agree_with_start_direction(self):
+        for finish_direction in ("right", "none", None):
+            with self.subTest(finish_direction=finish_direction):
+                a = RouteMetrics()
+                a.ingest("carState", 1, self.healthy_car())
+                a.ingest("carControl", 1.01, {"latActive": True})
+                a.ingest("drivingModelData", 1.04, {"meta": {
+                    "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+                a.ingest("carState", 1.1, self.healthy_car(rate=6))
+                a.ingest("carControl", 1.11, {"latActive": True})
+                a.ingest("drivingModelData", 1.14, {"meta": {
+                    "laneChangeState": "laneChangeFinishing",
+                    "laneChangeDirection": finish_direction}})
+                report = a.report()
+                self.assertEqual(report["laneChange"]["completeStartingWindows"], 0)
+                self.assertEqual(report["laneChange"]["rejectedModelWindows"],
+                                 {"model_direction_conflict": 1})
+
+    def test_unfinished_last_model_window_rejected_without_double_counting(self):
+        a = RouteMetrics()
+        a.ingest("carState", 1, self.healthy_car())
+        a.ingest("carControl", 1.01, {"latActive": True})
+        a.ingest("drivingModelData", 1.04, {"meta": {
+            "laneChangeState": "laneChangeStarting", "laneChangeDirection": "left"}})
+        first = a.report()["laneChange"]
+        self.assertEqual(first["completeStartingWindows"], 0)
+        self.assertEqual(first["rejectedModelWindows"], {"incomplete_at_route_end": 1})
+        self.assertEqual(a.report()["laneChange"], first)
+        a.segment_boundary()
+        self.assertEqual(a.report()["laneChange"]["rejectedModelWindows"],
+                         {"segment_boundary_incomplete": 1})
+
+    def test_old_direction_unqualified_lane_version_cannot_be_compared(self):
+        current = {"schemaCommit": SCHEMA_COMMIT,
+                   "coverage": {"segmentIsolatedMetrics": True},
+                   "laneChange": {"qualification":
+                       "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4",
+                       "medianStartingSeconds": 2.0}}
+        previous = {"schemaCommit": SCHEMA_COMMIT,
+                    "coverage": {"segmentIsolatedMetrics": True},
+                    "laneChange": {"qualification":
+                        "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3",
+                        "medianStartingSeconds": 3.0}}
+        self.assertEqual(compare(current, previous)["metrics"], {})
+
     def test_old_lane_metrics_are_not_comparable_to_qualified_new_schema(self):
         a = RouteMetrics().report()
         old = {"laneChange": {"medianStartingSeconds": 1.0,
@@ -150,7 +195,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
 
     def test_comparison_has_no_unsupported_causal_claim(self):
-        marker = "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3"
+        marker = "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4"
         provenance = {"schemaCommit": SCHEMA_COMMIT,
                       "coverage": {"segmentIsolatedMetrics": True}}
         current = {**provenance,
