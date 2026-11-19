@@ -20,6 +20,7 @@ from ramtools.schema import load_log_schema, verify_schema_dir
 from ramtools.lateral_stability_observer import analyze_segment as analyze_steering_stability, combine as combine_stability
 from ramtools.logio import read_log_bytes
 from ramtools.acc_source_provenance import verify_directory as verify_acc_source
+from ramtools.recorded_source_integrity import require_exact_recorded_commits
 
 KEY_RE=re.compile(r"^logs/[^/]+[|]([0-9a-f]{8}--[0-9a-f]{10})/([0-9]+)/rlog[.]zst$")
 MAX_SEGMENTS=70
@@ -101,8 +102,9 @@ def safe_decode_segment(path,schema):
                         das3.append((t,bytes(frame.dat)))
     except Exception as exc:
         raise RuntimeError("private CAN R-log decode failed") from None
-    if not commits or any(not EXPECTED_SOURCE.startswith(c) for c in commits):
-        raise ValueError("recorded build does not match exact pinned source")
+    # A short Git hash prefix is not a verified original-build match.
+    # Keep route/device source identifiers out of error messages and summaries.
+    require_exact_recorded_commits(commits, EXPECTED_SOURCE)
     if not states or not seen:
         raise ValueError("missing carState recording")
     result=summarize_segment(states,controls,selfdrives,das3)
