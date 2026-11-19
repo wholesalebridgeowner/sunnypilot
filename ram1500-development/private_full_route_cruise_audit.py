@@ -17,6 +17,7 @@ from ramtools.cruise_state_audit import (
     ACC_MSG_ID, CAMERA_BUS, EXPECTED_SOURCE, aggregate_segments, summarize_segment,
 )
 from ramtools.schema import load_log_schema, verify_schema_dir
+from ramtools.lateral_stability_observer import analyze_segment as analyze_steering_stability, combine as combine_stability
 from ramtools.logio import read_log_bytes
 
 KEY_RE=re.compile(r"^logs/[^/]+[|]([0-9a-f]{8}--[0-9a-f]{10})/([0-9]+)/rlog[.]zst$")
@@ -62,6 +63,7 @@ def safe_decode_segment(path,schema):
     if error or not data:
         raise RuntimeError("compressed segment could not be decoded completely")
     states,controls,selfdrives,das3=[],[],[],[]
+    stability_states,stability_curvatures,stability_outputs=[],[],[]
     commits=[]
     seen=0
     try:
@@ -81,10 +83,17 @@ def safe_decode_segment(path,schema):
                 states.append((t, bool(event.valid),bool(cs.canValid),
                                bool(cs.cruiseState.enabled),bool(cs.cruiseState.available),
                                float(cs.vEgo)))
+                stability_states.append((t,bool(event.valid),bool(cs.canValid),
+                    str(cs.gearShifter),float(cs.vEgo),float(cs.steeringRateDeg),
+                    bool(cs.steeringPressed),bool(cs.steerFaultTemporary or cs.steerFaultPermanent)))
             elif which=="carControl":
                 controls.append((t,bool(event.carControl.latActive)))
             elif which=="selfdriveState":
                 selfdrives.append((t,bool(event.selfdriveState.enabled)))
+            elif which=="controlsState":
+                stability_curvatures.append((t,float(event.controlsState.desiredCurvature)))
+            elif which=="carOutput":
+                stability_outputs.append((t,float(event.carOutput.actuatorsOutput.torqueOutputCan)))
             elif which=="can":
                 for frame in event.can:
                     if frame.src==CAMERA_BUS and frame.address==ACC_MSG_ID:
@@ -96,7 +105,8 @@ def safe_decode_segment(path,schema):
     if not states or not seen:
         raise ValueError("missing carState recording")
     result=summarize_segment(states,controls,selfdrives,das3)
-    return result,seen,len(commits)
+    steering=analyze_steering_stability(stability_states,controls,stability_curvatures,stability_outputs)
+    return result,steering,seen,len(commits)
 
 
 def main():
@@ -129,6 +139,7 @@ def main():
     keys=select_complete_route((x for page in pages for x in page.get("Contents",())),prefix,selected)
     STAGE="decode"
     segments=[]
+    steering_summaries=[]
     total_messages=0
     init_pins=0
     with tempfile.TemporaryDirectory(prefix="ram-acc-private-") as tmp:
@@ -138,13 +149,15 @@ def main():
             s3.download_file(e["S3_BUCKET"],key,str(path))
             if not 0<path.stat().st_size<=MAX_BYTES:
                 raise ValueError("bad downloaded R-log size")
-            group,messages,pins=safe_decode_segment(path,schema)
+            group,steering,messages,pins=safe_decode_segment(path,schema)
             segments.append(group)
+            steering_summaries.append(steering)
             total_messages+=messages
             init_pins+=pins
             path.unlink()
     STAGE="summary"
     result=aggregate_segments(segments)
+    result["steeringStability"]=combine_stability(steering_summaries)
     result["fullRouteProvenance"]={
         "completeRlogSegments":len(keys),
         "scope":"complete_uploaded_route" if selected is None else "selected_contiguous_window_not_complete_route",
