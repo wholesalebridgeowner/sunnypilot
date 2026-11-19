@@ -75,6 +75,11 @@ class AuditTests(unittest.TestCase):
         s[-2]["windowCpuPercentOneCore"] = 8.0
         self.assertIn("unwindowed_terminal_health_missing", assess(s)["reasons"])
 
+    def test_terminal_health_must_have_explicit_none_not_missing_field(self):
+        s = fixture()
+        s[-2].pop("windowCpuPercentOneCore")
+        self.assertIn("unwindowed_terminal_health_missing", assess(s)["reasons"])
+
     def test_terminal_health_can_share_rounded_clock_with_last_periodic(self):
         s = fixture()
         s[-2]["wallElapsedS"] = s[-3]["wallElapsedS"]
