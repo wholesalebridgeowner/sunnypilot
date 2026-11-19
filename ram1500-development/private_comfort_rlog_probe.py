@@ -194,7 +194,8 @@ def summarize(records: list[dict], read_results) -> dict:
             "validityRejections": {
                 k: int(following.get("leadFilteringRejections", {}).get(k, 0))
                 for k in ("invalidCarStateOrCan", "invalidRadarMessage",
-                          "ambiguousRadarTimestamp")
+                          "ambiguousRadarTimestamp",
+                          "ambiguousCarStateTimestamp")
             },
         },
         "laneModelPhases": public_lane_summary(lanes),
