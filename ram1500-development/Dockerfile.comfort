@@ -33,7 +33,7 @@ RUN python -c 'from pathlib import Path; from ramtools.schema import verify_sche
 RUN python -m pytest tests/test_private_comfort_rlog_probe.py \
     tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py \
     tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py \
-    tests/test_full_route_cruise_audit.py -q
+    tests/test_full_route_cruise_audit.py tests/test_lateral_stability_observer.py -q
 
 # All private credentials are runtime-only and are never build arguments.
 # No service port, public egress of data, CAN send or device connection.
