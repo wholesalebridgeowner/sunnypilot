@@ -41,3 +41,28 @@ The seven areas in PR #2 are intentionally `OFFLINE_PROPOSAL_NOT_INSTALLABLE`; n
 - **This branch / draft PR #18:** complete-route raw camera ACC-state and parsed cruise/lateral-state audit, dedicated private one-shot Railway service and synthetic tests.
 
 **Deliver a consolidated status only after running all currently accessible offline steps. Clearly identify blocked hardware/owner approval gates; do not claim that the overall on-road release plan is finished if they are outstanding.**
+
+
+## Executed steps and validated exit gates — end-of-session audit
+
+The following are measured outcomes, **not assumed progress**:
+
+| Step | Outcome | Evidence / remaining blocker |
+|---|---|---|
+| 1: Exact installed source baseline | **Offline evidence verified** | `1f7233cb`, EPS `68466110AB`, factory longitudinal authority, installed 0.20-second delay and proposed hypotheses; dirty working tree and installed executable binary not independently rebuilt |
+| 2: Private log inventory and acquisition | **Scoped completed** | Full 54/54 afternoon R-logs, and 20/20 still-present late-morning R-logs privately recovered by authorized Wi-Fi upload; early-morning 0–26 and the later return-home time remain unverified gaps |
+| 3: Raw factory ACC source verification | **Verified** | Installed RAM `carstate.py` uses bus2 `DAS_3` 0x99 ACC_ACTIVE; 322,816 afternoon and 114,011 morning fresh raw/parsed comparisons had **zero discrepancies** |
+| 4: Morning versus afternoon Comma states | **Verified for scoped recordings** | Morning 10,861 cruise-enabled and 10,764 lateral-active carState-aligned observations; afternoon 54-minute route 0/322,896 cruise enabled and 0 lateral-active. Do not conflate with whole day |
+| 5: Steering oscillation/limit eligibility | **Instrumented, limited** | 20-morning-segment steering reversal proxy identified 1,903 clean eligible samples / 18.859 seconds, 0 reversals under strict gates; **not enough to prove no ping-pong or optimize response** |
+| 6: New numeric steering calibration | **Blocked by evidence/release gate** | Five noninstallable delay hypotheses 0.20/0.23/0.26/0.29/0.32 s; no independently validated latAccelFactor, friction, damping, lane tracking or low-speed authorization value. Cannot responsibly write one |
+| 7: Factory ACC observational comfort | **Partially measured** | Four-morning-segment pinned replay: 6 valid following episodes, 86.444 seconds, median sampled headway 2.259s. Factory selected gap and throttle/brake commands **not decoded** |
+| 8: Regression / source review | **Fixture tests passed; control candidate review incomplete** | New private source-pinned Docker image: 97/97 tests passed, Railway analysis SUCCESS; independent Claude review already corroborated afternoon route. Not a validated controller replay or install approval |
+| 9: Parked device hardware/CPU validation | **Not run; explicit approval still required** | Existing Comma msgq subscriber slots and first prototype's excessive CPU/RSS risk; vehicle not disturbed |
+| 10: Steering/ACC vehicle release | **Not authorized, NOT complete** | OEM/Panda safety, approved build and rollback, independent controller review, supervised vehicle tests remain mandatory; no write/install attempted |
+| 11: Continued orchestration | **Active** | Existing hourly `Ram Driving Software Development` automation updated with full plan, positive morning ACC evidence, owner ping-pong concern and no-unsafe-write constraints. GitHub PR #18 remains draft |
+
+**Correct completion statement:** The authorized offline collection, source reconciliation, fixture testing and initial stability instrumenting have been completed. The *overall* requested on-road calibration-and-release plan **has not been completed** because the evidence, independent review, parked hardware and supervised vehicle validation gates are unfulfilled. Do not silently equate a green CI or one-shot private replay with an improved driving parameter or a completed vehicle release.
+
+### Contiguous privacy and release safeguards
+
+The exact evening route ID, dongle key, map coordinates, VIN, raw CAN payloads, device access credentials and original log files remain in private Comma/Railway systems and were never placed in this repository. No Comma model or EPS firmware write, Panda safety change, onroad sidecar, CAN injection or public installer was performed. The existing cloud upload API was invoked only to recover **previously completed** on-device R-log files over Wi-Fi while the vehicle was reportedly home.
