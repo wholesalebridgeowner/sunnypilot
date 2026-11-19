@@ -1,6 +1,9 @@
 # CLAUDE: Resume Ram 1500 work after Windows PC restart
 
-**Open this first.** Updated November 17, 2026. This is a GitHub-only handoff, not a claim that the Comma device has been modified.
+**Open this first.** Updated November 19, 2026. This is a GitHub-only handoff, not a claim that the Comma device has been modified.
+
+**CURRENT 2026-11-19 UPDATE FOR CLAUDE:** Review the section `## Nov 19: continuous Railway log review (ChatGPT handoff)` at the end of this file before resuming Ram work. It tracks new draft PR #31 and the five-minute Railway worker; do not confuse this with a proven Comma shell or device deployment.
+
 
 ## Repository and exact branch
 - Repository: `wholesalebridgeowner/sunnypilot`
@@ -97,3 +100,30 @@ Next non-SSH tasks: execute the *pinned* `investigate_route.py` against private 
 
 ## Additional parallel analysis branch (do not confuse with SSH work)
 GitHub draft [PR #2](https://github.com/wholesalebridgeowner/sunnypilot/pull/2), branch `ram1500-pinned-comfort-20261117`, is based on Claude's `claude/ram1500-review-2026-11-17` branch. It extends the **pinned 1f7233cb decoder** with read-only source-provenance-aware following-gap, cruise acceleration and lane-change measurements, the `investigate_comfort.py` CLI and fixture tests. The push-triggered GitHub fixture CI passed at `da264b082254c482029c8c2898fbdb954a20924a`. No vehicle or safety controls changed. This PR is intentionally separate to avoid overwriting either Claude's independent review code or this branch's passive device logger. It can be reviewed/merged after the schema and command-line output are validated on local private Saturday logs.
+
+
+## Nov 19: continuous Railway log review (ChatGPT handoff)
+
+**Owner request:** Move beyond daily batch analysis. Search for new uploads around the clock; analyze once the upload stops changing. Iterate on measured vehicle comfort and lane-change behaviour, with future code/config candidates reviewed and tracked against logs. This section is intended for the user's local Claude session, not a claim Claude has read it yet.
+
+### Existing infrastructure (verified)
+- Railway project: `ram-drive-log-bridge` (project ID `db5575cb-6c02-403c-a310-b93be2cb9caf`), production environment ID `86f4c5d7-baa6-496a-bc41-7b49f8579d5b`.
+- Existing `comma-log-sync` service ID `a58c9b55-23d3-4e97-a1af-9efd018e7a85` runs `*/5 * * * *` and uses the paired Comma API and the private S3 bucket for Q-/R-log collection. It is not a direct device shell.
+- New, independent Railway `ram-scheduled-route-review` service ID `f73462ee-9b4c-4b0c-a785-ddf39ea70a51` has source repo `wholesalebridgeowner/sunnypilot`, branch `ram1500-auto-review-20261119`, root `/ram1500-development`, Dockerfile `Dockerfile.auto-review`, and cron `*/5 * * * *` (every five minutes, 24/7). It references the collector's S3 secrets by Railway variable references. Do not copy tokens into GitHub or reports.
+
+### Code and tests for review
+- **Draft PR #31:** https://github.com/wholesalebridgeowner/sunnypilot/pull/31, branch `ram1500-auto-review-20261119`, based on this diagnostics branch. Separate from Claude's independent review branch and earlier PRs.
+- `ram1500-development/auto_review.py`: stream-based read-only aggregate route metrics for lane-change starting windows, steering-rate distributions, saturation event episodes, observed longitudinal jerk, conditional headway and source/control provenance. `compare()` reports observational deltas, not automatically validated improvements.
+- `ram1500-development/auto_review_job.py`: private-bucket route discovery, one new eligible Q-log route per run, contiguous-from-zero check, 30-minute quiet period (the initial six-hour delay was reduced on Nov 19), SHA-based idempotency, separate private per-route JSON reports and `automated-ram-reviews/v1/latest.json` summary. A quiet period is a heuristic, not proof the route has completed; later uploads yield a new fingerprint.
+- `ram1500-development/Dockerfile.auto-review` pins cereal schema to the **actual Comma drive build** `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`; the original diagnostics Dockerfile remains unchanged.
+- `ram1500-development/test_auto_review.py` and `.github/workflows/ram-auto-review-tests.yml`: offline fixture CI. Initial run caught a one-sample percentile bug (fixed in commit `9d0a73c`); subsequent offline + PR tests passed. New commits `6a5d641` (30-minute quiet threshold) and `9406572` (updated quiet-threshold tests) require **checking current-head CI and actual Railway runtime** rather than assuming the earlier passing tests cover the new code.
+
+### Current limitations and next steps for Claude
+1. Confirm latest PR #31 GitHub Actions result and Railway deployment result; inspect logs for `RAM_AUTO_REVIEW` and verify at least one real, private route analysis. A successful Docker build alone is not proof of a completed review. If a cron job has not executed yet, distinguish 'deployed' from 'processed route'.
+2. Inspect the quiet/contiguity gate; distinguish partial/new uploads from independent, authoritative route completion. Do not equate a contiguous prefix with final completeness.
+3. Validate the serial log reader with actual pinned-format events and all supported enum values, without publishing raw route keys, VIN, coordinates, or credentials. Validate memory/cost and absence of duplicate counting.
+4. Compare output against existing pinned-schema Claude `ramtools` investigations, keep separate from alternate drive-build schemas. Do not merge or overwrite independent work without review.
+5. This branch does **not** install code or settings on the Comma, send vehicle commands, or implement a verified wide-area device read/write tunnel. Separately, an **uninstalled, un-deployed** preliminary diagnostic relay server was committed at `ram1500-outbound-bridge-20261119:ram1500-development/remote-bridge/server.py` (commit `8f65984c`). It requires its own authenticated Comma-initiated agent, tests, and deployment plan before any hardware interaction.
+6. Future workflow: uploaded route → private metrics/baseline analysis → review/simulation → propose small, explicitly versioned candidate → after engineering validation, test on a parked vehicle through an authenticated path → compare subsequent routes. No automatic vehicle controller modifications are part of this review service.
+
+The user should not need to reconnect a phone to the Comma's Wi-Fi. Its connection to the phone hotspot may be interrupted when parked; existing uploaded logs remain available to Railway and later uploads should resume when it reconnects.
