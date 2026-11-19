@@ -28,8 +28,8 @@ def select_complete_route(objects,prefix,selected=None):
     if re.fullmatch(r"[0-9a-f]{8}",prefix) is None:
         raise ValueError("invalid route selector")
     if selected is not None:
-        if not isinstance(selected,tuple) or not 1<=len(selected)<=8 or any(type(n) is not int or n<0 or n>=MAX_SEGMENTS for n in selected) or tuple(range(selected[0],selected[-1]+1))!=selected:
-            raise ValueError("selected route window must have 1..8 consecutive segments")
+        if not isinstance(selected,tuple) or not 1<=len(selected)<=24 or any(type(n) is not int or n<0 or n>=MAX_SEGMENTS for n in selected) or tuple(range(selected[0],selected[-1]+1))!=selected:
+            raise ValueError("selected route window must have 1..24 consecutive segments")
     routes=defaultdict(dict)
     for obj in objects:
         key=obj.get("Key","")
@@ -111,7 +111,7 @@ def main():
     selected=None
     if e.get("RAM_PARTIAL_SEGMENTS"):
         raw=e["RAM_PARTIAL_SEGMENTS"]
-        if not re.fullmatch(r"[0-9]+(?:,[0-9]+){0,7}",raw):
+        if not re.fullmatch(r"[0-9]+(?:,[0-9]+){0,23}",raw):
             raise ValueError("invalid private segment selection")
         selected=tuple(int(v) for v in raw.split(","))
     STAGE="schema"
