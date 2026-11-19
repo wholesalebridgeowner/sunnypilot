@@ -96,6 +96,16 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
     if any(r.get("valid") is not True for r in selected):
       phase_counts[name]["invalidCarState"] += 1
       return
+    # A model phase with invalid/unknown vehicle CAN or EPS steering faults
+    # is not a verified comfort sample, even when steering-rate data exists.
+    # Require the exact booleans (not truthy integers or absent fields).
+    if any(r.get("canValid") is not True for r in selected):
+      phase_counts[name]["invalidOrUnknownCan"] += 1
+      return
+    if any(r.get("steerFaultTemporary") is not False or
+           r.get("steerFaultPermanent") is not False for r in selected):
+      phase_counts[name]["epsFaultOrUnknown"] += 1
+      return
     if any(r.get("steeringPressed") is not False for r in selected):
       phase_counts[name]["driverOverrideOrUnknown"] += 1
       return
@@ -219,7 +229,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "laneChangeStarting is a model entry/crossing-phase proxy, not evidence of an actual lane boundary crossing.",
       "laneChangeFinishing is a model recenter-phase proxy, not proof of settled vehicle position.",
       "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
-      "Only complete, same-segment continuously sampled driver-not-steering windows enter comfort percentiles.",
+      "Only complete, same-segment, healthy-CAN, EPS-fault-free and driver-not-steering windows enter comfort percentiles.",
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
       "After model gaps, invalid records or segment changes, a valid off/preLaneChange observation must anchor new phase entries.",
