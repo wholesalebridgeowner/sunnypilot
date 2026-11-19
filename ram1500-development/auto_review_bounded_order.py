@@ -43,6 +43,10 @@ def source_pinned_bounded_messages(paths, reader, counters):
     last_emitted = None
     for path in paths:
         max_seen = None
+        # Tracks whether this segment has already emitted an observation, so
+        # the failure category can distinguish a boundary from an in-segment
+        # ordering violation without recording any timestamps or identifiers.
+        segment_last_emitted = None
         pending = []
         headers = 0
         sequence = 0
@@ -75,8 +79,10 @@ def source_pinned_bounded_messages(paths, reader, counters):
             while pending and pending[0][0] <= cutoff:
                 stamped, _, output = heapq.heappop(pending)
                 if last_emitted is not None and stamped < last_emitted:
-                    raise OrderingTrialError("cross-segment-or-watermark-regression")
-                last_emitted = stamped
+                    raise OrderingTrialError(
+                        "cross-segment-clock-regression" if segment_last_emitted is None
+                        else "emitted-watermark-regression")
+                last_emitted = segment_last_emitted = stamped
                 yield output
         if not headers:
             raise OrderingTrialError("missing-segment-source-header")
@@ -85,7 +91,9 @@ def source_pinned_bounded_messages(paths, reader, counters):
         while pending:
             stamped, _, output = heapq.heappop(pending)
             if last_emitted is not None and stamped < last_emitted:
-                raise OrderingTrialError("cross-segment-or-watermark-regression")
-            last_emitted = stamped
+                raise OrderingTrialError(
+                    "cross-segment-clock-regression" if segment_last_emitted is None
+                    else "emitted-watermark-regression")
+            last_emitted = segment_last_emitted = stamped
             yield output
         counters["verifiedSegments"] += 1
