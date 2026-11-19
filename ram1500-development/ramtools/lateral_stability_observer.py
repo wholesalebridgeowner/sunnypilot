@@ -76,12 +76,14 @@ def analyze_segment(state,controls,curvature,outputs):
             reason=None
         if reason:
             counts[reason]+=1
+            times.append(None)  # An invalid sample separates runs even when timestamps are close.
             last=None
             streak_sign=0
             streak_start=None
             strong_last_sign=0
             continue
         counts["eligibleSamples"]+=1
+        times.append(t)
         rates.append(abs(rate))
         if last is not None:
             dt=t-last
@@ -107,12 +109,42 @@ def analyze_segment(state,controls,curvature,outputs):
             if strong_last_sign and sign==-strong_last_sign:
                 reversals+=1
             strong_last_sign=sign
+    # Count *usable contiguous exposures*, not just summed accepted inter-sample dt.
+    # A zero-reversal result from fragmented subsecond windows cannot constrain
+    # lane-centering oscillation; rejected observations must split runs.
+    runs_ns=[]
+    run_start=run_last=None
+    for stamp in times:
+        if stamp is None:
+            if run_start is not None:
+                runs_ns.append(run_last-run_start)
+            run_start=run_last=None
+        elif run_last is None:
+            run_start=run_last=stamp
+        elif 0<stamp-run_last<=MAX_DT_NS:
+            run_last=stamp
+        else:
+            runs_ns.append(run_last-run_start)
+            run_start=run_last=stamp
+    if run_start is not None:
+        runs_ns.append(run_last-run_start)
+    runs_05=sum(d>=500_000_000 for d in runs_ns)
+    runs_1=sum(d>=1_000_000_000 for d in runs_ns)
+    runs_2=sum(d>=2_000_000_000 for d in runs_ns)
+    seconds_2=sum(d for d in runs_ns if d>=2_000_000_000)/1e9
     ordered=sorted(rates)
     idx=int((len(ordered)-1)*0.95) if ordered else 0
     return {
       "eligibleSamples":counts["eligibleSamples"],
       "eligibleContinuousSeconds":round(elapsed_ns/1e9,3),
       "stableSignReversals":reversals,
+      "contiguousEligibleRuns":len(runs_ns),
+      "runsAtLeastHalfSecond":runs_05,
+      "runsAtLeastOneSecond":runs_1,
+      "runsAtLeastTwoSeconds":runs_2,
+      "longestEligibleRunSeconds":round(max(runs_ns,default=0)/1e9,3),
+      "exposureSecondsInRunsAtLeastTwoSeconds":round(seconds_2,3),
+      "sustainedReversalObservability":"insufficient_contiguous_exposure" if runs_2==0 else "limited_proxy_only",
       "reversalsPerMinuteProxy":round(reversals/(elapsed_ns/60e9),2) if elapsed_ns>0 else None,
       "p95AbsSteeringWheelRateDegPerSec":round(ordered[idx],2) if ordered else None,
       "rejections":{k:v for k,v in counts.items() if k!="eligibleSamples"},
@@ -120,6 +152,7 @@ def analyze_segment(state,controls,curvature,outputs):
         "Steering-wheel direction changes are NOT proven lane-center ping-pong or road safety performance.",
         "Curvature is the controller desired estimate; actual lane boundary tracking is unobserved.",
         "Driver torque and EPS limiting filters may exclude valid behavior; report coverage.",
+        "Short fragmented eligible runs may be too short for sustained sign-reversal detection; assess longest run and >=2s exposure.",
         "No tuning value, physical actuator latency estimate or on-device control change is implied.",
       ]
     }
@@ -132,6 +165,10 @@ def combine(summaries):
         result["eligibleSamples"]+=r["eligibleSamples"]
         result["eligibleContinuousMillis"]+=round(r["eligibleContinuousSeconds"]*1000)
         result["stableSignReversals"]+=r["stableSignReversals"]
+        for key in ("contiguousEligibleRuns","runsAtLeastHalfSecond","runsAtLeastOneSecond","runsAtLeastTwoSeconds"):
+            result[key]+=r[key]
+        result["exposureMillisInRunsAtLeastTwoSeconds"]+=round(r["exposureSecondsInRunsAtLeastTwoSeconds"]*1000)
+        result["longestEligibleRunMillis"]=max(result["longestEligibleRunMillis"],round(r["longestEligibleRunSeconds"]*1000))
         rejects.update(r["rejections"])
     seconds=result["eligibleContinuousMillis"]/1000
     return {"status":"steering_reversal_proxy_observational_only",
@@ -139,11 +176,19 @@ def combine(summaries):
             "eligibleSamples":result["eligibleSamples"],
             "eligibleContinuousSeconds":round(seconds,3),
             "stableSignReversals":result["stableSignReversals"],
+            "contiguousEligibleRuns":result["contiguousEligibleRuns"],
+            "runsAtLeastHalfSecond":result["runsAtLeastHalfSecond"],
+            "runsAtLeastOneSecond":result["runsAtLeastOneSecond"],
+            "runsAtLeastTwoSeconds":result["runsAtLeastTwoSeconds"],
+            "longestEligibleRunSeconds":round(result["longestEligibleRunMillis"]/1000,3),
+            "exposureSecondsInRunsAtLeastTwoSeconds":round(result["exposureMillisInRunsAtLeastTwoSeconds"]/1000,3),
+            "sustainedReversalObservability":"insufficient_contiguous_exposure" if result["runsAtLeastTwoSeconds"]==0 else "limited_proxy_only",
             "reversalsPerMinuteProxy":round(result["stableSignReversals"]/(seconds/60),2) if seconds else None,
             "rejections":dict(rejects),
             "noVehicleWrite":True,
             "limitations":[
               "Metric cannot determine steering calibration optimum, physical lane-center error or true ping-pong.",
               "Summed valid time excludes invalid/driver-override and torque-limited data, not complete driving exposure.",
+              "Eligible seconds split across short runs may be insufficient to assess sustained steering reversals.",
               "No parameter release without independent held-out routes, stability/override safety checks and owner approval.",
             ]}
