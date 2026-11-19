@@ -45,7 +45,7 @@ def test_incomplete_ambiguous_or_invalid_objects_fail_closed(objects, segments):
 
 
 @pytest.mark.parametrize("value", [
-    "", "29,", "29,29", "-1", "29,30,31,32,33", "1001", "29, 30",
+    "", "29,", "29,29", "-1", ",".join(map(str, range(21))), "1001", "29, 30",
     "1;print(secret)", "00x", "None",
 ])
 def test_segment_selector_rejects_unbounded_or_ambiguous(value):
