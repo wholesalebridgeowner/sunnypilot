@@ -11,6 +11,8 @@ from collections import Counter, defaultdict
 from math import isfinite
 from statistics import median
 
+from .carstate_timestamp_integrity import canonical_car_states
+
 NS = 1_000_000_000
 LABELS = ("radar_flagged_lead", "model_flagged_lead", "lead_source_unspecified",
           "no_confirmed_lead", "lead_unavailable")
@@ -100,8 +102,7 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
     if (type(min_episode_samples) is not int or not 3 <= min_episode_samples <= 100000 or
             type(min_smooth_samples) is not int or not 2 <= min_smooth_samples <= 10000):
         raise ValueError("sample thresholds out of bounds")
-    states = sorted((r for r in records if r.get("service") == "carState"
-                     and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
+    states, carstate_timing = canonical_car_states(records)
     radar = sorted((r for r in records if r.get("service") == "radarState"
                     and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
     # Index within segments before as-of joins: cross-segment radar reuse can
@@ -215,6 +216,7 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
         "status": "observed_longitudinal_not_throttle_or_acc_target",
         "source": "pinned_log_carState.aEgo_and_observational_radarState",
         "quality": {"carStateRows": len(states), "radarStateRows": len(radar),
+                    **carstate_timing,
                     "unscopedRadarRows": unscoped_radar_rows,
                     "repeatedRadarTimestampRows": repeated_radar_rows,
                     "ambiguousRadarTimestampGroups": ambiguous_radar_timestamps,
@@ -245,6 +247,7 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             "A qualifying episode is one correlated time interval, not an independent experiment or validated control target.",
             "Radar observations must match the carState segment. An absent, stale or unscoped radar sample is unavailable.",
             "Equal-time conflicting radar evidence is unavailable regardless of record order; exact duplicates are coalesced.",
+            "Identical carState timestamp duplicates coalesce; conflicting states become invalid barriers, never healthy source data.",
             "Callers must supply a single recorded route; segment numbers are only unique within one route.",
             "No per-sample timestamps, segment identities, VIN, GPS or raw CAN are exported.",
         ],
