@@ -44,9 +44,11 @@ def summarize_segment(carstates,controls,selfdrives,das3):
     controls=sorted(controls,key=lambda x:x[0])
     selfdrives=sorted(selfdrives,key=lambda x:x[0])
     das3=sorted(das3,key=lambda x:x[0])
-    def asof(seq,t):
+    indexes={name:(rows,[r[0] for r in rows]) for name,rows in (
+      ("control",controls),("selfdrive",selfdrives),("das3",das3))}
+    def asof(name,t):
         # Each call is local to one source segment; never reuse a previous one.
-        times=[r[0] for r in seq]
+        seq,times=indexes[name]
         i=bisect_right(times,t)-1
         if i<0 or not 0<=t-times[i]<=MAX_AGE_NS:
             return None
@@ -77,17 +79,17 @@ def summarize_segment(carstates,controls,selfdrives,das3):
         if _bool(canvalid) is True:n["canValidTrue"]+=1
         if _bool(valid) is True:n["carStateEnvelopeValidTrue"]+=1
         if _finite(speed) and speed>=14.5:n["speedAtLeast32Mph"]+=1
-        cc=asof(controls,t)
+        cc=asof("control",t)
         if cc is not None:
             n["carControlFresh"]+=1
             if _bool(cc[1]) is True:n["latActiveTrue"]+=1
             if _bool(cc[1]) is True and _bool(enabled) is False:
                 n["latActiveButCruiseReportedOff"]+=1
-        sd=asof(selfdrives,t)
+        sd=asof("selfdrive",t)
         if sd is not None:
             n["selfdriveFresh"]+=1
             if _bool(sd[1]) is True:n["selfdriveEnabledTrue"]+=1
-        raw=asof(das3,t)
+        raw=asof("das3",t)
         if raw is None:
             n["rawACCStatusUnavailable"]+=1
         else:
