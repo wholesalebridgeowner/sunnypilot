@@ -199,3 +199,33 @@ def test_same_time_relative_velocity_disagreement_is_not_silently_accepted():
     stats = analyze([*baseline, inconsistent])
     assert stats["quality"]["ambiguousRadarTimestampGroups"] == 1
     assert stats["quality"]["qualifiedEpisodes"] == 0
+
+
+
+def test_identical_equal_time_carstate_coalesces_without_inflating_motion():
+    source = _lead_observed_drive()
+    original = next(r for r in source if r["service"] == "carState"
+                    and r["t"] == round(1.5*N))
+    expected = analyze(source)
+    result = analyze([*source, original.copy()])
+    assert result["byObservedLeadContext"] == expected["byObservedLeadContext"]
+    assert result["quality"]["qualifiedEpisodes"] == 1
+    assert result["quality"]["repeatedCarStateTimestampRows"] == 1
+    assert result["quality"]["ambiguousCarStateTimestampGroups"] == 0
+
+
+def test_conflicting_equal_time_carstate_censors_both_insert_orders():
+    source = _lead_observed_drive()
+    original = next(r for r in source if r["service"] == "carState"
+                    and r["t"] == round(1.5*N))
+    for field, different in (("cruiseState.enabled", False),
+                             ("aEgo", 100.), ("canValid", False),
+                             ("segment", 31), ("gasPressed", True)):
+        contradiction = {**original, field: different}
+        for data in ([*source, contradiction], [contradiction, *source]):
+            result = analyze(data)
+            assert result["quality"]["repeatedCarStateTimestampRows"] == 1
+            assert result["quality"]["ambiguousCarStateTimestampGroups"] == 1
+            assert result["quality"]["qualifiedEpisodes"] == 0
+            assert result["quality"]["excludedRowsByReason"]["invalid_vehicle_or_can"] == 1
+            assert result["byObservedLeadContext"]["model_flagged_lead"]["episodeCount"] == 0
