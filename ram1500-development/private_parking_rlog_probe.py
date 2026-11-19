@@ -21,7 +21,7 @@ TARGET_SEGMENTS = (11, 12)
 ROUTE_PREFIX = "000003dc"
 BIN_SECONDS = 5
 # The owner reported factory park assist activation near route second 720,
-# based on a route beginning approximately 11:20 UTC. These ranges are
+# estimated from the route's start time and the owner's report. These ranges are
 # candidates, not verified OEM operating-mode labels. The candidate window
 # stops before observed speeds rise above ~5 mph, when the 2021 factory
 # ParkSense active steering guidance ordinarily deactivates.
