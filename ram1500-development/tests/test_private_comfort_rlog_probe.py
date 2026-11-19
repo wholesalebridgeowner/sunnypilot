@@ -153,7 +153,7 @@ def test_following_validity_counts_only_emit_known_aggregate_reason_keys():
     assert secret not in json.dumps(out)
     assert set(out["following"]["validityRejections"]) == {
         "invalidCarStateOrCan", "invalidRadarMessage",
-        "ambiguousRadarTimestamp"}
+        "ambiguousRadarTimestamp", "ambiguousCarStateTimestamp"}
 
 
 # Synthetic, identifier-free tests for exact per-segment source provenance.
