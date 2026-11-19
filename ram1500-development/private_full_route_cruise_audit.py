@@ -19,7 +19,7 @@ from ramtools.cruise_state_audit import (
 from ramtools.schema import load_log_schema, verify_schema_dir
 from ramtools.logio import read_log_bytes
 
-KEY_RE=re.compile(r"^logs/[^/]+\\|([0-9a-f]{8}--[0-9a-f]{10})/([0-9]+)/rlog\\.zst$")
+KEY_RE=re.compile(r"^logs/[^/]+[|]([0-9a-f]{8}--[0-9a-f]{10})/([0-9]+)/rlog[.]zst$")
 MAX_SEGMENTS=70
 MAX_BYTES=30_000_000
 STAGE="configuration"
