@@ -7,8 +7,8 @@ import json
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
-from auto_review_job import (group_routes, route_key, clock_audit_key, MAX_COMPRESSED,
-                             pinned_qlog_messages, SourcePinError, run, PREFIX)
+from auto_review_job import (group_routes, route_key, clock_audit_key, anonymous_clock_counts,
+                             MAX_COMPRESSED, pinned_qlog_messages, SourcePinError, run, PREFIX)
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 
 T = datetime(2026, 11, 19, 15, 0, tzinfo=timezone.utc)
@@ -243,6 +243,19 @@ class AnonymousClockAuditTests(unittest.TestCase):
         self.assertNotIn("route", json.dumps(result).lower())
         self.assertNotIn("900", json.dumps(result))
 
+    def test_console_allowlist_cannot_emit_private_payload(self):
+        unsafe = {"status": "clock_order_audited", "route": "SECRET",
+                  "driverNote": "SECRET", "routeHash": "SECRET",
+                  "segmentsVerified": 2, "observations": 50,
+                  "inversionsOverHalfSecond": 1,
+                  "inversionSizeBands": {"underTwoSeconds": 1,
+                                         "unknown": "SECRET"}}
+        safe = anonymous_clock_counts(unsafe)
+        self.assertEqual(safe["inversionsOverHalfSecond"], 1)
+        self.assertNotIn("SECRET", json.dumps(safe))
+        self.assertNotIn("route", json.dumps(safe).lower())
+        self.assertIsNone(anonymous_clock_counts({"status": "quarantined"}))
+
     def test_clock_audit_source_pin_fails_closed(self):
         def read(_):
             yield source_header(commit="unverified")
@@ -263,7 +276,7 @@ class AnonymousClockAuditTests(unittest.TestCase):
         second = run(s3, "fake", T, reversed_clock)
         self.assertEqual(second["status"], "clock_diagnostic_saved")
         self.assertEqual(second["diagnostic"], "clock_order_audited")
-        self.assertEqual(second["inversions"], 1)
+        self.assertEqual(second["anonymousClockCounts"]["inversionsOverHalfSecond"], 1)
         self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
         self.assertEqual(s3.reports[clock_audit_key(cand)]["inversionsOverHalfSecond"], 1)
         self.assertNotIn("secret-", json.dumps(s3.reports))
