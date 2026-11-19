@@ -81,6 +81,32 @@ def put_private_json(s3, bucket, key, payload):
     s3.put_object(Bucket=bucket, Key=key, Body=(json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n").encode(),
                   ContentType="application/json")
 
+class SourcePinError(ValueError):
+    """A selected segment does not prove the full installed-build source."""
+
+
+def pinned_qlog_messages(paths, reader):
+    """Discard replayed old-clock initData AFTER exact per-segment verification.
+
+    Q-log initData headers can repeat at segment boundaries with timestamps
+    from an older process. They are metadata, not route motion observations.
+    Other non-monotonic traffic is never reordered or silently discarded.
+    """
+    for path in paths:
+        headers = 0
+        for message in reader(path):
+            kind = str(message.which())
+            if kind == "initData":
+                recorded = getattr(message.initData, "gitCommit", None)
+                if type(recorded) is not str or recorded != SCHEMA_COMMIT:
+                    raise SourcePinError("recorded source is missing or does not match")
+                headers += 1
+                continue
+            yield message
+        if not headers:
+            raise SourcePinError("segment has no exact source header")
+
+
 def run(s3, bucket, now, reader):
     pages = s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="logs/")
     objects = (obj for page in pages for obj in page.get("Contents", ()))
@@ -101,13 +127,30 @@ def run(s3, bucket, now, reader):
             if not (0 < output.stat().st_size <= MAX_COMPRESSED):
                 raise ValueError("Invalid compressed input size")
             paths.append(output)
-        def messages():
-            for p in paths:
-                yield from reader(p)
-        metrics = summarize_log_messages(messages())
+        try:
+            metrics = summarize_log_messages(pinned_qlog_messages(paths, reader))
+        except Exception as exc:
+            # Persist a private, source-scoped tombstone so one invalid historical
+            # route cannot fail every five-minute cron and starve older routes.
+            # Neither the exception message nor private file identifiers escape.
+            reason = ("source_unverified" if isinstance(exc, SourcePinError)
+                      else "decode_or_order_invalid")
+            put_private_json(s3, bucket, route_key(selected), {
+                "reportVersion": 1, "status": "quarantined",
+                "reason": reason, "schemaCommit": SCHEMA_COMMIT,
+                "sourcePinRequiredPerSegment": True,
+                "routeHash": selected["hash"],
+                "inputFingerprint": selected["fingerprint"],
+                "segments": len(paths),
+            })
+            return {"status": "route_quarantined", "reason": reason,
+                    "segments": len(paths)}
     latest_key = PREFIX + "latest.json"
     latest = read_json_or_none(s3, bucket, latest_key)
-    prior = latest["metrics"] if latest and latest.get("metrics") else None
+    # A later upload can change a route's fingerprint; never use that
+    # same route's older partial report as an independent comparator.
+    prior = (latest["metrics"] if latest and latest.get("metrics")
+             and latest.get("routeHash") != selected["hash"] else None)
     is_newest = not latest or selected["updated"].isoformat() >= latest.get("routeUpdatedAt", "")
     delta = compare(metrics, prior if is_newest else None)
     report = {
@@ -117,6 +160,7 @@ def run(s3, bucket, now, reader):
         "analyzedAt": now.isoformat(),
         "routeUpdatedAt": selected["updated"].isoformat(),
         "segments": len(selected["items"]),
+        "sourceVerifiedSegments": len(paths),
         "completeness": "contiguous-from-zero-after-30-minutes-quiet; final-route-count-unverified",
         "metrics": metrics, "comparison": delta,
         "recommendation": "Observational review only. No automatic steering or braking code deployment.",
