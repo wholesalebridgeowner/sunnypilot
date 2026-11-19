@@ -91,9 +91,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(found),4)
         with self.assertRaisesRegex(ValueError,"missing contiguous"):
             mod.select_complete_route([obj(27),obj(28),obj(29),obj(30)],"000003dd")
+        assert len(mod.select_complete_route([obj(i) for i in range(27,47)],"000003dd",selected=tuple(range(27,47))))==20
         with self.assertRaisesRegex(ValueError,"missing contiguous"):
             mod.select_complete_route([obj(27),obj(29),obj(30)],"000003dd",selected=(27,28,29,30))
-        for bad in ((27,29),(30,29),(),(True,),(0,1,2,3,4,5,6,7,8)):
+        for bad in ((27,29),(30,29),(),(True,),tuple(range(25))):
             with self.assertRaises(ValueError):
                 mod.select_complete_route([obj(27)],"000003dd",selected=bad)
 
