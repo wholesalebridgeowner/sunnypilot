@@ -10,6 +10,7 @@ import math
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2"
 LANE_QUALITY = "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3"
+UNSEGMENTED_QUALITY = "segment_boundaries_unverified_not_for_comparison"
 
 def get(o, *names):
     for name in names:
@@ -265,6 +266,7 @@ class RouteMetrics:
             "messageCounts": dict(self.counts),
             "coverage": {
                 "segmentBoundariesSeen": self.segments_seen,
+                "segmentIsolatedMetrics": self.segments_seen > 0,
                 "carStateSamples": self.counts["carState"],
                 "controlsStateSamples": self.counts["controlsState"],
                 "radarStateSamples": self.counts["radarState"],
@@ -279,7 +281,7 @@ class RouteMetrics:
                 "caution": "Factory ACC may control braking/throttle; model plan does not prove actuation",
             },
             "laneChange": {
-                "qualification": LANE_QUALITY,
+                "qualification": LANE_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
                 "completeStartingWindows": len(durations),
                 "medianStartingSeconds": percentile(durations, .5),
                 "p90StartingSeconds": percentile(durations, .9),
@@ -288,7 +290,7 @@ class RouteMetrics:
                 "caution": "Model start-to-finish only; sampled Comma lateral-active and CAN/EPS health required. Physical lane crossing and full-resolution comfort are unverified.",
             },
             "leadHeadway": {
-                "qualification": FACTORY_ACC_QUALITY,
+                "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
                 "eligibleCruiseSamples": len(qualified_headway),
                 "medianSeconds": percentile(qualified_headway, .5),
                 "p10Seconds": percentile(qualified_headway, .1),
@@ -296,7 +298,7 @@ class RouteMetrics:
                 "caution": "Sampled observed headway to model-flagged lead during factory ACC; not OEM selected gap or confirmed radar authority",
             },
             "factoryAccObservedMotion": {
-                "qualification": FACTORY_ACC_QUALITY,
+                "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
                 "eligibleJerkSamples": len(qualified_acc_jerk),
                 "p90AbsObservedJerkMps3": percentile(qualified_acc_jerk, .9),
                 "caution": "Sampled vehicle aEgo derivative under factory ACC conditions, not OEM throttle/brake command; no filtering, no causal smoothness claim",
