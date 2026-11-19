@@ -34,6 +34,8 @@ class AnalysisTests(unittest.TestCase):
         a.ingest("onroadEvents", 1.4, ["steerSaturated"])
         a.ingest("drivingModelData", 2.5, {"meta": {"laneChangeState": "laneChangeFinishing",
                                                       "laneChangeDirection": "left"}})
+        # A new alert episode requires an observed published absence.
+        a.ingest("onroadEvents", 2.6, [])
         a.ingest("onroadEvents", 3.1, ["steerSaturated"])
         result = a.report()
         self.assertEqual(result["leadHeadway"]["medianSeconds"], 1.6)
