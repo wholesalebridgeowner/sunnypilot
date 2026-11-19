@@ -655,5 +655,110 @@ class FactoryACCDataQualityTests(unittest.TestCase):
         self.assertNotIn("leadHeadway.medianSeconds", compare(new, other)["metrics"])
 
 
+class SegmentIsolationTests(unittest.TestCase):
+    """No cross-file attribution even at timestamps closer than join limits."""
+
+    paths = [Path("0/qlog.zst"), Path("1/qlog.zst")]
+
+    @staticmethod
+    def factory_car(time, accel):
+        return FakeMessage("carState", time, {
+            "vEgo": 20, "aEgo": accel, "canValid": True,
+            "cruiseState": {"enabled": True},
+            "gasPressed": False, "brakePressed": False,
+            "steerFaultTemporary": False, "steerFaultPermanent": False,
+            "steeringPressed": False, "steeringRateDeg": 5.0})
+
+    @staticmethod
+    def params(time=9.9):
+        return FakeMessage("carParams", time, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True})
+
+    def test_cross_segment_radar_lead_cannot_borrow_prior_carstate(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header()
+            if seg == 0:
+                yield self.params()
+                yield self.factory_car(10.0, .2)
+            else:
+                yield FakeMessage("radarState", 10.05,
+                                  {"leadOne": {"status": True, "dRel": 30}})
+        legacy = summarize_log_messages(pinned_qlog_messages(self.paths, reader))
+        isolated = summarize_log_messages(
+            pinned_qlog_messages(self.paths, reader, emit_boundaries=True))
+        self.assertEqual(legacy["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.assertEqual(isolated["leadHeadway"]["eligibleCruiseSamples"], 0)
+        self.assertEqual(isolated["coverage"]["segmentBoundariesSeen"], 2)
+        self.assertNotIn("0/qlog.zst", json.dumps(isolated))
+
+    def test_cross_segment_acceleration_derivative_resets(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header()
+            if seg == 0:
+                yield self.params()
+                yield self.factory_car(10.0, .1)
+            else:
+                yield self.factory_car(10.1, .5)
+        legacy = summarize_log_messages(pinned_qlog_messages(self.paths, reader))
+        isolated = summarize_log_messages(
+            pinned_qlog_messages(self.paths, reader, emit_boundaries=True))
+        self.assertEqual(legacy["factoryAccObservedMotion"]["eligibleJerkSamples"], 1)
+        self.assertEqual(isolated["factoryAccObservedMotion"]["eligibleJerkSamples"], 0)
+        self.assertEqual(isolated["comfort"]["observedAccelerationJerkSamples"], 0)
+
+    def test_cross_segment_lane_model_transition_is_not_a_maneuver(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header()
+            if seg == 0:
+                yield self.factory_car(10, .1)
+                yield FakeMessage("carControl", 10.01, {"latActive": True})
+                yield FakeMessage("drivingModelData", 10.02, {
+                    "meta": {"laneChangeState": "laneChangeStarting",
+                             "laneChangeDirection": "left"}})
+                yield self.factory_car(10.03, .1)
+            else:
+                yield self.factory_car(10.04, .1)
+                yield FakeMessage("carControl", 10.05, {"latActive": True})
+                yield FakeMessage("drivingModelData", 10.06, {
+                    "meta": {"laneChangeState": "laneChangeFinishing",
+                             "laneChangeDirection": "left"}})
+        legacy = summarize_log_messages(pinned_qlog_messages(self.paths, reader))
+        isolated = summarize_log_messages(
+            pinned_qlog_messages(self.paths, reader, emit_boundaries=True))
+        self.assertEqual(legacy["laneChange"]["completeStartingWindows"], 1)
+        self.assertEqual(isolated["laneChange"]["completeStartingWindows"], 0)
+        self.assertEqual(isolated["laneChange"]["rejectedModelWindows"],
+                         {"segment_boundary_incomplete": 1})
+
+    def test_bounded_replay_opt_in_resets_instead_of_mixing_segments(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header()
+            if seg == 0:
+                yield self.params()
+                yield self.factory_car(10, .1)
+            else:
+                yield FakeMessage("radarState", 10.02,
+                                  {"leadOne": {"status": True, "dRel": 32}})
+        counters = {}
+        report = summarize_log_messages(source_pinned_bounded_messages(
+            self.paths, reader, counters, emit_boundaries=True))
+        self.assertEqual(counters["verifiedSegments"], 2)
+        self.assertEqual(report["coverage"]["segmentBoundariesSeen"], 2)
+        self.assertEqual(report["leadHeadway"]["eligibleCruiseSamples"], 0)
+
+    def test_segment_reset_never_waives_clock_order(self):
+        def reader(path):
+            seg = int(Path(path).parent.name)
+            yield source_header()
+            yield self.factory_car(10 if seg == 0 else 9.0, .1)
+        with self.assertRaisesRegex(ValueError, "non-monotonic"):
+            summarize_log_messages(
+                pinned_qlog_messages(self.paths, reader, emit_boundaries=True))
+
+
 if __name__ == "__main__":
     unittest.main()
