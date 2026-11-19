@@ -176,7 +176,11 @@ def safe_trial_rejection_reason(exc):
         "invalid-event-clock": "invalid_clock",
         "non-finite-event-clock": "invalid_clock",
         "late-event-beyond-window": "lateness_exceeds_window",
+        # Keep the old combined token for interpretation of older fixtures;
+        # new runs distinguish two disjoint rejection origins, not vehicle faults.
         "cross-segment-or-watermark-regression": "event_clock_regression",
+        "cross-segment-clock-regression": "segment_boundary_regression",
+        "emitted-watermark-regression": "emitted_order_regression",
         "bounded-memory-ceiling": "bounded_memory_exceeded",
         "non-empty-counters": "internal_contract_invalid",
     }
