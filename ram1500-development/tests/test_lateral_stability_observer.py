@@ -107,7 +107,7 @@ def test_time_gap_splits_eligible_runs_even_without_rejected_samples():
     state,control,curve,output=route(reversing=False)
     shift=300_000_000
     def shifted(rows):
-        return [(t+(shift if i>=300 else 0), *row[1:])
+        return [(row[0]+(shift if i>=300 else 0), *row[1:])
                 for i,row in enumerate(rows)]
     out=analyze_segment(shifted(state),shifted(control),shifted(curve),shifted(output))
     assert out["eligibleSamples"]==600
