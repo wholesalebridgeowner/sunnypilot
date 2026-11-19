@@ -85,9 +85,9 @@ VINs, GPS or locations, device IDs, raw CAN data or log files.
 
 ## Ram owners: compare notes
 
-Comment on [PR #1](https://github.com/wholesalebridgeowner/sunnypilot/pull/1) with your model year, whether your
-truck has factory self-parking, and your power-steering (EPS) firmware part number if you know it. Please don't post
-your VIN, location or log files.
+[Open an issue](https://github.com/wholesalebridgeowner/sunnypilot/issues/new/choose) with your model year, whether
+your truck has factory self-parking, and your power-steering (EPS) firmware part number if you know it. Questions and
+corrections are welcome there too. Please don't post your VIN, location or log files.
 
 ## Safety
 

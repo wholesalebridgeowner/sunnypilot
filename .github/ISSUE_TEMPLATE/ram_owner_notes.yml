@@ -1,0 +1,55 @@
+name: Compare notes on your Ram 1500
+description: Share how your 5th-gen Ram 1500 behaves with sunnypilot or openpilot.
+title: "[Ram owner] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing. This project is research only; there is nothing to install.
+        **Please don't post your VIN, location, GPS traces, dongle ID or log files.**
+  - type: input
+    id: model-year
+    attributes:
+      label: Model year
+      placeholder: "2021"
+    validations:
+      required: true
+  - type: input
+    id: trim
+    attributes:
+      label: Trim (optional)
+      placeholder: "Big Horn, Laramie, Limited, ..."
+  - type: dropdown
+    id: self-parking
+    attributes:
+      label: Does your truck have factory self-parking (the truck steers itself into a parking space)?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: input
+    id: eps-firmware
+    attributes:
+      label: Power-steering (EPS) firmware part number (optional)
+      description: Only if you know it. It looks like 68xxxxxxAx.
+  - type: input
+    id: software
+    attributes:
+      label: Driving software and version (optional)
+      placeholder: "sunnypilot 0.10.1, openpilot 0.10, ..."
+  - type: textarea
+    id: observations
+    attributes:
+      label: What have you noticed?
+      description: For example steering in curves, following distance, lane changes, or the speed where steering stops.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I haven't included my VIN, location, dongle ID or log files.
+          required: true
