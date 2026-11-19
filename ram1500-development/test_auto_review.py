@@ -150,9 +150,10 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
 
     def test_comparison_has_no_unsupported_causal_claim(self):
-        current = {"laneChange": {"medianStartingSeconds": 2.4},
+        marker = "model_start_to_finish_fresh_active_healthy_qlog_v2"
+        current = {"laneChange": {"qualification": marker, "medianStartingSeconds": 2.4},
                    "steering": {"steerSaturatedEventEpisodes": 2}}
-        previous = {"laneChange": {"medianStartingSeconds": 3.1},
+        previous = {"laneChange": {"qualification": marker, "medianStartingSeconds": 3.1},
                     "steering": {"steerSaturatedEventEpisodes": 4}}
         delta = compare(current, previous)
         self.assertTrue(delta["baselineAvailable"])
