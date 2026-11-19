@@ -8,7 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
 from auto_review_job import (group_routes, route_key, clock_audit_key, bounded_trial_key,
-                             anonymous_clock_counts, MAX_COMPRESSED, pinned_qlog_messages,
+                             regression_origin_key, anonymous_clock_counts, MAX_COMPRESSED, pinned_qlog_messages,
                              SourcePinError, run, PREFIX, safe_trial_rejection_reason)
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
@@ -362,6 +362,45 @@ class BoundedObservationTrialTests(unittest.TestCase):
         self.assertEqual(s3.reports[route_key(candidate)]["status"], "quarantined")
         self.assertNotIn(PREFIX + "latest.json", s3.reports)
         self.assertNotIn("SECRET_", json.dumps(s3.reports))
+
+    def test_old_combined_regression_audit_is_private_and_immutable(self):
+        s3 = FixtureS3([obj("SENSITIVE_DEVICE_ROUTE", 0),
+                        obj("SENSITIVE_DEVICE_ROUTE", 1)])
+        candidate = group_routes(s3.objects, T)[0]
+        original = {"status": "trial_rejected", "reason": "event_clock_regression"}
+        s3.reports[route_key(candidate)] = {"status": "quarantined"}
+        s3.reports[clock_audit_key(candidate)] = {
+            "status": "clock_order_audited", "inversionsOverHalfSecond": 1}
+        s3.reports[bounded_trial_key(candidate)] = original.copy()
+        def reader(path):
+            yield source_header()
+            yield car_state(12 if Path(path).parent.name == "0" else 11.99)
+        result = run(s3, "private", T, reader)
+        self.assertEqual(result["status"], "regression_origin_saved")
+        self.assertEqual(result["reason"], "segment_boundary_regression")
+        diagnostic = s3.reports[regression_origin_key(candidate)]
+        self.assertEqual(diagnostic["status"], "diagnostic_only")
+        self.assertFalse(diagnostic["releaseAuthorized"])
+        self.assertEqual(s3.reports[bounded_trial_key(candidate)], original)
+        self.assertEqual(s3.reports[route_key(candidate)]["status"], "quarantined")
+        self.assertNotIn(PREFIX + "latest.json", s3.reports)
+        self.assertNotIn("SENSITIVE_DEVICE_ROUTE", json.dumps(s3.reports))
+        self.assertEqual(run(s3, "private", T, reader)["status"],
+                         "no_new_eligible_routes")
+
+    def test_origin_audit_does_not_echo_untrusted_decoder_errors(self):
+        s3 = FixtureS3([obj("SENSITIVE_DEVICE_ROUTE", 0)])
+        candidate = group_routes(s3.objects, T)[0]
+        s3.reports[route_key(candidate)] = {"status": "quarantined"}
+        s3.reports[bounded_trial_key(candidate)] = {
+            "status": "trial_rejected", "reason": "event_clock_regression"}
+        def reader(_):
+            yield source_header()
+            raise ValueError("SECRET_VIN_LOCATION_ERROR_SHOULD_NOT_BE_STORED")
+        result = run(s3, "private", T, reader)
+        self.assertEqual(result["reason"], "decode_or_metrics_invalid")
+        self.assertNotIn("SECRET_VIN", json.dumps(s3.reports))
+        self.assertNotIn(PREFIX + "latest.json", s3.reports)
 
     def test_rejects_source_mismatch_without_publishing_metrics(self):
         def reader(_):
