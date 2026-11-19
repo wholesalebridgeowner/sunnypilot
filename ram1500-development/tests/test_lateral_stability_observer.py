@@ -66,3 +66,74 @@ def test_combine_never_claims_a_validated_setting():
 def test_bad_input_raises():
     with pytest.raises(ValueError):
         analyze_segment([(0,True)],[],[],[])
+
+
+def test_contiguous_exposure_is_reported_separately_from_sample_count():
+    out=analyze_segment(*route(reversing=False))
+    assert out["contiguousEligibleRuns"]==1
+    assert out["runsAtLeastHalfSecond"]==1
+    assert out["runsAtLeastOneSecond"]==1
+    assert out["runsAtLeastTwoSeconds"]==1
+    assert out["longestEligibleRunSeconds"]==5.99
+    assert out["exposureSecondsInRunsAtLeastTwoSeconds"]==5.99
+    assert out["sustainedReversalObservability"]=="limited_proxy_only"
+
+
+def test_many_short_exposures_cannot_exclude_ping_pong():
+    # 24 separate 220ms runs: plenty of accepted samples but not a single
+    # two-second uninterrupted opportunity to observe sustained reversals.
+    overrides={i for i in range(600) if i%25>=22}
+    out=analyze_segment(*route(overrides=overrides))
+    assert out["eligibleSamples"]==528
+    assert out["eligibleContinuousSeconds"]>4.8
+    assert out["contiguousEligibleRuns"]==24
+    assert out["runsAtLeastHalfSecond"]==0
+    assert out["runsAtLeastTwoSeconds"]==0
+    assert out["longestEligibleRunSeconds"]==0.21
+    assert out["exposureSecondsInRunsAtLeastTwoSeconds"]==0
+    assert out["stableSignReversals"]==0
+    assert out["sustainedReversalObservability"]=="insufficient_contiguous_exposure"
+
+
+def test_single_bad_sample_splits_an_otherwise_contiguous_run():
+    out=analyze_segment(*route(reversing=False,overrides={300}))
+    assert out["contiguousEligibleRuns"]==2
+    assert out["runsAtLeastTwoSeconds"]==2
+    assert out["longestEligibleRunSeconds"]==2.99
+    assert out["eligibleContinuousSeconds"]==5.97
+
+
+def test_time_gap_splits_eligible_runs_even_without_rejected_samples():
+    state,control,curve,output=route(reversing=False)
+    shift=300_000_000
+    def shifted(rows):
+        return [(t+(shift if i>=300 else 0), *row[1:])
+                for i,row in enumerate(rows)]
+    out=analyze_segment(shifted(state),shifted(control),shifted(curve),shifted(output))
+    assert out["eligibleSamples"]==600
+    assert out["contiguousEligibleRuns"]==2
+    assert out["runsAtLeastTwoSeconds"]==2
+    assert out["eligibleContinuousSeconds"]==5.98
+
+
+def test_no_qualified_samples_have_no_exposure_windows():
+    state,cc,curve,output=route()
+    out=analyze_segment(state,[(7*NS,True)],curve,output)
+    assert out["contiguousEligibleRuns"]==0
+    assert out["longestEligibleRunSeconds"]==0
+    assert out["exposureSecondsInRunsAtLeastTwoSeconds"]==0
+    assert out["sustainedReversalObservability"]=="insufficient_contiguous_exposure"
+
+
+def test_combine_cannot_turn_two_short_runs_into_one_long_run():
+    # Summation must preserve segment boundaries: do not infer a long
+    # observed exposure from numerous short windows.
+    overrides={i for i in range(600) if i%25>=22}
+    short=analyze_segment(*route(overrides=overrides))
+    merged=combine([short,short])
+    assert merged["eligibleSamples"]==1056
+    assert merged["contiguousEligibleRuns"]==48
+    assert merged["runsAtLeastTwoSeconds"]==0
+    assert merged["exposureSecondsInRunsAtLeastTwoSeconds"]==0
+    assert merged["longestEligibleRunSeconds"]==0.21
+    assert merged["sustainedReversalObservability"]=="insufficient_contiguous_exposure"
