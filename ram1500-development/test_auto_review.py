@@ -58,12 +58,13 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("Observational", delta["interpretation"])
         self.assertFalse(compare(current, None)["baselineAvailable"])
 
-    def test_route_gate_requires_contiguous_segs_and_six_hours_quiet(self):
+    def test_route_gate_requires_contiguous_segs_and_30_minutes_quiet(self):
         route = "device|000003d8--abc"
         self.assertEqual(len(group_routes([obj(route, 0), obj(route, 1)], T)), 1)
         self.assertEqual(group_routes([obj(route, 0), obj(route, 2)], T), [])
         # Important: a fresh segment must not be discarded while earlier segments pass.
-        self.assertEqual(group_routes([obj(route, 0), obj(route, 1, hours_ago=1)], T), [])
+        self.assertEqual(group_routes([obj(route, 0), obj(route, 1, hours_ago=0.1)], T), [])
+        self.assertEqual(len(group_routes([obj(route, 0, hours_ago=0.75)], T)), 1)
         self.assertEqual(group_routes([obj(route, 0, size=MAX_COMPRESSED+1)], T), [])
         self.assertEqual(group_routes([obj(route, 0, size=0)], T), [])
         self.assertEqual(group_routes([obj(route, 0, hours_ago=400)], T), [])
