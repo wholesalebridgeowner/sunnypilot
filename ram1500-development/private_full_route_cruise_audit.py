@@ -24,9 +24,12 @@ MAX_SEGMENTS=70
 MAX_BYTES=30_000_000
 STAGE="configuration"
 
-def select_complete_route(objects,prefix):
+def select_complete_route(objects,prefix,selected=None):
     if re.fullmatch(r"[0-9a-f]{8}",prefix) is None:
         raise ValueError("invalid route selector")
+    if selected is not None:
+        if not isinstance(selected,tuple) or not 1<=len(selected)<=8 or any(type(n) is not int or n<0 or n>=MAX_SEGMENTS for n in selected) or tuple(range(selected[0],selected[-1]+1))!=selected:
+            raise ValueError("selected route window must have 1..8 consecutive segments")
     routes=defaultdict(dict)
     for obj in objects:
         key=obj.get("Key","")
@@ -36,6 +39,8 @@ def select_complete_route(objects,prefix):
         seg=int(m.group(2))
         if seg>=MAX_SEGMENTS:
             raise ValueError("too many route segments")
+        if selected is not None and seg not in selected:
+            continue
         size=obj.get("Size",None)
         if type(size) is not int or not 0<size<=MAX_BYTES:
             raise ValueError("invalid private log size")
@@ -45,7 +50,8 @@ def select_complete_route(objects,prefix):
     if len(routes)!=1:
         raise ValueError("missing or ambiguous target route")
     chosen=next(iter(routes.values()))
-    if not chosen or set(chosen)!=set(range(max(chosen)+1)):
+    required=set(range(max(chosen)+1)) if selected is None and chosen else set(selected or ())
+    if not chosen or set(chosen)!=required:
         raise ValueError("missing contiguous route Rlogs")
     return [chosen[i] for i in sorted(chosen)]
 
@@ -102,6 +108,12 @@ def main():
     if any(not e.get(x) for x in require):
         raise ValueError("missing private bucket source")
     prefix=e["RAM_ROUTE_PREFIX"]
+    selected=None
+    if e.get("RAM_PARTIAL_SEGMENTS"):
+        raw=e["RAM_PARTIAL_SEGMENTS"]
+        if not re.fullmatch(r"[0-9]+(?:,[0-9]+){0,7}",raw):
+            raise ValueError("invalid private segment selection")
+        selected=tuple(int(v) for v in raw.split(","))
     STAGE="schema"
     root=Path(e.get("RAM_SCHEMA_DIR","/opt/sunnypilot/cereal"))
     if any(x!="ok" for x in verify_schema_dir(root).values()):
@@ -114,7 +126,7 @@ def main():
                     config=Config(s3={"addressing_style":"virtual"}))
     STAGE="inventory"
     pages=s3.get_paginator("list_objects_v2").paginate(Bucket=e["S3_BUCKET"],Prefix="logs/")
-    keys=select_complete_route((x for page in pages for x in page.get("Contents",())),prefix)
+    keys=select_complete_route((x for page in pages for x in page.get("Contents",())),prefix,selected)
     STAGE="decode"
     segments=[]
     total_messages=0
@@ -135,6 +147,7 @@ def main():
     result=aggregate_segments(segments)
     result["fullRouteProvenance"]={
         "completeRlogSegments":len(keys),
+        "scope":"complete_uploaded_route" if selected is None else "selected_contiguous_window_not_complete_route",
         "decodedMessages":total_messages,
         "recordedBuildPinsMatched":init_pins,
         "truncatedOrFailedFiles":0,
