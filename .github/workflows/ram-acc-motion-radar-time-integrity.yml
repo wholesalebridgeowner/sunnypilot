@@ -1,0 +1,28 @@
+name: Ram ACC motion equal-time radar integrity
+on:
+  push:
+    branches:
+      - ram1500-acc-motion-equal-time-radar-20261119
+    paths:
+      - 'ram1500-development/ramtools/acc_motion_integrity.py'
+      - 'ram1500-development/tests/test_acc_motion_integrity.py'
+      - '.github/workflows/ram-acc-motion-radar-time-integrity.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/ramtools/acc_motion_integrity.py'
+      - 'ram1500-development/tests/test_acc_motion_integrity.py'
+      - '.github/workflows/ram-acc-motion-radar-time-integrity.yml'
+jobs:
+  offline-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned fixture dependency
+        run: python -m pip install pytest==8.3.4
+      - name: Verify observed ACC acceleration lead-context integrity, offline only
+        run: cd ram1500-development && python -m pytest -q tests/test_acc_motion_integrity.py tests/test_comfort_episodes.py tests/test_private_comfort_rlog_probe.py
