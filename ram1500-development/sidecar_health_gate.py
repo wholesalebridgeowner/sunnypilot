@@ -114,7 +114,8 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         # overhead spike, even when the total window count looks sufficient.
         if any(not _number(v) for v in cpu_values[:-1]):
             problems.append("missing_or_invalid_periodic_cpu_window")
-        if cpu_values[-1] is not None:
+        if ("windowCpuPercentOneCore" not in health[-1]
+                or cpu_values[-1] is not None):
             problems.append("unwindowed_terminal_health_missing")
         if valid_windows:
             result["cpuPeakPercentOneCore"] = round(max(valid_windows), 2)
