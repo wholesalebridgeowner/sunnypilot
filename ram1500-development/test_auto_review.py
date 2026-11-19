@@ -151,9 +151,13 @@ class AnalysisTests(unittest.TestCase):
 
     def test_comparison_has_no_unsupported_causal_claim(self):
         marker = "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3"
-        current = {"laneChange": {"qualification": marker, "medianStartingSeconds": 2.4},
+        provenance = {"schemaCommit": SCHEMA_COMMIT,
+                      "coverage": {"segmentIsolatedMetrics": True}}
+        current = {**provenance,
+                   "laneChange": {"qualification": marker, "medianStartingSeconds": 2.4},
                    "steering": {"steerSaturatedEventEpisodes": 2}}
-        previous = {"laneChange": {"qualification": marker, "medianStartingSeconds": 3.1},
+        previous = {**provenance,
+                    "laneChange": {"qualification": marker, "medianStartingSeconds": 3.1},
                     "steering": {"steerSaturatedEventEpisodes": 4}}
         delta = compare(current, previous)
         self.assertTrue(delta["baselineAvailable"])
@@ -654,6 +658,61 @@ class FactoryACCDataQualityTests(unittest.TestCase):
                       compare(new, other)["metrics"])
         other["cruiseOwnership"]["factoryAccSourceConsistent"] = False
         self.assertNotIn("leadHeadway.medianSeconds", compare(new, other)["metrics"])
+
+
+class ComparisonProvenanceTests(unittest.TestCase):
+    """Only two source/segment-proven sampled observables may be compared."""
+
+    @staticmethod
+    def report():
+        a = RouteMetrics()
+        a.segment_boundary()
+        a.ingest("carParams", 0, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True})
+        car = {"vEgo": 20.0, "aEgo": .2, "canValid": True,
+               "cruiseState": {"enabled": True},
+               "gasPressed": False, "brakePressed": False}
+        a.ingest("carState", 1, car)
+        a.ingest("carState", 1.1, {**car, "aEgo": .3})
+        a.ingest("radarState", 1.12, {
+            "leadOne": {"status": True, "dRel": 30}})
+        a.ingest("onroadEvents", 1.2, ["steerSaturated"])
+        return a.report()
+
+    def test_pinned_segment_provenance_allows_only_qualified_observables(self):
+        current = self.report()
+        previous = self.report()
+        previous["steering"]["steerSaturatedEventEpisodes"] = 99
+        previous["comfort"]["p90AbsJerkMps3"] = 99
+        result = compare(current, previous)
+        self.assertTrue(result["baselineAvailable"])
+        self.assertIn("leadHeadway.medianSeconds", result["metrics"])
+        self.assertIn("factoryAccObservedMotion.p90AbsObservedJerkMps3", result["metrics"])
+        self.assertNotIn("steering.steerSaturatedEventEpisodes", result["metrics"])
+        self.assertNotIn("comfort.p90AbsJerkMps3", result["metrics"])
+        self.assertEqual(result["metrics"]["leadHeadway.medianSeconds"]["delta"], 0)
+
+    def test_missing_or_mismatched_source_does_not_publish_deltas(self):
+        current = self.report()
+        for field, invalid in (("schemaCommit", "NOT_THE_DRIVE_BUILD"),
+                               ("schemaCommit", None),
+                               ("coverage", {}),
+                               ("coverage", {"segmentIsolatedMetrics": False})):
+            with self.subTest(field=field, invalid=invalid):
+                previous = self.report()
+                previous[field] = invalid
+                result = compare(current, previous)
+                self.assertTrue(result["baselineAvailable"])
+                self.assertEqual(result["metrics"], {})
+                self.assertEqual(result["comparisonSuppressed"],
+                                 "source_or_segment_provenance_unverified")
+
+    def test_unsegmented_current_cannot_claim_historic_improvement(self):
+        baseline = self.report()
+        current = self.report()
+        current["coverage"]["segmentIsolatedMetrics"] = False
+        self.assertEqual(compare(current, baseline)["metrics"], {})
+        self.assertNotIn("metrics", compare(current, None).get("comparisonSuppressed", ""))
 
 
 class SegmentIsolationTests(unittest.TestCase):
