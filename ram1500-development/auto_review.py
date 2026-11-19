@@ -8,7 +8,8 @@ from collections import Counter
 import math
 
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
-FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_qlog_v1"
+FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2"
+LANE_QUALITY = "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3"
 
 def get(o, *names):
     for name in names:
@@ -33,9 +34,18 @@ def percentile(values, frac):
         return round(values[lower], 4)
     return round(values[lower] * (upper - i) + values[upper] * (i - lower), 4)
 
+class SegmentBoundary:
+    """Non-identifying, in-memory divider between verified log segments.
+
+    No route key, timestamp or serialized vehicle observation is attached.
+    Only metrics consumers explicitly opting in to boundary emission see it.
+    """
+
+
 class RouteMetrics:
     def __init__(self):
         self.counts = Counter()
+        self.segments_seen = 0
         self.events = Counter()
         self.event_episodes = Counter()
         self.last_onroad_events = set()
@@ -58,6 +68,21 @@ class RouteMetrics:
         self.lateral_rates = []
         self.steering_saturated_samples = 0
         self.steering_activity_samples = 0
+
+    def segment_boundary(self):
+        """Never join radar, derivatives or model phases across Q-log files.
+
+        The route ordering check remains intact: a backward segment clock
+        still raises rather than being excused by this reset.
+        """
+        self.segments_seen += 1
+        if self.active_lane is not None:
+            self.lane_rejections["segment_boundary_incomplete"] += 1
+            self.active_lane = None
+        self.last_car = None
+        self.last_lat = None
+        self.last_accel = None
+        self.last_factory_accel = None
 
     def _fresh_lateral(self, t):
         return (self.last_lat is not None
@@ -239,6 +264,7 @@ class RouteMetrics:
             "durationSeconds": round(self.last - self.first, 1) if self.first is not None else None,
             "messageCounts": dict(self.counts),
             "coverage": {
+                "segmentBoundariesSeen": self.segments_seen,
                 "carStateSamples": self.counts["carState"],
                 "controlsStateSamples": self.counts["controlsState"],
                 "radarStateSamples": self.counts["radarState"],
@@ -253,7 +279,7 @@ class RouteMetrics:
                 "caution": "Factory ACC may control braking/throttle; model plan does not prove actuation",
             },
             "laneChange": {
-                "qualification": "model_start_to_finish_fresh_active_healthy_qlog_v2",
+                "qualification": LANE_QUALITY,
                 "completeStartingWindows": len(durations),
                 "medianStartingSeconds": percentile(durations, .5),
                 "p90StartingSeconds": percentile(durations, .9),
@@ -292,6 +318,7 @@ class RouteMetrics:
                 "Drive routes, speed, weather and traffic must be matched before causal conclusions",
                 "A trend report is not controller-release evidence",
                 "Q-logs are sampled and do not resolve R-log lane timing, peak steering rates or actuator ownership",
+                "Source-verified segment boundaries prevent cross-file lead, jerk and lane-phase joins; clock regressions still invalidate a recording",
                 "Alert episode counts are observed absent-to-present transitions; missing event messages leave continuity unverified",
             ],
         }
@@ -299,6 +326,9 @@ class RouteMetrics:
 def summarize_log_messages(messages):
     acc = RouteMetrics()
     for msg in messages:
+        if isinstance(msg, SegmentBoundary):
+            acc.segment_boundary()
+            continue
         kind = str(msg.which())
         data = getattr(msg, kind)
         acc.ingest(kind, int(msg.logMonoTime) / 1e9,
@@ -320,7 +350,7 @@ def compare(current, previous):
     result = {}
     for section, name in specs:
         if section in ("laneChange", "leadHeadway", "factoryAccObservedMotion"):
-            marker = ("model_start_to_finish_fresh_active_healthy_qlog_v2"
+            marker = (LANE_QUALITY
                       if section == "laneChange" else FACTORY_ACC_QUALITY)
             if (current.get(section, {}).get("qualification") != marker
                     or previous.get(section, {}).get("qualification") != marker):
