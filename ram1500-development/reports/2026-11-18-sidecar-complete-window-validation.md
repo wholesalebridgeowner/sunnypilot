@@ -14,14 +14,16 @@ The earlier independent assessment accepted a sample count and maximum intersamp
 - Every periodic health row must have a finite, nonnegative windowed CPU measurement. An absent, `NaN` or invalid sample fails the metric gate **even when enough other samples exist**. The final health row is required to be explicitly unwindowed (None), matching the inspected source contract.
 - Periodic health timestamps must strictly increase. The sole permitted equality is a terminal unwindowed record sharing its rounded timestamp with the last periodic row; clock reversal remains invalid.
 - Existing overall duration, >20-second periodic gaps, single-session, CPU threshold, split resident memory, reader-count, and normal-stop requirements remain in force. The output remains only `metrics_pass_other_gates_pending`, never a vehicle safety approval.
-- Four additional synthetic regression tests cover late clustered observations, one missing interior CPU window, the terminal schema, and equal terminal rounded timestamps. No driving signals, raw CAN, identifiers or positions are used.
+- Five additional synthetic regression tests cover late clustered observations, one missing interior CPU window, present-but-populated or missing terminal CPU fields, and equal terminal rounded timestamps. No driving signals, raw CAN, identifiers or positions are used.
 
 ## Provenance / execution
 
 - Existing PR #15 baseline: `ram1500-sidecar-health-independent-gate-20261118`, with 14 existing synthetic tests passing before this patch.
 - Proposed isolated follow-up: `ram1500-sidecar-health-coverage-20261118`, based on PR #15; **do not merge either PR into the active driving branch without review**.
 - Code commit: `489228720db18109a511b3d5224879e75e01e484`.
-- Regression commit: `0be21dd3def6a59f20481b5375ca59dc3f9827ff`.
+- Regression commits: `0be21dd3def6a59f20481b5375ca59dc3f9827ff`, `3e36cb775a67dcf82797f1ef4b154a4382dfa6d5`.
+- Final explicit terminal-field schema correction: `df4e19d251370a5bbb748a1520512df92b5496c2`.
+- Isolated CI workflow commit: `21adc850a7e79a70b7b2e6627ffe38d63af5f5fc`.
 - Test command: `python -m unittest discover -s ram1500-development -p 'test_sidecar_health_gate.py' -v`. Report the GitHub Actions outcome separately; a committed script does not prove it passed.
 
 ## Hardware blocker and boundaries
