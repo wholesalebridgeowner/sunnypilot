@@ -121,6 +121,8 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
     vehicle,age=ix.asof("carState",rec["t"],.15)
     if vehicle is None:
       drop["staleCarState"]+=1;continuity+=1;continue
+    if vehicle.get("_ambiguousCarStateSameTimestamp") is True:
+      drop["ambiguousCarStateTimestamp"]+=1;continuity+=1;continue
     if (type(vehicle.get("segment")) is not int or
         vehicle["segment"] != rec["segment"]):
       drop["carStateSegmentMismatch"]+=1;continuity+=1;continue
