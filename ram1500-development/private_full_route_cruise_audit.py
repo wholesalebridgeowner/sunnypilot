@@ -19,6 +19,7 @@ from ramtools.cruise_state_audit import (
 from ramtools.schema import load_log_schema, verify_schema_dir
 from ramtools.lateral_stability_observer import analyze_segment as analyze_steering_stability, combine as combine_stability
 from ramtools.logio import read_log_bytes
+from ramtools.acc_source_provenance import verify_directory as verify_acc_source
 
 KEY_RE=re.compile(r"^logs/[^/]+[|]([0-9a-f]{8}--[0-9a-f]{10})/([0-9]+)/rlog[.]zst$")
 MAX_SEGMENTS=70
@@ -129,6 +130,8 @@ def main():
     if any(x!="ok" for x in verify_schema_dir(root).values()):
         raise ValueError("source-pinned schema failed")
     schema=load_log_schema(root)
+    STAGE="source_provenance"
+    verify_acc_source(Path(e.get("RAM_PUBLIC_ACC_SOURCE_DIR","/opt/ram/pinned-public-acc")))
     s3=boto3.client("s3",endpoint_url=e["S3_ENDPOINT"],
                     aws_access_key_id=e["S3_ACCESS_KEY_ID"],
                     aws_secret_access_key=e["S3_SECRET_ACCESS_KEY"],
