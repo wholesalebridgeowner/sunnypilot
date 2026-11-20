@@ -178,3 +178,51 @@ def test_short_zero_crossing_between_confirmed_opposing_bouts_is_detected():
     assert out["stableSignReversals"] == 1
     assert out["sustainedReversalObservability"] == "limited_proxy_only"
     assert "Neutral steering-rate" in str(combine([out])["limitations"])
+
+
+def test_conflicting_same_time_lateral_state_fails_both_input_orders():
+    state, control, curvature, output = route(reversing=False)
+    for conflicting in ([(0, True), (0, False)], [(0, False), (0, True)]):
+        # Previous bisect_right behavior could report radically different
+        # eligible driving depending on same-timestamp source row order.
+        with pytest.raises(ValueError, match="ambiguous same-time source observation"):
+            analyze_segment(state, control + conflicting, curvature, output)
+
+
+@pytest.mark.parametrize("source", ["curvature", "outputs"])
+def test_conflicting_same_time_numeric_sources_are_not_arbitrarily_selected(source):
+    state, control, curvature, output = route(reversing=False)
+    if source == "curvature":
+        curvature = curvature + [(0, 0.009)]
+    else:
+        output = output + [(0, 9999)]
+    with pytest.raises(ValueError, match="ambiguous same-time source observation"):
+        analyze_segment(state, control, curvature, output)
+
+
+def test_identical_same_time_duplicates_are_coalesced_without_changing_proxy():
+    state, control, curvature, output = route(reversing=False)
+    original = analyze_segment(state, control, curvature, output)
+    duplicated = analyze_segment(
+        state, [control[0], *control], [curvature[0], *curvature],
+        [output[0], *output])
+    assert duplicated == original
+
+
+@pytest.mark.parametrize("bad", [
+    (True, True), (-1, True), (0.1, True), (0, True, "extra"),
+    ("secret-location", True),
+])
+def test_invalid_source_timestamps_and_shape_rejected_without_echo(bad):
+    state, control, curvature, output = route(reversing=False)
+    with pytest.raises(ValueError) as exc:
+        analyze_segment(state, [bad, *control], curvature, output)
+    assert "secret-location" not in str(exc.value)
+    assert "invalid source" in str(exc.value)
+
+
+def test_ambiguous_source_error_does_not_echo_private_values():
+    state, control, curvature, output = route(reversing=False)
+    with pytest.raises(ValueError) as exc:
+        analyze_segment(state, control, curvature + [(0, 444444.123456)], output)
+    assert "444444" not in str(exc.value)

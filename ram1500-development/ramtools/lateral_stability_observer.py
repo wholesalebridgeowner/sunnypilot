@@ -35,7 +35,21 @@ def analyze_segment(state,controls,curvature,outputs):
     """
     sources={}
     for name,rows in (("controls",controls),("curvature",curvature),("outputs",outputs)):
-        sorted_rows=sorted(rows,key=lambda r:r[0])
+        # A same-time disagreement has no defensible as-of ordering. The old
+        # bisect_right lookup silently chose the last row, making eligibility
+        # depend on input ordering. Refuse ambiguous telemetry; identical
+        # duplicate samples are safe to coalesce. Never print private values.
+        canonical={}
+        for row in rows:
+            if not isinstance(row,(tuple,list)) or len(row)!=2:
+                raise ValueError("invalid source observation")
+            stamp,value=row
+            if type(stamp) is not int or stamp<0:
+                raise ValueError("invalid source timestamp")
+            if stamp in canonical and canonical[stamp]!=value:
+                raise ValueError("ambiguous same-time source observation")
+            canonical[stamp]=value
+        sorted_rows=sorted(canonical.items())
         sources[name]=(sorted_rows,[r[0] for r in sorted_rows])
     def asof(name,t):
         rows,times=sources[name]
