@@ -174,6 +174,14 @@ class DispatchTests(unittest.TestCase):
         status, _, body = dispatch(self.service, "GET", "/v1/approvals", headers, b"")
         self.assertEqual((status, json.loads(body)), (200, {"approvals": []}))
 
+    def test_signed_status_reports_last_event(self):
+        body = json.dumps({"type": "agent_start", "driveId": None, "id": "x9", "data": {}}).encode()
+        dispatch(self.service, "POST", "/v1/events", sign_request(KEY, "POST", "/v1/events", body), body)
+        self.assertEqual(dispatch(self.service, "GET", "/v1/status", {}, b"")[0], 401)
+        status, _, out = dispatch(self.service, "GET", "/v1/status", sign_request(KEY, "GET", "/v1/status", b""), b"")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(out)["lastEventType"], "agent_start")
+
     def test_health_and_unknown_token(self):
         self.assertEqual(dispatch(self.service, "GET", "/healthz", {}, b"")[0], 200)
         self.assertEqual(dispatch(self.service, "POST", "/a/nope", {}, b"")[0], 404)

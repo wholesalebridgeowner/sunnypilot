@@ -64,6 +64,7 @@ class AdvisorService:
         if event["id"] in state["seen"]:
             return {"ok": True, "duplicate": True}
         state["seen"] = (state["seen"] + [event["id"]])[-SEEN_EVENTS_KEPT:]
+        state["lastEventAt"], state["lastEventType"] = self.clock(), event["type"]
         kind, drive_id = event["type"], event.get("driveId")
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
         if kind == "drive_start" and isinstance(drive_id, str):
@@ -277,7 +278,7 @@ def dispatch(service: AdvisorService, method: str, path: str, headers, body: byt
 
     if method == "GET" and path == "/healthz":
         return text(200, "ok")
-    if path in ("/v1/events", "/v1/approvals"):
+    if path in ("/v1/events", "/v1/approvals", "/v1/status"):
         try:
             verify_request(service.key, method, path, body, headers)
         except WireError:
@@ -290,6 +291,10 @@ def dispatch(service: AdvisorService, method: str, path: str, headers, body: byt
             return as_json(200, service.handle_event(event))
         if method == "GET" and path == "/v1/approvals":
             return as_json(200, {"approvals": service.approvals_for_comma()})
+        if method == "GET" and path == "/v1/status":
+            state = service._state()
+            return as_json(200, {"lastEventAt": state.get("lastEventAt"), "lastEventType": state.get("lastEventType"),
+                                 "pendingApprovals": len(state["approved"]), "nightlyDue": state.get("nightlyDue")})
         return text(405, "method not allowed")
     if method == "POST" and path.startswith("/a/"):
         return text(*service.approve(path[3:]))
