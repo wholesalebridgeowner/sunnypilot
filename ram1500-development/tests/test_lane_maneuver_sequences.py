@@ -303,3 +303,49 @@ def test_post_exit_validation_and_privacy():
             pass
         else:
             raise AssertionError(val)
+
+
+def test_phase_transition_wheel_rate_spike_must_count_in_full_maneuver():
+    # Two perfectly steady phases, but one abrupt change at the observed
+    # model-state boundary. Previously reported a misleading zero derivative.
+    rows = joined_with_car()
+    for r in rows:
+        if r["service"] == "carState":
+            r["steeringRateDeg"] = 1 if r["t"] <= round(.2 * NS) else 31
+    result = analyze(rows)
+    assert result["qualifiedHealthyKinematicSequences"] == 1
+    assert result["p90PeakWheelRateDerivativeDegPerSecondSquared"] == 300
+    assert result["p90PeakPhaseTransitionWheelRateDerivativeDegPerSecondSquared"] == 300
+    assert result["wheelRateDerivativeDefinition"] == "phase_boundary_inclusive_v2"
+    assert result["physicalLaneCrossingVerified"] is False
+    assert result["physicalLaneCenterMeasured"] is False
+    assert analyze(list(reversed(rows))) == result
+
+
+def test_phase_transition_gap_never_estimates_spurious_slope():
+    rows = joined_with_car()
+    for r in rows:
+        if r["service"] == "carState" and r["t"] == round(.3 * NS):
+            r["t"] = round(.36 * NS)  # 160 ms across phase boundary > 150 ms max
+            r["steeringRateDeg"] = 400
+    result = analyze(rows)
+    assert result["qualifiedHealthyKinematicSequences"] == 0
+    assert result["exclusions"]["kinematicUnverifiedCoverage"] == 1
+    assert result["p90PeakWheelRateDerivativeDegPerSecondSquared"] is None
+    assert result["p90PeakPhaseTransitionWheelRateDerivativeDegPerSecondSquared"] is None
+
+
+def test_phase_transition_collision_or_fault_has_no_good_score_and_no_private_export():
+    import json
+    for edit in ("collision", "fault"):
+        rows = joined_with_car()
+        pivot = next(r for r in rows if r["service"] == "carState"
+                     and r["t"] == round(.3 * NS))
+        if edit == "collision":
+            rows.append(dict(pivot, steeringRateDeg=999, vin="SECRET_VIN"))
+        else:
+            pivot["steerFaultPermanent"] = True
+        result = analyze(rows)
+        assert result["qualifiedHealthyKinematicSequences"] == 0
+        assert result["p90PeakPhaseTransitionWheelRateDerivativeDegPerSecondSquared"] is None
+        assert "SECRET_VIN" not in json.dumps(result)

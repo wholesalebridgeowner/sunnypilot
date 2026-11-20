@@ -55,12 +55,21 @@ def _joined_steering_envelope(cars, start, finish, end, segment, gap_ns, min_spe
         if speed < min_speed:
             return None, "kinematicLowSpeed"
         rates.append(float(rate))
-    derivatives = []
-    for phase in (entry, finishing):
-        for a, b in zip(phase, phase[1:]):
-            derivatives.append(abs((b["steeringRateDeg"] - a["steeringRateDeg"]) /
-                                   ((b["t"] - a["t"]) / NS)))
-    return (max(abs(v) for v in rates), max(derivatives)), None
+    # The starting->finishing boundary belongs to the SAME observed maneuver.
+    # Excluding this one adjacent pair previously hid abrupt steering-rate
+    # changes at the phase transition. Coverage and finite-data gates above
+    # apply to this pair just as they do to every in-phase pair.
+    derivatives = [
+        abs((b["steeringRateDeg"] - a["steeringRateDeg"]) /
+            ((b["t"] - a["t"]) / NS))
+        for a, b in zip(rows, rows[1:])
+    ]
+    last_start = entry[-1]
+    first_finish = finishing[0]
+    boundary_slope = abs(
+        (first_finish["steeringRateDeg"] - last_start["steeringRateDeg"]) /
+        ((first_finish["t"] - last_start["t"]) / NS))
+    return (max(abs(v) for v in rates), max(derivatives), boundary_slope), None
 
 
 
@@ -160,6 +169,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
     full_ms = []
     joined_rate_peaks = []
     joined_rate_derivative_peaks = []
+    phase_transition_slope_peaks = []
     post_exit_peaks = []
     post_exit_tail_medians = []
     previous = None
@@ -239,6 +249,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
                             counts["qualifiedHealthyKinematicSequences"] += 1
                             joined_rate_peaks.append(envelope[0])
                             joined_rate_derivative_peaks.append(envelope[1])
+                            phase_transition_slope_peaks.append(envelope[2])
                         # Separate post-exit wheel-rate observation. This is
                         # never a physical recentering or overshoot measurement.
                         post_end = t + round(post_exit_seconds * NS)
@@ -307,6 +318,9 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
         "p90PeakAbsSteeringRateDegPerSecond": _percentile(joined_rate_peaks, .9),
         "p90PeakWheelRateDerivativeDegPerSecondSquared": _percentile(
             joined_rate_derivative_peaks, .9),
+        "p90PeakPhaseTransitionWheelRateDerivativeDegPerSecondSquared": _percentile(
+            phase_transition_slope_peaks, .9),
+        "wheelRateDerivativeDefinition": "phase_boundary_inclusive_v2",
         "qualifiedByDirection": dict(directions),
         "medianStartingPhaseSeconds": round(median(starting_ms) / 1000, 3) if starting_ms else None,
         "medianFinishingPhaseSeconds": round(median(finishing_ms) / 1000, 3) if finishing_ms else None,
@@ -324,6 +338,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
             "Only uninterrupted single-segment, same-direction active-lateral model sequences qualify.",
             "A valid entry, crossing-model phase and recenter-model phase can be observed without proving road comfort.",
             "Steering-rate derivative measures wheel angular acceleration, NOT chassis lateral jerk.",
+            "Wheel-rate derivative v2 includes the adjacent starting-to-finishing phase boundary; older phase-internal-only statistics are not comparable.",
             "A post-exit neutral model interval measures residual wheel motion, NOT physical lane recentering or positional settle-out.",
             "Post-exit rates require continued Comma lateral activation and continuous same-segment model and healthy vehicle evidence.",
             "Healthy two-phase kinematics exclude invalid CAN, EPS faults, steering override, low speed, gaps and unknown data.",
