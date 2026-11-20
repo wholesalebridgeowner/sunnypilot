@@ -31,10 +31,11 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   if tailscale status >/dev/null 2>&1; then break; fi
   sleep 1
 done
-if ! tailscale up --auth-key="$AUTHKEY" --hostname=ram-railway-pi-probe --accept-dns=false >/tmp/tailscale-login.log 2>&1; then
+if ! tailscale up --auth-key="$AUTHKEY" --hostname=ram-railway-pi-probe --accept-dns=false --accept-routes=true >/tmp/tailscale-login.log 2>&1; then
   printf '%s\n' 'RAM_PI_TAILNET {"status":"tailnet_auth_failed","deviceWrites":false}'
   exit 2
 fi
 unset AUTHKEY
 printf '%s\n' 'RAM_PI_TAILNET {"status":"tailnet_node_registered","deviceWrites":false}'
+python3 -u /opt/ram/comma_subnet_probe.py
 exec python3 -u /opt/ram/one_time_session.py
