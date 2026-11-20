@@ -15,6 +15,7 @@ import re
 import tempfile
 
 from auto_review import SCHEMA_COMMIT, compare, summarize_log_messages
+from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 
 PATH = re.compile(r"^logs/(.+)/([0-9]+)/qlog\.zst$")
 MAX_SEGMENTS = 96
@@ -68,6 +69,9 @@ def group_routes(objects, now, *, quiet_hours=QUIET_HOURS, lookback_days=LOOKBAC
 def route_key(candidate):
     return PREFIX + "reports/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
 
+def clock_audit_key(candidate):
+    return PREFIX + "clock-audits/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
+
 def read_json_or_none(s3, bucket, key):
     try:
         raw = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -107,15 +111,77 @@ def pinned_qlog_messages(paths, reader):
             raise SourcePinError("segment has no exact source header")
 
 
+def anonymous_clock_counts(report):
+    """Explicit allowlist for console-safe diagnostics; never emit private keys."""
+    if not isinstance(report, dict) or report.get("status") != "clock_order_audited":
+        return None
+    names = ("segmentsVerified", "observations", "inversionsOverHalfSecond",
+             "withinSegmentInversions", "crossSegmentInversions")
+    counts = {key: report[key] for key in names
+              if type(report.get(key)) is int and report[key] >= 0}
+    bands = report.get("inversionSizeBands")
+    if isinstance(bands, dict):
+        counts["bands"] = {key: bands[key] for key in
+                           ("underTwoSeconds", "twoToTenSeconds", "overTenSeconds")
+                           if type(bands.get(key)) is int and bands[key] >= 0}
+    return counts
+
+
+def run_quarantine_clock_audit(s3, bucket, selected, reader):
+    """Privately classify a quarantined recording without rewriting its tombstone.
+
+    Exactly one anonymous, immutable diagnostic per fingerprint. Read-only
+    source-pinned inspection of timestamp ordering; NEVER a driving report.
+    """
+    with tempfile.TemporaryDirectory(prefix="ram-clock-audit-") as folder:
+        paths = []
+        for segment, obj in selected["items"]:
+            output = Path(folder) / str(segment) / "qlog.zst"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, obj["Key"], str(output))
+            if not (0 < output.stat().st_size <= MAX_COMPRESSED):
+                raise ValueError("Invalid compressed input size")
+            paths.append(output)
+        try:
+            diagnostic = audit_clock_order(paths, reader)
+        except ClockAuditSourceError:
+            diagnostic = {"status": "source_unverified", "auditVersion": 1}
+        except Exception:
+            # Never persist exception strings: decoder failures may echo raw data.
+            diagnostic = {"status": "reader_or_clock_invalid", "auditVersion": 1}
+    diagnostic.update({"routeHash": selected["hash"],
+                       "inputFingerprint": selected["fingerprint"],
+                       "segmentCount": len(paths)})
+    put_private_json(s3, bucket, clock_audit_key(selected), diagnostic)
+    return {"status": "clock_diagnostic_saved",
+            "diagnostic": diagnostic["status"], "segments": len(paths),
+            "anonymousClockCounts": anonymous_clock_counts(diagnostic)}
+
+
 def run(s3, bucket, now, reader):
     pages = s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="logs/")
     objects = (obj for page in pages for obj in page.get("Contents", ()))
     candidates = group_routes(objects, now)
     selected = None
+    quarantined_for_diagnostic = None
+    previous_anonymous_counts = None
     for candidate in candidates:
-        if read_json_or_none(s3, bucket, route_key(candidate)) is None:
+        existing = read_json_or_none(s3, bucket, route_key(candidate))
+        if existing is None and selected is None:
             selected = candidate
-            break
+        elif isinstance(existing, dict) and existing.get("status") == "quarantined":
+            previous = read_json_or_none(s3, bucket, clock_audit_key(candidate))
+            if previous is None and quarantined_for_diagnostic is None:
+                quarantined_for_diagnostic = candidate
+            elif previous_anonymous_counts is None:
+                previous_anonymous_counts = anonymous_clock_counts(previous)
+    # Prefer diagnosing the existing repeated route failures before consuming
+    # additional recordings and generating more permanent quarantines.
+    if quarantined_for_diagnostic is not None:
+        result = run_quarantine_clock_audit(s3, bucket, quarantined_for_diagnostic, reader)
+        if previous_anonymous_counts is not None:
+            result["priorAnonymousClockCounts"] = previous_anonymous_counts
+        return result
     if selected is None:
         return {"status": "no_new_eligible_routes", "eligible": len(candidates)}
     with tempfile.TemporaryDirectory(prefix="ram-auto-review-") as folder:

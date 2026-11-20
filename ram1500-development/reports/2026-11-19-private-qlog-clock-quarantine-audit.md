@@ -1,0 +1,34 @@
+# Nov 19 — source-pinned investigation of private Q-log quarantine cascade
+
+**Research-only, not a vehicle release or recovered driving metric.**
+
+## Trigger: independent private runtime evidence
+
+Railway's existing `ram-scheduled-route-review` service, source-pinned to `c1488a2b012a83636ec495e4f3e4d29ed92e5234` and deployed in `private-railway-id`, did stop crashing. But the first **nine** complete observed post-fix invocations returned `route_quarantined / decode_or_order_invalid` (segment counts 66, 9, 54, 2, 1, 3, 14, 29, 1), without any verified `review_saved` result. This is a **real pipeline reliability problem**; success of the Docker build and CI did not validate its private-route computation. None of those generic categories establishes why the recordings failed. In particular, excluding repeated `initData` clock headers did not recover these routes.
+
+The original branch and vehicle remain unchanged. Private S3 objects and their identifiers are not disclosed. Runtime logs provided only anonymous status, segment counts and a fixed failure class.
+
+## Isolated diagnostic, draft PR #34
+
+- Starting parent: draft PR #33, `9d00b4c28c61e0f0819c5dafab78daebcb7c4104`.
+- Tested source: `a0faf506eb9b021c7c78b78aae2b4e8b72eab815`.
+- New `auto_review_clock_audit.py` performs constant-memory, source-pinned inspection of timestamp order on one **previously quarantined** private Q-log fingerprint per scheduled execution. Every selected segment must publish an exact `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` recorded-source header. Historical `initData` message time is excluded from motion timing.
+- Diagnostics count non-header timestamp inversions over 500 ms, distinguishing within-segment from cross-segment occurrences and coarse size bands. The scanner never records precise timestamps, route names, GPS, VIN, CAN payloads, driver paths or decoder exception messages. The audit is **not** a sort, fix, replay result or source of vehicle commands.
+- Existing quarantines are not lifted. The audit writes separately to a private, hashed fingerprint prefix; it selects one prior quarantine before consuming more unexamined routes. A source mismatch or reader failure is reported as a fixed category, not an untrusted error string. The diagnostic never presents a failed route as qualified driving evidence.
+- Synthetic tests cover repeated old metadata timestamps, actual clock inversions inside and between segments, exact source rejection, privacy and irreversible quarantine isolation. No additional GitHub Actions workflow was created.
+
+## Independent validation
+
+GitHub Actions on the **exact code SHA** `a0faf506eb9b021c7c78b78aae2b4e8b72eab815`: [Ram automated review offline tests](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44579540286) **SUCCESS**, and [general Ram offline analyzer tests](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44579540375) **SUCCESS**. This verifies synthetic behavior only. The Railway research service was repinned to the same exact code/test commit in deployment `private-railway-id` (**SUCCESS** build). These green statuses do **not** establish a completed real-route audit or successful saved drive review.
+
+## Gate status and follow-up
+
+Inspect anonymized `RAM_AUTO_REVIEW` runtime and the private diagnostic record after a completed cron execution. If the failure is genuinely non-header timestamp inversion, determine magnitude/boundary prevalence before proposing an isolated, bounded and explicitly provenance-preserving observation reorder. If there are no inversions, investigate schema/reader and the other rejected record types without bypassing the source or safety gates. Existing quarantines must remain invalid until corrected analysis is independently tested against private source-verified recordings.
+
+No modifications to the production `comma-log-sync` collector, Comma, Panda/OEM safety, CAN injection, controls, raw telemetry, public installer, or baseline `ram1500-custom-development` branch. Nov 14 high-resolution saturation, held-out steering validation, OEM ACC actuation, PAM→EPS command ownership, parked device performance and independent release acceptance remain blocked.
+
+## First independent private runtime observation (after the diagnostic patch)
+
+Exact first instrumented source `a0faf506eb9b021c7c78b78aae2b4e8b72eab815` in Railway private deployment `private-railway-id` recorded an anonymous `RAM_AUTO_REVIEW` outcome: **`clock_diagnostic_saved`, `clock_order_audited`, 66 segments, 8 inversions greater than 0.5 s**. Because the audit excludes `initData` before comparing clocks and requires the exact source header on each segment, this establishes that at least one prior route's failure had non-header timestamp inversions. It does not by itself identify which producing service, whether events were delivered out of sequence, or whether the underlying clocks actually regressed. The original 66-segment recording remains **quarantined**, not a valid comfort measurement. The privacy-safe cross-/within-segment and size-band breakdown resides in the private Railway bucket; no precise event times or route identifiers were posted publicly.
+
+A second narrowly scoped patch adds explicit console-safe counter allowlisting and permits reporting the previously stored anonymous audit during a later diagnostic, without publishing private report keys or raw data. Code/test commit `7c7878bbf0cacaee7489a11177c7de110eaf6524` passed [dedicated CI #44581100973](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44581100973) and [general analyzer CI #44581101043](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44581101043). The scheduled reviewer is repinned to this SHA; runtime results from that newer version must be checked independently before claiming a failure-classification or recovery milestone. The app is not permitted to silently repair/reorder data or clear a quarantine.
