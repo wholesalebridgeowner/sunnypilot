@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import tempfile
 
-from auto_review import SCHEMA_COMMIT, compare, summarize_log_messages
+from auto_review import SCHEMA_COMMIT, SegmentBoundary, compare, summarize_log_messages
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
 
@@ -96,7 +96,7 @@ class SourcePinError(ValueError):
     """A selected segment does not prove the full installed-build source."""
 
 
-def pinned_qlog_messages(paths, reader):
+def pinned_qlog_messages(paths, reader, *, emit_boundaries=False):
     """Discard replayed old-clock initData AFTER exact per-segment verification.
 
     Q-log initData headers can repeat at segment boundaries with timestamps
@@ -104,6 +104,8 @@ def pinned_qlog_messages(paths, reader):
     Other non-monotonic traffic is never reordered or silently discarded.
     """
     for path in paths:
+        if emit_boundaries:
+            yield SegmentBoundary()
         headers = 0
         for message in reader(path):
             kind = str(message.which())
@@ -204,7 +206,7 @@ def run_quarantine_bounded_trial(s3, bucket, selected, reader):
         counters = {}
         try:
             metrics = summarize_log_messages(
-                source_pinned_bounded_messages(paths, reader, counters))
+                source_pinned_bounded_messages(paths, reader, counters, emit_boundaries=True))
             if counters["verifiedSegments"] != len(paths):
                 raise OrderingTrialError("source-verification-incomplete")
             result = {
@@ -342,7 +344,7 @@ def run(s3, bucket, now, reader):
                 raise ValueError("Invalid compressed input size")
             paths.append(output)
         try:
-            metrics = summarize_log_messages(pinned_qlog_messages(paths, reader))
+            metrics = summarize_log_messages(pinned_qlog_messages(paths, reader, emit_boundaries=True))
         except Exception as exc:
             # Persist a private, source-scoped tombstone so one invalid historical
             # route cannot fail every five-minute cron and starve older routes.

@@ -9,7 +9,7 @@ from __future__ import annotations
 import heapq
 import math
 
-from auto_review import SCHEMA_COMMIT
+from auto_review import SCHEMA_COMMIT, SegmentBoundary
 
 MAX_LAG_SECONDS = 2.0  # observed private clock-audit inversions were all <2 s
 MAX_PENDING_EVENTS = 10000
@@ -19,7 +19,7 @@ class OrderingTrialError(ValueError):
     """Cannot guarantee safe bounded event-time ordering."""
 
 
-def source_pinned_bounded_messages(paths, reader, counters):
+def source_pinned_bounded_messages(paths, reader, counters, *, emit_boundaries=False):
     """Yield bounded event-time-ordered original messages, never raw serialized data.
 
     Every segment must contain the full exact recorded-build header. The
@@ -42,6 +42,8 @@ def source_pinned_bounded_messages(paths, reader, counters):
     })
     last_emitted = None
     for path in paths:
+        if emit_boundaries:
+            yield SegmentBoundary()
         max_seen = None
         # Tracks whether this segment has already emitted an observation, so
         # the failure category can distinguish a boundary from an in-segment
