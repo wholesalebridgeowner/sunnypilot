@@ -21,7 +21,7 @@ MAX_NATIVE_OUTPUT=300.0
 RATE_SIGN_THRESHOLD_DEG_S=1.5
 MIN_SIGN_DWELL_NS=250_000_000
 MIN_NEUTRAL_RESET_NS=250_000_000
-REVERSAL_QUALIFICATION="straight_wheel_rate_reversal_neutral_gap_source_conflict_v2"
+REVERSAL_QUALIFICATION="straight_wheel_rate_reversal_vehicle_clock_integrity_v3"
 
 
 def _num(x):
@@ -57,8 +57,24 @@ def analyze_segment(state,controls,curvature,outputs):
         idx=bisect_right(times,t)-1
         if idx<0 or not 0<=t-times[idx]<=SOURCE_AGE_NS:return None
         return rows[idx]
+    # A carState timestamp is one observation, not an ordering choice.  Identical
+    # duplicate rows may be folded, but differing payloads at the same clock
+    # make that instant unusable and break the reversal sequence.  In particular,
+    # one conflicting sign must never manufacture a wheel-rate reversal.
+    state_by_clock={}
+    for row in state:
+        if (not isinstance(row,(tuple,list)) or len(row)!=8
+                or type(row[0]) is not int or row[0]<0):
+            raise ValueError("invalid scalar vehicle observation")
+        t=row[0]
+        if t in state_by_clock:
+            prev=state_by_clock[t]
+            if (prev is None or any(type(a) is not type(b) or a!=b
+                                    for a,b in zip(prev,row))):
+                state_by_clock[t]=None
+        else:
+            state_by_clock[t]=tuple(row)
     counts=Counter()
-    times=[]
     rates=[]
     last=None
     streak_sign=0
@@ -67,11 +83,17 @@ def analyze_segment(state,controls,curvature,outputs):
     neutral_started=None
     reversals=0
     elapsed_ns=0
-    for row in sorted(state,key=lambda r:r[0]):
-        if len(row)!=8:
-            raise ValueError("invalid scalar vehicle observation")
+    for t in sorted(state_by_clock):
+        row=state_by_clock[t]
+        if row is None:
+            counts["ambiguous_vehicle_timestamp"]+=1
+            last=None
+            streak_sign=0
+            streak_start=None
+            strong_last_sign=0
+            neutral_started=None
+            continue
         t,valid,canvalid,gear,speed,rate,pressed,fault=row
-        if not isinstance(t,int) or t<0:raise ValueError("invalid timestamp")
         speed,rate=_num(speed),_num(rate)
         cc=asof("controls",t)
         desired=_num(asof("curvature",t))
@@ -148,7 +170,7 @@ def analyze_segment(state,controls,curvature,outputs):
       "rejections":{k:v for k,v in counts.items() if k!="eligibleSamples"},
       "limitations":[
         "Steering-wheel direction changes are NOT proven lane-center ping-pong or road safety performance.",
-        "Long neutral steering-rate windows break reversal continuity; v1 results are not directly comparable.",
+        "Long neutral windows and ambiguous vehicle clocks break reversal continuity; v1/v2 metrics are not directly comparable.",
         "Curvature is the controller desired estimate; actual lane boundary tracking is unobserved.",
         "Driver torque and EPS limiting filters may exclude valid behavior; report coverage.",
         "No tuning value, physical actuator latency estimate or on-device control change is implied.",
@@ -178,6 +200,6 @@ def combine(summaries):
             "noVehicleWrite":True,
             "limitations":[
               "Metric cannot determine steering calibration optimum, physical lane-center error or true ping-pong.",
-              "Summed valid time excludes invalid/driver-override and torque-limited data, not complete driving exposure.",
+              "Summed valid time excludes invalid/driver-override, ambiguous vehicle clocks and torque-limited data, not complete driving exposure.",
               "No parameter release without independent held-out routes, stability/override safety checks and owner approval.",
             ]}
