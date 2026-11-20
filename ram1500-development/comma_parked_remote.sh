@@ -98,18 +98,24 @@ umask 077
 stage="$1"
 case "$stage" in /data/ram-diag/.incoming-*) ;; *) exit 32;; esac
 /usr/local/venv/bin/python3 -m py_compile "$stage/device_telemetry.py" "$stage/parked_capture_acceptance.py" "$stage/summarize_can_capture.py"
+test "$(git hash-object "$stage/device_telemetry.py")" = af3e8e4d832bf378820026b41fc1eb96e563b0ed || exit 35
+test "$(git hash-object "$stage/parked_capture_acceptance.py")" = 972dcef6eac3ee5345be7b31d5b5391e850daf40 || exit 36
+test "$(git hash-object "$stage/summarize_can_capture.py")" = 6c28788d3d7b4278c5e6f5b5e2cc7be6e700ac2a || exit 37
 mkdir -p /data/ram-diag/backups
 backup=$(mktemp -d /data/ram-diag/backups/backup-XXXXXX)
+# Back up every file before moving the first candidate into place.
 for name in device_telemetry.py parked_capture_acceptance.py summarize_can_capture.py; do
   if test -f "/data/ram-diag/$name"; then
     cp -p "/data/ram-diag/$name" "$backup/$name"
   else
     touch "$backup/$name.was_absent"
   fi
+done
+printf '%s\n' "$backup" > /data/ram-diag/last-diagnostic-backup
+for name in device_telemetry.py parked_capture_acceptance.py summarize_can_capture.py; do
   chmod 600 "$stage/$name"
   mv "$stage/$name" "/data/ram-diag/$name"
 done
-printf '%s\n' "$backup" > /data/ram-diag/last-diagnostic-backup
 chmod 600 /data/ram-diag/last-diagnostic-backup
 rmdir "$stage/__pycache__" 2>/dev/null || true
 rm -f "$stage/__pycache__"/*.pyc 2>/dev/null || true
@@ -144,12 +150,14 @@ PY
 # Only one parked trial per Comma reboot; no --allow-moving or --all-can-ids.
 mkdir -p /data/ram-telemetry
 chmod 700 /data/ram-telemetry
+session=$(mktemp -d /data/ram-telemetry/session-XXXXXX)
+# Separate old and new sessions; no previous captures enter the acceptance gate.
 PYTHONPATH=/data/openpilot timeout 150 /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py \
- --output-dir /data/ram-telemetry --minutes 2 --sample-hz 2 --max-mb 8 \
+ --output-dir "$session" --minutes 2 --sample-hz 2 --max-mb 8 \
  --keep-files 2 --max-cpu-pct 15 --max-private-mb 150 --drain-ms 50
 /usr/local/venv/bin/python3 /data/ram-diag/parked_capture_acceptance.py \
- /data/ram-telemetry/ram-telemetry-*.jsonl \
- --output /data/ram-telemetry/acceptance.json
+ "$session"/ram-telemetry-*.jsonl \
+ --output "$session/acceptance.json"
 REMOTE
   exit 0
 fi
@@ -169,6 +177,7 @@ for name in device_telemetry.py parked_capture_acceptance.py summarize_can_captu
     echo 'NO_GO: incomplete diagnostic backup'; exit 53
   fi
 done
+mv /data/ram-diag/last-diagnostic-backup "$backup/rollback-complete"
 echo 'ROLLED_BACK: diagnostic files only. msgq reader counts still require normal reboot before retrying.'
 REMOTE
 fi
