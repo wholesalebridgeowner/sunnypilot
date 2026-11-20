@@ -11,6 +11,7 @@ SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_latest_radar_per_carstate_qlog_v3"
 HEADWAY_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_equal_time_radar_conflict_guarded_qlog_v4"
 LANE_QUALITY = "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4"
+STEERING_RATE_QUALITY = "comma_lat_active_fresh_can_healthy_no_driver_override_segment_isolated_qlog_v1"
 UNSEGMENTED_QUALITY = "segment_boundaries_unverified_not_for_comparison"
 
 def get(o, *names):
@@ -68,7 +69,10 @@ class RouteMetrics:
         self.headway = []
         self.headway_ambiguous_samples = 0
         self.jerk = []
+        # All-wheel movement is distinct from motion sampled while Comma
+        # actively owns lateral control (e.g. OEM parking can turn the wheel).
         self.lateral_rates = []
+        self.comma_lateral_rates = []
         self.steering_saturated_samples = 0
         self.steering_activity_samples = 0
 
@@ -175,6 +179,11 @@ class RouteMetrics:
             rate = get(data, "steeringRateDeg")
             if number(rate):
                 self.lateral_rates.append(abs(rate))
+                # A fresh past-only lateral command and healthy current carState
+                # are required. Never assign passive parking, manual driving or
+                # stale control observations to Comma lateral steering.
+                if self.segments_seen and self._lane_observation_ok(t):
+                    self.comma_lateral_rates.append(abs(rate))
                 if self.active_lane is not None and not self.active_lane["invalid"]:
                     self.active_lane["peakSteeringRate"] = max(
                         self.active_lane["peakSteeringRate"], abs(rate))
@@ -360,7 +369,17 @@ class RouteMetrics:
             "steering": {
                 "lateralSaturationStateSamples": self.steering_saturated_samples,
                 "lateralActiveSamples": self.steering_activity_samples,
+                # Backward-compatible raw value: EVERY observed wheel turn.
+                # It is not evidence of Comma actuation or controller comfort.
                 "p90AbsSteeringRateDegPerSecond": percentile(self.lateral_rates, .9),
+                "allVehicleWheelRateSamples": len(self.lateral_rates),
+                "allVehicleWheelRateCaution": "All driving including OEM auto-park and manual steering; never attribute to Comma",
+                "commaLateralWheelRateQualification":
+                    STEERING_RATE_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
+                "commaLateralQualifiedWheelRateSamples": len(self.comma_lateral_rates),
+                "p90AbsCommaLateralWheelRateDegPerSecond":
+                    percentile(self.comma_lateral_rates, .9),
+                "commaLateralWheelRateCaution": "Sampled wheel motion with fresh Comma latActive and healthy CAN/EPS/no-steering-override; not a commanded-vs-actual torque match, lateral tracking error or release-grade comfort measure",
                 "steerSaturatedEventEpisodes": self.event_episodes["steerSaturated"],
             },
             "eventEpisodes": dict(self.event_episodes),
@@ -369,6 +388,7 @@ class RouteMetrics:
                 "Drive routes, speed, weather and traffic must be matched before causal conclusions",
                 "A trend report is not controller-release evidence",
                 "Q-logs are sampled and do not resolve R-log lane timing, peak steering rates or actuator ownership",
+                "All-vehicle wheel rates include OEM parking/manual activity and must not be confused with fresh latActive-qualified Comma wheel rates",
                 "Source-verified segment boundaries prevent cross-file lead, jerk and lane-phase joins; clock regressions still invalidate a recording",
                 "Alert episode counts are observed absent-to-present transitions; missing event messages leave continuity unverified",
             ],

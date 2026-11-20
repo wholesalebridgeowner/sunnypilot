@@ -604,6 +604,76 @@ class BoundedObservationTrialTests(unittest.TestCase):
         self.assertNotIn("latest.json", json.dumps(s3.reports))
 
 
+class SteeringOwnershipRateTests(unittest.TestCase):
+    """Source-segmented wheel observations must not attribute OEM parking to Comma."""
+
+    @staticmethod
+    def car(rate=100.0, **overrides):
+        row = {"vEgo": 0.1, "steeringRateDeg": rate,
+               "canValid": True, "steerFaultTemporary": False,
+               "steerFaultPermanent": False, "steeringPressed": False}
+        row.update(overrides)
+        return row
+
+    def test_oem_parking_rate_remains_all_vehicle_not_comma(self):
+        a = RouteMetrics()
+        a.segment_boundary()
+        a.ingest("carControl", 1.0, {"latActive": False})
+        a.ingest("carState", 1.01, self.car(rate=255.0))
+        result = a.report()["steering"]
+        self.assertEqual(result["p90AbsSteeringRateDegPerSecond"], 255)
+        self.assertEqual(result["allVehicleWheelRateSamples"], 1)
+        self.assertEqual(result["commaLateralQualifiedWheelRateSamples"], 0)
+        self.assertIsNone(result["p90AbsCommaLateralWheelRateDegPerSecond"])
+        self.assertIn("OEM auto-park", result["allVehicleWheelRateCaution"])
+
+    def test_clean_comma_lateral_rate_is_separately_qualified(self):
+        a = RouteMetrics()
+        a.segment_boundary()
+        a.ingest("carControl", 1.0, {"latActive": True})
+        a.ingest("carState", 1.02, self.car(rate=-12.0, vEgo=9.5))
+        a.ingest("carControl", 1.1, {"latActive": True})
+        a.ingest("carState", 1.11, self.car(rate=20.0))
+        result = a.report()["steering"]
+        self.assertEqual(result["commaLateralQualifiedWheelRateSamples"], 2)
+        self.assertEqual(result["p90AbsCommaLateralWheelRateDegPerSecond"], 19.2)
+        self.assertIn("segment_isolated_qlog_v1", result["commaLateralWheelRateQualification"])
+
+    def test_stale_invalid_faulted_and_override_samples_are_excluded(self):
+        a = RouteMetrics()
+        a.segment_boundary()
+        a.ingest("carControl", 1.0, {"latActive": True})
+        a.ingest("carState", 1.01, self.car(rate=10))
+        a.ingest("carState", 1.30, self.car(rate=250))  # stale latActive
+        a.ingest("carControl", 1.31, {"latActive": False})
+        a.ingest("carState", 1.32, self.car(rate=220))
+        a.ingest("carControl", 1.4, {"latActive": True})
+        a.ingest("carState", 1.41, self.car(rate=150, steerFaultTemporary=True))
+        a.ingest("carState", 1.42, self.car(rate=130, steeringPressed=True))
+        a.ingest("carState", 1.43, self.car(rate=120, canValid=False))
+        result = a.report()["steering"]
+        self.assertEqual(result["allVehicleWheelRateSamples"], 6)
+        self.assertEqual(result["commaLateralQualifiedWheelRateSamples"], 1)
+        self.assertEqual(result["p90AbsCommaLateralWheelRateDegPerSecond"], 10)
+
+    def test_segment_boundary_and_unverified_direct_aggregates_fail_closed(self):
+        a = RouteMetrics()
+        a.ingest("carControl", 1.0, {"latActive": True})
+        a.ingest("carState", 1.02, self.car(rate=11))
+        self.assertEqual(a.report()["steering"]["commaLateralWheelRateQualification"],
+                         "segment_boundaries_unverified_not_for_comparison")
+        self.assertEqual(a.report()["steering"]["commaLateralQualifiedWheelRateSamples"], 0)
+        a.segment_boundary()
+        a.ingest("carState", 1.03, self.car(rate=200))  # stale across files
+        self.assertEqual(a.report()["steering"]["commaLateralQualifiedWheelRateSamples"], 0)
+        a.ingest("carControl", 1.04, {"latActive": True})
+        a.ingest("carState", 1.05, self.car(rate=18))
+        result = a.report()["steering"]
+        self.assertEqual(result["commaLateralQualifiedWheelRateSamples"], 1)
+        self.assertEqual(result["allVehicleWheelRateSamples"], 3)
+        self.assertEqual(result["p90AbsCommaLateralWheelRateDegPerSecond"], 18)
+
+
 class FactoryACCDataQualityTests(unittest.TestCase):
     """Anonymous synthetic observations; never use device data or identifiers."""
 
