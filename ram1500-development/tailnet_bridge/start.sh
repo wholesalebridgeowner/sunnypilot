@@ -38,4 +38,5 @@ fi
 unset AUTHKEY
 printf '%s\n' 'RAM_PI_TAILNET {"status":"tailnet_node_registered","deviceWrites":false}'
 python3 -u /opt/ram/comma_subnet_probe.py
+python3 -u /opt/ram/comma_direct_probe.py
 exec python3 -u /opt/ram/one_time_session.py
