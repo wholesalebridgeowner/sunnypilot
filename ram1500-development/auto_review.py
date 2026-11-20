@@ -182,7 +182,7 @@ class RouteMetrics:
                 # A fresh past-only lateral command and healthy current carState
                 # are required. Never assign passive parking, manual driving or
                 # stale control observations to Comma lateral steering.
-                if self._lane_observation_ok(t):
+                if self.segments_seen and self._lane_observation_ok(t):
                     self.comma_lateral_rates.append(abs(rate))
                 if self.active_lane is not None and not self.active_lane["invalid"]:
                     self.active_lane["peakSteeringRate"] = max(
