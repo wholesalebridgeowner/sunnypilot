@@ -137,8 +137,13 @@ def event_to_record(evt, segment: int | None = None) -> dict | None:
       if kind == "torqueState":
         for f in TORQUE_STATE_FIELDS:
           rec["torqueState." + f] = _get(lcs.torqueState, f)
-  elif which in ("onroadEvents", "onroadEventsSP"):
+  elif which == "onroadEvents":
+    # Installed log.capnp uses a flat List(OnroadEvent).
     rec["names"] = [str(e.name) for e in msg]
+  elif which == "onroadEventsSP":
+    # Installed custom.capnp uses a struct with nested events List.
+    # Treating this struct as a list falsely reports intact R-logs truncated.
+    rec["names"] = [str(e.name) for e in msg.events]
   elif which == "pandaStates":
     rec["n_pandas"] = len(msg)
     if len(msg):

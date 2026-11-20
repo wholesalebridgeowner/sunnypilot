@@ -1,0 +1,39 @@
+# Isolated ONE-SHOT private Railway analysis. Not an installer or vehicle software.
+FROM python:3.11-slim-bookworm
+ARG PINNED_SUNNYPILOT_COMMIT=1f7233cb983f3c13fdbba47a86f8fbc796ad9211
+ARG VENDORED_CAR_SOURCE_COMMIT=a392b782e3975ea5f1e1262743a7580200fb7686
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --disable-pip-version-check \
+    pycapnp==2.0.0 zstandard==0.23.0 boto3==1.35.99 pytest==8.3.4
+
+# Exact historical installed source; refuse branch/master updates.
+RUN mkdir -p /opt/sunnypilot && cd /opt/sunnypilot \
+    && git init -q \
+    && git remote add origin https://github.com/sunnypilot/sunnypilot.git \
+    && git sparse-checkout init --cone \
+    && git sparse-checkout set cereal \
+    && git fetch --depth=1 origin "$PINNED_SUNNYPILOT_COMMIT" \
+    && git checkout -q --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$PINNED_SUNNYPILOT_COMMIT"
+
+# The historical opendbc car.capnp submodule is unavailable via sparse git.
+# Fetch a specific PUBLIC, previously blob-verified copy; validate its exact
+# ORIGINAL Git blob rather than trusting the hosting branch or download.
+RUN rm -f /opt/sunnypilot/cereal/car.capnp \
+    && curl --fail --silent --show-error --location \
+       "https://raw.githubusercontent.com/wholesalebridgeowner/sunnypilot/$VENDORED_CAR_SOURCE_COMMIT/ram1500-development/pinned-schema/car.capnp" \
+       -o /opt/sunnypilot/cereal/car.capnp \
+    && test "$(git hash-object /opt/sunnypilot/cereal/car.capnp)" = "d237e353d549800b2db6aff58f313e89799df958"
+
+WORKDIR /opt/ram
+COPY . /opt/ram/
+RUN python -c 'from pathlib import Path; from ramtools.schema import verify_schema_dir, load_log_schema; p=Path("/opt/sunnypilot/cereal"); assert all(v=="ok" for v in verify_schema_dir(p).values()); load_log_schema(p)'
+RUN python -m pytest tests/test_private_comfort_rlog_probe.py \
+    tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py \
+    tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py -q
+
+# All private credentials are runtime-only and are never build arguments.
+# No service port, public egress of data, CAN send or device connection.
+CMD ["python", "-u", "/opt/ram/private_comfort_rlog_probe.py"]
