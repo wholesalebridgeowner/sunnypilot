@@ -4,7 +4,7 @@
 
 ## Live failure that motivated the repair
 
-Before the patch, the five-minute Railway research worker `ram-scheduled-route-review` repeatedly crashed at source `9406572cd977b80e612292581671aa3f07855238`. The captured sanitized Python exception was `ValueError: non-monotonic route: inspect route ordering/schema` in `RouteMetrics.ingest`. Failed runs included deployment `74484568-9910-4729-83e7-20ceb82d6316`. The exception stopped the queue without saving a report; each invocation could reselect the same private route. No conclusion about steering quality, source validity or route integrity follows from this failure alone.
+Before the patch, the five-minute Railway research worker `ram-scheduled-route-review` repeatedly crashed at source `9406572cd977b80e612292581671aa3f07855238`. The captured sanitized Python exception was `ValueError: non-monotonic route: inspect route ordering/schema` in `RouteMetrics.ingest`. Failed runs included deployment `private-railway-id`. The exception stopped the queue without saving a report; each invocation could reselect the same private route. No conclusion about steering quality, source validity or route integrity follows from this failure alone.
 
 Historical pinned Ram R-log investigations already identified that a repeated `initData` message can carry an older process timestamp than the surrounding segment. That makes replayed metadata a plausible cause of the monotonicity exception, **not a proven diagnosis for the particular Q-log**. This patch does not waive ordering checks on actual motion data.
 
@@ -22,7 +22,7 @@ Historical pinned Ram R-log investigations already identified that a repeated `i
 - Corrections: `43083560a0b620af11057231f3b0406cf07c7f83` (alert transitions / comparison semantics); `db8aa4515c1b682ce48b6ce26e3136df6e7b9275` (per-segment source/clock/quarantine); `4ba2ba5b5d8533911f9e707bbccc02dfc4521991` (synthetic tests); `c1488a2b012a83636ec495e4f3e4d29ed92e5234` (legacy fixture correction).
 - On exact tested HEAD `c1488a2`, GitHub Actions [dedicated private-review tests #44569382486](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44569382486) **SUCCESS** (12 synthetic tests), and [Ram analyzer workflow #44569382499](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44569382499) **SUCCESS**.
 - The previous code/test SHA `4ba2ba5` failed one old test because it assumed a repeated alert after silence with no intervening `onroadEvents` empty observation; the fixture now explicitly includes the clearance event and passed on the new SHA.
-- The existing Railway read-only reviewer was source-pinned to exact `c1488a2`, image deployment `21e1ef32-37f8-4a3e-b4b6-1d509e0566aa` built and reached **SUCCESS**. A successful build/deployment is **not** proof of actual private route completion or accurate route aggregates; verify `RAM_AUTO_REVIEW` runtime and stored private output before advancing that gate.
+- The existing Railway read-only reviewer was source-pinned to exact `c1488a2`, image deployment `private-railway-id` built and reached **SUCCESS**. A successful build/deployment is **not** proof of actual private route completion or accurate route aggregates; verify `RAM_AUTO_REVIEW` runtime and stored private output before advancing that gate.
 - No changes to the separate `comma-log-sync` collector, private raw object payloads, Comma or OEM devices, CAN transmission, Panda safety, brake/throttle/steering controls, or a public installer.
 
 ## Remaining gates

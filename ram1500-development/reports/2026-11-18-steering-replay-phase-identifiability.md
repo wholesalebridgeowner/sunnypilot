@@ -5,7 +5,7 @@
 ## Provenance and validation
 
 - GitHub analysis commit: `21aefae514e184b7fe48db797c52c9da3a344bb1`; regression tests: `d49951486422c58605e981acfa538ab7035d21fe`, fixture chronology correction: `baa29f0d487154e99a414c249789b87115315224`.
-- Private Railway read-only analysis deployment: `f37b580d-62a0-4d16-abc2-4e9ecb43bbad`, status **SUCCESS**, source pinned to `baa29f0d487154e99a414c249789b87115315224`.
+- Private Railway read-only analysis deployment: `private-railway-id`, status **SUCCESS**, source pinned to `baa29f0d487154e99a414c249789b87115315224`.
 - Railway Docker build passed **33 targeted tests**: private route probe 7, torque-limit coverage 6, causal replay 8, phase audit 12.
 - The job read 421,253 messages from the selected private November 17 R-log segments 0, 29, 30, 31, using the observed build's `1f7233cb` cereal schema. The measured comparison is limited to route-relative seconds **1800–1807**.
 - No raw route keys, VIN, GPS, log records, credentials or individual CAN messages are included here. GitHub's full repository-wide workflow result is **not independently confirmed** by this report.
