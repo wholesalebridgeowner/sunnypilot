@@ -6,7 +6,7 @@
 
 - Historical actual driving-build source pin for any later decode: sunnypilot commit 1f7233cb983f3c13fdbba47a86f8fbc796ad9211 (reported dirty working tree remains unverified). No schema or private log was decoded in this audit.
 - Existing **private** Railway project: ram-drive-log-bridge, private bucket ram-drive-logs.
-- Existing read-only one-shot Railway function: ram-private-log-presence-audit, deployment b0981f35-0238-4381-b141-0d359be5e8b4 on November 18. Its completed JSON appeared in **structured log attributes**, not the empty message field; reading only message strings can incorrectly suggest that no inventory result was produced.
+- Existing read-only one-shot Railway function: ram-private-log-presence-audit, deployment private-railway-id on November 18. Its completed JSON appeared in **structured log attributes**, not the empty message field; reading only message strings can incorrectly suggest that no inventory result was produced.
 - The listing used prefix logs/. It reported **1 completed page**, **612 object keys**, **0 unclassified keys**, **11 distinct route groups**, and **no pagination truncation**. This is a point-in-time view of this specific bucket and prefix; it is not the entire Comma cloud archive.
 - The separately published historical Nov 14 Q-log analysis decoded 51/51 segments from another data path. **Do not confuse that earlier Q-log access with current presence in this Railway S3 bucket.**
 
