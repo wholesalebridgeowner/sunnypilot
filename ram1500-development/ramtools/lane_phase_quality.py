@@ -30,6 +30,37 @@ def _percentile(values, q):
   return round(data[lo] + (data[hi] - data[lo]) * (at - lo), 3)
 
 
+def _coalesce_equal_time(rows, fields):
+  """One observation per timestamp; contradictory evidence fails closed.
+
+  Replay order is not a sensor-authority rule. Repeated identical samples
+  must not create zero-length gaps; conflicting samples must never be
+  resolved by whichever record happened to be encountered first. Compare
+  only the fixed model/vehicle fields used by this observer, not private
+  unrelated telemetry. Do not propagate private record fields in sentinels.
+  """
+  result = []
+  for rec in sorted(rows, key=lambda r: r["t"]):
+    if result and rec["t"] == result[-1]["t"]:
+      old = result[-1]
+      if old.get("_ambiguous_equal_time"):
+        continue
+      if any(type(old.get(k)) is not type(rec.get(k)) or
+             old.get(k) != rec.get(k) for k in fields):
+        same_segment = (type(old.get("segment")) is int and
+                        type(rec.get("segment")) is int and
+                        old["segment"] == rec["segment"])
+        result[-1] = {
+          "t": rec["t"],
+          "segment": old["segment"] if same_segment else None,
+          "valid": False,
+          "_ambiguous_equal_time": True,
+        }
+      continue
+    result.append(rec)
+  return result
+
+
 def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
             min_steering_samples=3, min_speed_mps=5.0):
   """Summarize completed model starting/finishing intervals with explicit gates.
@@ -44,10 +75,18 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       min_steering_samples < 2 or not 0 <= min_speed_mps <= 50):
     raise ValueError("invalid offline quality gates")
 
-  models = sorted((r for r in records if r.get("service") == "drivingModelData"
-                   and isinstance(r.get("t"), int)), key=lambda r: r["t"])
-  car = sorted((r for r in records if r.get("service") == "carState"
-                and isinstance(r.get("t"), int)), key=lambda r: r["t"])
+  # A conflicting same-time model record censors an interrupted maneuver;
+  # a conflicting same-time carState cannot supply verified kinematics.
+  # Ignore bool timestamps (bool is a Python int subclass).
+  models = _coalesce_equal_time(
+    (r for r in records if r.get("service") == "drivingModelData"
+     and type(r.get("t")) is int),
+    ("segment", "valid", "meta.laneChangeState", "meta.laneChangeDirection"))
+  car = _coalesce_equal_time(
+    (r for r in records if r.get("service") == "carState"
+     and type(r.get("t")) is int),
+    ("segment", "valid", "steeringRateDeg", "steeringPressed", "vEgo",
+     "canValid", "steerFaultTemporary", "steerFaultPermanent"))
   phase_counts = {phase: Counter() for phase in PHASES}
   peak_rates = {phase: [] for phase in PHASES}
   rate_derivatives = {phase: [] for phase in PHASES}
@@ -230,6 +269,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "laneChangeFinishing is a model recenter-phase proxy, not proof of settled vehicle position.",
       "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
       "Only complete, same-segment, healthy-CAN, EPS-fault-free and driver-not-steering windows enter comfort percentiles.",
+      "Same-timestamp identical samples count once; conflicting samples censor rather than depend on input order.",
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
       "After model gaps, invalid records or segment changes, a valid off/preLaneChange observation must anchor new phase entries.",

@@ -359,3 +359,82 @@ def test_lane_quality_can_and_eps_rejections_do_not_export_private_details():
   out = analyze(rows)
   assert out["phaseWindows"]["laneChangeStarting"]["counts"]["invalidOrUnknownCan"] == 1
   assert "PRIVATE_MARKER" not in json.dumps(out)
+
+
+def test_identical_same_time_lane_observations_are_not_fake_model_or_car_gaps():
+  models = [model(0, "off"), model(.1, "laneChangeStarting"),
+            model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  expected = analyze(models + cars)
+  counts = expected["phaseWindows"]["laneChangeStarting"]["counts"]
+  assert counts["qualifiedWindows"] == 1
+  # Duplicate records may arrive independently from replay streams.
+  doubled = models + [dict(models[2])] + cars + [dict(cars[1])]
+  for records in (doubled, list(reversed(doubled))):
+    result = analyze(records)
+    assert result == expected
+    assert result["modelSamples"] == 5
+
+
+def test_conflicting_same_time_model_phase_censors_in_both_orders():
+  models = [model(0, "off"), model(.1, "laneChangeStarting"),
+            model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  # A contradictory timestamp cannot invent an earlier exit/new entry.
+  contradictory = model(.2, "laneChangeFinishing")
+  rows = models + [contradictory] + cars
+  for records in (rows, list(reversed(rows))):
+    result = analyze(records)
+    counts = result["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts.get("qualifiedWindows", 0) == 0
+    assert counts["censoredByGapOrInvalidModel"] == 1
+  # Contradictory metadata across segment identities must fail closed too.
+  other_segment = model(.2, "laneChangeStarting", segment=31)
+  for records in (models + [other_segment] + cars,
+                  list(reversed(models + [other_segment] + cars))):
+    counts = analyze(records)["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts.get("qualifiedWindows", 0) == 0
+
+
+def test_conflicting_equal_time_carstate_cannot_enter_lane_comfort_percentiles():
+  models = [model(0, "off"), model(.1, "laneChangeFinishing"),
+            model(.2, "laneChangeFinishing"), model(.3, "laneChangeFinishing"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  assert analyze(models + cars)["phaseWindows"]["laneChangeFinishing"]["counts"]["qualifiedWindows"] == 1
+  for updates in ({"steeringRateDeg": 400.0}, {"canValid": False},
+                  {"steerFaultTemporary": True}, {"segment": 31}):
+    contradictory = dict(cars[1], **updates)
+    rows = models + cars + [contradictory]
+    for records in (rows, list(reversed(rows))):
+      report = analyze(records)["phaseWindows"]["laneChangeFinishing"]
+      assert report["counts"].get("qualifiedWindows", 0) == 0
+      assert report["p90PeakAbsSteeringRateDegPerSecond"] is None
+
+
+def test_equal_time_lane_conflict_never_exports_conflicting_private_payload():
+  import json
+  models = [model(0, "off"), model(.1, "laneChangeStarting"),
+            model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  other = dict(cars[1], steeringRateDeg=99.0,
+               vin="SYNTHETIC_PRIVATE_MARKER",
+               gps="SYNTHETIC_GPS_MARKER")
+  for rows in (models + cars + [other], list(reversed(models + cars + [other]))):
+    report = analyze(rows)
+    assert report["phaseWindows"]["laneChangeStarting"]["counts"].get("qualifiedWindows", 0) == 0
+    assert "SYNTHETIC_PRIVATE_MARKER" not in json.dumps(report)
+    assert "SYNTHETIC_GPS_MARKER" not in json.dumps(report)
+
+
+def test_boolean_timestamp_does_not_supply_model_or_vehicle_evidence():
+  models = [model(0, "off"), model(.1, "laneChangeStarting"),
+            model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+            model(.4, "off")]
+  cars = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  base = analyze(models + cars)
+  invalid = dict(models[1], t=True, valid=False, segment=None)
+  assert analyze(models + cars + [invalid]) == base
