@@ -4,7 +4,7 @@ Status: **read-only analysis correction; not a driving-control or installer chan
 
 ## Source and validation scope
 - Recorded Sunnypilot/schema pin: `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`, with a still-unverified dirty on-device working tree.
-- Prior private Railway comfort execution: one-shot `ram-private-comfort-once` deployment `1ad09b22-2977-41a1-915c-f19e76436c25`, successfully executed from source `c54b28ec58ecbac7d655c33a40bfcd44a9500309`, **before** the provenance correction below.
+- Prior private Railway comfort execution: one-shot `ram-private-comfort-once` deployment `private-railway-id`, successfully executed from source `c54b28ec58ecbac7d655c33a40bfcd44a9500309`, **before** the provenance correction below.
 - This branch is stacked on draft PR #3; the baseline `ram1500-custom-development`, the steering/Claude branches, and existing Railway deployments remain unchanged.
 
 ## Newly identified observational integrity risk

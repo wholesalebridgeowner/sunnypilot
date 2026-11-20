@@ -13,7 +13,7 @@
 ## Completed validation
 
 - GitHub Actions pinned comfort fixture run [44393170951](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44393170951), **SUCCESS**, on `08d3aa82f52f624e81ebe03397350e76d845acb9`: **120/120 tests passed**. Manifest validation and non-installable delay experiment steps passed.
-- Railway one-shot private comfort analysis deployment `bbf5dc40-02cc-444f-a477-efc73e6a941f`, **SUCCESS**, using the same exact source commit; **81/81 container fixtures passed**. It decoded **316,310 messages** from **3 completed private R-logs**, **0 truncated**, with **3/3 recorded-build commit observations** matching the historical pin.
+- Railway one-shot private comfort analysis deployment `private-railway-id`, **SUCCESS**, using the same exact source commit; **81/81 container fixtures passed**. It decoded **316,310 messages** from **3 completed private R-logs**, **0 truncated**, with **3/3 recorded-build commit observations** matching the historical pin.
 - No first-active stream censor was observed in these selected three logs (the corresponding report counter is absent/zero). **No change** to the previous actual-route aggregates: **0 qualified model starting phases**, **2 qualified model finishing phases** (one left, one right), and **3 qualifying observed following episodes totaling 40.507 s** with **1.179 s median sample headway**.
 - The above numbers are observations on **correlated recorded intervals**. Neither model-state `finishing` nor steering rate proves lane-boundary crossing or a completed physically comfortable recenter. Observed sample headway is not the factory ACC set point or its control target.
 

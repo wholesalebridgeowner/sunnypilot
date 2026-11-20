@@ -10,7 +10,7 @@
 
 ## Later afternoon — COMPLETE recorded route
 
-Isolated Railway deployment `91d045e6-ef27-46cb-91a4-e2612701d3a9` **SUCCESS**; pinned test container ran **89/89** Python fixture tests before the final private analysis.
+Isolated Railway deployment `private-railway-id` **SUCCESS**; pinned test container ran **89/89** Python fixture tests before the final private analysis.
 
 | Observation across 54 R-logs | Result |
 |---|---:|
@@ -29,7 +29,7 @@ Isolated Railway deployment `91d045e6-ef27-46cb-91a4-e2612701d3a9` **SUCCESS**; 
 
 ## Earlier morning — PARTIALLY retained recorded route, confirmed ACC and Comma steering
 
-The truck's morning route was earlier and partially deleted from on-device storage, but **20 consecutive completed late-route R-logs** were recovered through the existing authorized Wi-Fi upload interface into private Railway storage. Source-pinned one-shot deployment `ade7574f-ab84-4b23-9087-a839726fef62` **SUCCESS**; all source pins matched and zero files were truncated.
+The truck's morning route was earlier and partially deleted from on-device storage, but **20 consecutive completed late-route R-logs** were recovered through the existing authorized Wi-Fi upload interface into private Railway storage. Source-pinned one-shot deployment `private-railway-id` **SUCCESS**; all source pins matched and zero files were truncated.
 
 | Observation across 20 preserved consecutive R-logs | Result |
 |---|---:|
@@ -49,14 +49,14 @@ The remaining retained late morning segments outside the active interval showed 
 
 A later authenticated Comma metadata query for the time after the afternoon route returned **no additional later completed route** beyond the ending route already inventoried. This leaves the time between the Comma's last listed route and the owner's later home-arrival report **not covered by verified complete logs**. It does not demonstrate that the truck was stationary, driven, or running cruise in that interval.
 
-**Additional source-pinned private comfort replay:** one four-segment window within this morning drive, Railway deployment `b4a77307-35d9-43df-b151-b44a1a8dfec0`, passed the original schema/source checks and decoded **421,759 messages** from **4 complete R-logs**, reporting **six** sustained observational following episodes totaling **86.444 seconds**, with **2.259 s** median observed sample headway (and 1.543 s p10). **This is not a decoded factory ACC distance setting.** The visible lead source was model flagged in those episodes; that does not identify OEM radar/ACC actuation or selected gap.
+**Additional source-pinned private comfort replay:** one four-segment window within this morning drive, Railway deployment `private-railway-id`, passed the original schema/source checks and decoded **421,759 messages** from **4 complete R-logs**, reporting **six** sustained observational following episodes totaling **86.444 seconds**, with **2.259 s** median observed sample headway (and 1.543 s p10). **This is not a decoded factory ACC distance setting.** The visible lead source was model flagged in those episodes; that does not identify OEM radar/ACC actuation or selected gap.
 
 
 ## Additional on-road steering oscillation proxy: limited coverage, no new tuning
 
 A new strictly read-only `ramtools/lateral_stability_observer.py` uses source-pinned carState steering rate and speed, `carControl.latActive`, actual Comma-native output and `controlsState.desiredCurvature` joined past-only within 120 ms. It excludes driver steering intervention, vehicle/CAN invalidity, ECU fault, tight turns, insufficient speed, unknown/stale control and near-native-torque-limit observations. It counts only sustained steering wheel **rate-sign reversals**, **not lane-centered physical ping-pong**.
 
-The latest private 20-segment morning replay deployment `bc5f1509-2ab3-4f49-9c5c-c8936d13b38f` **SUCCEEDED**, and the isolated pinned Docker build passed **97/97** synthetic tests, including the new logger state and stability gates.
+The latest private 20-segment morning replay deployment `private-railway-id` **SUCCEEDED**, and the isolated pinned Docker build passed **97/97** synthetic tests, including the new logger state and stability gates.
 
 | Read-only steering stability proxy | Result |
 |---|---:|
@@ -79,7 +79,7 @@ Our earlier 16-segment sample of the later afternoon route found no confirmed cr
 
 ## Final independent exact-source and Docker replay verification
 
-The final isolated private replay was pinned to GitHub code commit `dcdb57aee80f6025efff80399c7c626124bc5be3` and Railway deployment `bb1b5b19-7d9f-491b-90b5-f59e722e10e2`. The container first downloaded the **three original public source files at the truck's installed Sunnypilot commit** and independently checked their exact git blob hashes and expected field definitions:
+The final isolated private replay was pinned to GitHub code commit `dcdb57aee80f6025efff80399c7c626124bc5be3` and Railway deployment `private-railway-id`. The container first downloaded the **three original public source files at the truck's installed Sunnypilot commit** and independently checked their exact git blob hashes and expected field definitions:
 
 | Installed public source | Exact git blob SHA-1 |
 |---|---|
