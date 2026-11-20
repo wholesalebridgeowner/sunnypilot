@@ -171,3 +171,15 @@ def test_v2_segment_cannot_mix_with_requalified_vehicle_clock_v3():
     old=dict(result,measurementQualification="straight_wheel_rate_reversal_neutral_gap_source_conflict_v2")
     with pytest.raises(ValueError,match="incompatible"):
         combine([result,old])
+
+
+def test_ambiguous_vehicle_clock_breaks_confirmed_sign_continuity():
+    states,cc,curve,out=route(reversing=False)
+    crossing=[row[:5]+(2.5 if i<=300 else -2.5,)+row[6:]
+              for i,row in enumerate(states)]
+    assert analyze_segment(crossing,cc,curve,out)["stableSignReversals"]==1
+    contradictory=crossing[300][:5]+(-2.5,)+crossing[300][6:]
+    for candidate in (crossing+[contradictory], [contradictory]+crossing):
+        result=analyze_segment(candidate,cc,curve,out)
+        assert result["stableSignReversals"]==0
+        assert result["rejections"]["ambiguous_vehicle_timestamp"]==1
