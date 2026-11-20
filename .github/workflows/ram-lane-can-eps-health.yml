@@ -1,0 +1,32 @@
+name: Ram read-only lane CAN EPS health quality
+on:
+  push:
+    branches:
+      - ram1500-lane-can-fault-quality-20261119
+    paths:
+      - 'ram1500-development/ramtools/lane_phase_quality.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_lane_phase_quality.py'
+      - 'ram1500-development/tests/test_private_comfort_rlog_probe.py'
+      - '.github/workflows/ram-lane-can-eps-health.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/ramtools/lane_phase_quality.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_lane_phase_quality.py'
+      - 'ram1500-development/tests/test_private_comfort_rlog_probe.py'
+      - '.github/workflows/ram-lane-can-eps-health.yml'
+jobs:
+  offline-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned fixture dependency
+        run: python -m pip install pytest==8.3.4
+      - name: Run anonymous offline lane and private-export regressions
+        run: cd ram1500-development && python -m pytest -q tests/test_lane_phase_quality.py tests/test_private_comfort_rlog_probe.py

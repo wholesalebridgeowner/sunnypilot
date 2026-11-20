@@ -261,3 +261,19 @@ def test_twenty_segment_recorded_source_requires_every_header():
             [_source_record(i) for i in wanted[:-1]],
             [_read_result(i) for i in wanted])
     assert ROUTE not in str(ex.value)
+
+
+def test_lane_can_eps_health_rejections_export_only_fixed_counters():
+    import json
+    out = public_lane_summary({
+        "phaseWindows": {"laneChangeStarting": {
+            "counts": {"invalidOrUnknownCan": 2, "epsFaultOrUnknown": 3,
+                       "LEAK_THIS_PRIVATE_LOCATION": 99},
+            "qualifiedByDirection": {"PRIVATE_VIN": 5},
+        }},
+    })
+    counts = out["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts["invalidOrUnknownCan"] == 2
+    assert counts["epsFaultOrUnknown"] == 3
+    assert "LEAK_THIS_PRIVATE_LOCATION" not in json.dumps(out)
+    assert "PRIVATE_VIN" not in json.dumps(out)

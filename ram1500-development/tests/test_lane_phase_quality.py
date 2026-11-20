@@ -7,7 +7,9 @@ def row(service, seconds, **fields):
   return {"service": service, "t": round(seconds * N), "valid": True, "segment": 30, **fields}
 
 def cs(t, rate, speed=20, pressed=False, segment=30):
-  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed, vEgo=speed, segment=segment)
+  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed,
+             vEgo=speed, segment=segment, canValid=True,
+             steerFaultTemporary=False, steerFaultPermanent=False)
 
 def model(t, state, direction="left", valid=True, segment=30):
   return row("drivingModelData", t, **{"meta.laneChangeState": state,
@@ -314,3 +316,46 @@ def test_first_valid_after_invalid_start_stays_left_censored():
   cars=[cs(.1,1),cs(.2,3),cs(.3,5)]
   counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
   assert counts=={"censoredAtStreamStart":1}
+
+
+def test_lane_comfort_requires_confirmed_vehicle_can_health():
+  # Model transitions and steering samples can exist during stale/invalid CAN.
+  # Neither False nor unknown should enter comfort percentiles.
+  base = [model(0, "off"), model(.1, "laneChangeStarting"),
+          model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+          model(.4, "off")]
+  healthy = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  assert analyze(base + healthy)["phaseWindows"]["laneChangeStarting"]["counts"]["qualifiedWindows"] == 1
+  for bad in (False, None, 1):
+    states = [dict(s) for s in healthy]
+    states[1]["canValid"] = bad
+    counts = analyze(base + states)["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts["invalidOrUnknownCan"] == 1
+    assert counts.get("qualifiedWindows", 0) == 0
+
+
+def test_lane_comfort_excludes_eps_fault_or_absent_status():
+  base = [model(0, "off"), model(.1, "laneChangeFinishing"),
+          model(.2, "laneChangeFinishing"), model(.3, "laneChangeFinishing"),
+          model(.4, "off")]
+  healthy = [cs(.1, 2), cs(.2, 4), cs(.3, 6)]
+  assert analyze(base + healthy)["phaseWindows"]["laneChangeFinishing"]["counts"]["qualifiedWindows"] == 1
+  for field in ("steerFaultTemporary", "steerFaultPermanent"):
+    for bad in (True, None, 0):
+      states = [dict(s) for s in healthy]
+      states[1][field] = bad
+      counts = analyze(base + states)["phaseWindows"]["laneChangeFinishing"]["counts"]
+      assert counts["epsFaultOrUnknown"] == 1
+      assert counts.get("qualifiedWindows", 0) == 0
+
+
+def test_lane_quality_can_and_eps_rejections_do_not_export_private_details():
+  import json
+  rows = [model(0, "off"), model(.1, "laneChangeStarting"),
+          model(.2, "laneChangeStarting"), model(.3, "laneChangeStarting"),
+          model(.4, "off"), cs(.1, 1), cs(.2, 2), cs(.3, 3)]
+  rows[-2]["canValid"] = False
+  rows[-2]["vin"] = "PRIVATE_MARKER"
+  out = analyze(rows)
+  assert out["phaseWindows"]["laneChangeStarting"]["counts"]["invalidOrUnknownCan"] == 1
+  assert "PRIVATE_MARKER" not in json.dumps(out)
