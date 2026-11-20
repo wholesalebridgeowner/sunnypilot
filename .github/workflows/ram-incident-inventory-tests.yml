@@ -5,6 +5,8 @@ on:
     paths:
       - 'ram1500-development/incident_route_inventory.py'
       - 'ram1500-development/test_incident_route_inventory.py'
+      - 'ram1500-development/incident_route_metadata.py'
+      - 'ram1500-development/test_incident_route_metadata.py'
       - '.github/workflows/ram-incident-inventory-tests.yml'
 jobs:
   route-inventory:
@@ -16,4 +18,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python3 -m unittest discover -s ram1500-development -p 'test_incident_route_inventory.py' -v
+      - run: |
+          python3 -m unittest discover -s ram1500-development -p 'test_incident_route_inventory.py' -v
+          python3 -m unittest discover -s ram1500-development -p 'test_incident_route_metadata.py' -v
