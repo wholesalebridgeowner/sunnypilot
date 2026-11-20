@@ -9,6 +9,8 @@ on:
       - 'ram1500-development/test_auto_review_crosssegment_pilot.py'
       - 'ram1500-development/auto_review_private_summary.py'
       - 'ram1500-development/test_auto_review_private_summary.py'
+      - 'ram1500-development/auto_review_job.py'
+      - 'ram1500-development/test_auto_review_new_upload_gate.py'
       - '.github/workflows/ram-crosssegment-trial-tests.yml'
   pull_request:
     paths:
@@ -30,3 +32,4 @@ jobs:
           python3 -m unittest discover -s ram1500-development -p 'test_auto_review_crosssegment_order.py' -v
           python3 -m unittest discover -s ram1500-development -p 'test_auto_review_crosssegment_pilot.py' -v
           python3 -m unittest discover -s ram1500-development -p 'test_auto_review_private_summary.py' -v
+          python3 -m unittest discover -s ram1500-development -p 'test_auto_review_new_upload_gate.py' -v
