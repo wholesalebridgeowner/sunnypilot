@@ -145,3 +145,65 @@ def test_one_route_gate_rejects_other_routes_or_missing_provenance():
             assert "bbbbbbbbbb" not in str(exc)
         else:
             raise AssertionError("Mixed or unidentified route accepted")
+
+
+def test_equal_clock_radar_conflict_cannot_select_a_lead_by_input_order():
+    states = drive()
+    complete = [radar(i*.1) for i in range(31)]
+    conflict = radar(1.5, status=False)
+    # A conflicting lead/non-lead pair at 1.5s must interrupt the continuous
+    # lead run, regardless of which frame was returned first.
+    for rows in (complete + [conflict], [conflict] + complete):
+        out = analyze(states + rows)
+        assert out["quality"]["ambiguousRadarClocks"] == 1
+        assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+        assert out["quality"]["qualifiedEpisodes"] == 0
+        assert out["measurementQualification"].endswith("_v2")
+
+
+def test_equal_clock_radar_conflict_never_resurrects_old_valid_frame():
+    rows = drive()
+    lead = [radar(0), radar(1.5, status=True), radar(1.5, status=False)]
+    out = analyze(rows + lead, max_radar_age_s=2)
+    assert out["quality"]["ambiguousRadarClocks"] == 1
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+
+
+def test_identical_equal_clock_radar_is_folded_without_false_break():
+    states = drive()
+    radars = [radar(i*.1) for i in range(31)]
+    out = analyze(states + radars + [radar(1.5)])
+    assert out["quality"]["duplicateRadarRows"] == 1
+    assert out["quality"]["ambiguousRadarClocks"] == 0
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 1
+
+
+def test_conflicting_carstate_clock_breaks_acceleration_jerk_episode():
+    rows = drive()
+    conflict = state(1.5, aEgo=99.0)
+    for states in (rows + [conflict], [conflict] + rows):
+        out = analyze(states)
+        assert out["quality"]["carStateRows"] == 32
+        assert out["quality"]["ambiguousCarStateClocks"] == 1
+        assert out["quality"]["excludedRowsByReason"]["ambiguous_carState_clock"] == 1
+        assert out["quality"]["qualifiedEpisodes"] == 0
+        assert out["byObservedLeadContext"]["lead_unavailable"]["rawJerkPairs"] == 0
+
+
+def test_duplicate_carstate_keeps_only_one_derivative_sample():
+    rows = drive()
+    out = analyze(rows + [state(1.5, aEgo=.15)])
+    assert out["quality"]["duplicateCarStateRows"] == 1
+    assert out["quality"]["uniqueCarStateClocks"] == 31
+    assert out["byObservedLeadContext"]["lead_unavailable"]["rawJerkPairs"] == 30
+
+
+def test_radar_conflict_is_scoped_to_its_segment():
+    rows = drive()
+    radars = [radar(i*.1, segment=30) for i in range(31)]
+    # Two frame values at the SAME time in another segment must not
+    # contaminate the matched radar stream of the actual vehicle segment.
+    other = [radar(1.5, segment=31), radar(1.5, status=False, segment=31)]
+    out = analyze(rows + radars + other)
+    assert out["quality"]["ambiguousRadarClocks"] == 1
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 1

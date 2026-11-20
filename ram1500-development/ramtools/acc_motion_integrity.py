@@ -12,6 +12,7 @@ from math import isfinite
 from statistics import median
 
 NS = 1_000_000_000
+MOTION_QUALIFICATION = "observed_factory_acc_motion_equal_clock_integrity_v2"
 LABELS = ("radar_flagged_lead", "model_flagged_lead", "lead_source_unspecified",
           "no_confirmed_lead", "lead_unavailable")
 
@@ -31,6 +32,13 @@ def _pct(values, q):
     return round(xs[lower] + (xs[min(lower + 1, len(xs) - 1)] - xs[lower]) * (at - lower), 3)
 
 
+def _same_observation(left, right):
+    """Treat identical decoded rows as duplicates, not independent samples."""
+    return (left.keys() == right.keys() and
+            all(type(left[key]) is type(right[key]) and left[key] == right[key]
+                for key in left))
+
+
 def _lead_label(t, segment, radar_index, max_radar_age_s):
     # Segment provenance is mandatory. A fresh radar frame from the previous
     # segment is NOT a verified observation within this segment.
@@ -42,7 +50,7 @@ def _lead_label(t, segment, radar_index, max_radar_age_s):
     if i < 0 or (t - times[i]) / NS > max_radar_age_s:
         return "lead_unavailable"
     r = radar[i]
-    if r.get("valid") is not True:
+    if r is None or r.get("valid") is not True:
         return "lead_unavailable"
     if r.get("leadOne.status") is False:
         return "no_confirmed_lead"
@@ -100,24 +108,57 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
     if (type(min_episode_samples) is not int or not 3 <= min_episode_samples <= 100000 or
             type(min_smooth_samples) is not int or not 2 <= min_smooth_samples <= 10000):
         raise ValueError("sample thresholds out of bounds")
-    states = sorted((r for r in records if r.get("service") == "carState"
-                     and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
-    radar = sorted((r for r in records if r.get("service") == "radarState"
-                    and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"])
-    # Index within segments before as-of joins: cross-segment radar reuse can
-    # manufacture apparently continuous lead context at a log boundary.
-    radar_by_segment = defaultdict(list)
+    raw_states = [r for r in records if r.get("service") == "carState"
+                  and type(r.get("t")) is int and r["t"] >= 0]
+    radar = [r for r in records if r.get("service") == "radarState"
+             and type(r.get("t")) is int and r["t"] >= 0]
+    # Equal-time vehicle states are one observation. Different values at the
+    # same clock cannot be selected by record ordering: quarantine that clock
+    # and break the candidate episode. Neither earlier nor later states fill it.
+    state_by_clock = {}
+    state_conflicts = set()
+    duplicate_states = 0
+    for r in raw_states:
+        t = r["t"]
+        if t in state_conflicts:
+            continue
+        if t not in state_by_clock:
+            state_by_clock[t] = r
+        elif _same_observation(state_by_clock[t], r):
+            duplicate_states += 1
+        else:
+            state_by_clock[t] = None
+            state_conflicts.add(t)
+    states = [state_by_clock[t] for t in sorted(state_by_clock)]
+
+    # Index radar within recording segments, not only time. A contradictory
+    # pair with the same clock is unavailable until a genuinely newer frame;
+    # an older previously-valid radar frame must not be resurrected.
+    radar_by_segment = defaultdict(dict)
+    radar_conflicts = set()
+    duplicate_radar = 0
     unscoped_radar_rows = 0
     for r in radar:
         segment = r.get("segment")
-        if type(segment) is int and segment >= 0:
-            radar_by_segment[segment].append(r)
-        else:
+        if type(segment) is not int or segment < 0:
             unscoped_radar_rows += 1
-    radar_index = {
-        seg: (rows, [r["t"] for r in rows])
-        for seg, rows in radar_by_segment.items()
-    }
+            continue
+        t = r["t"]
+        clock = (segment, t)
+        if clock in radar_conflicts:
+            continue
+        bucket = radar_by_segment[segment]
+        if t not in bucket:
+            bucket[t] = r
+        elif _same_observation(bucket[t], r):
+            duplicate_radar += 1
+        else:
+            bucket[t] = None
+            radar_conflicts.add(clock)
+    radar_index = {}
+    for segment, bucket in radar_by_segment.items():
+        times = sorted(bucket)
+        radar_index[segment] = ([bucket[t] for t in times], times)
     rejects = Counter()
     episodes = []
     current = []
@@ -130,6 +171,11 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             current = []
 
     for r in states:
+        if r is None:
+            rejects["ambiguous_carState_clock"] += 1
+            close()
+            previous = None
+            continue
         t = r["t"]
         speed = _number(r.get("vEgo"))
         accel = _number(r.get("aEgo"))
@@ -181,8 +227,14 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
         entry["smoothedPairs"] += len(sj)
     return {
         "status": "observed_longitudinal_not_throttle_or_acc_target",
+        "measurementQualification": MOTION_QUALIFICATION,
         "source": "pinned_log_carState.aEgo_and_observational_radarState",
-        "quality": {"carStateRows": len(states), "radarStateRows": len(radar),
+        "quality": {"carStateRows": len(raw_states), "radarStateRows": len(radar),
+                    "uniqueCarStateClocks": len(states),
+                    "duplicateCarStateRows": duplicate_states,
+                    "ambiguousCarStateClocks": len(state_conflicts),
+                    "duplicateRadarRows": duplicate_radar,
+                    "ambiguousRadarClocks": len(radar_conflicts),
                     "unscopedRadarRows": unscoped_radar_rows,
                     "excludedRowsByReason": dict(rejects),
                     "continuousCandidateRuns": len(episodes),
@@ -210,6 +262,8 @@ def analyze(records, *, max_state_gap_s=0.25, max_radar_age_s=0.25,
             "Disengagement, manual pedal use, invalid CAN/vehicle data and discontinuous segments are excluded, not joined.",
             "A qualifying episode is one correlated time interval, not an independent experiment or validated control target.",
             "Radar observations must match the carState segment. An absent, stale or unscoped radar sample is unavailable.",
+            "Conflicting equal-clock carState observations break episodes; conflicting equal-clock radar frames remain unavailable until newer evidence.",
+            "Identical equal-clock records are deduplicated; v1 and v2 results cannot be directly compared without identical-route reprocessing.",
             "Callers must supply a single recorded route; segment numbers are only unique within one route.",
             "No per-sample timestamps, segment identities, VIN, GPS or raw CAN are exported.",
         ],
