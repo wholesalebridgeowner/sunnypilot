@@ -7,7 +7,7 @@
 - Stacked branch: `ram1500-steering-neutral-contiguity-20261119`, based on draft PR #21 (head `0371900aa9d924278b4983a241d4dfc8a2294417`); original `ram1500-custom-development` remains unchanged.
 - Changed observational detector: `ram1500-development/ramtools/lateral_stability_observer.py`, commit `cafe4fc5b3a095016c1bca3b7a5665c6b1cf0d29`.
 - Synthetic regression additions: `tests/test_lateral_stability_observer.py`, commit `ac2cb41b25866df4eff73836d7876512f7057f23`.
-- Independent pinned Docker run: isolated private Railway `ram-full-route-cruise-private-once` service, deployment `537b6c59-648a-479a-bc25-26d6357c05c6`, built from Git commit `6d3dfbb18d0c2cdbc66b68a4e0f8d2f7b32511f9`. Successful Railway build reported **127 passed in 0.28s**; deployment status **SUCCESS**. GitHub Actions has not independently reported a completed run for that commit; Docker build success is not GitHub Actions success.
+- Independent pinned Docker run: isolated private Railway `ram-full-route-cruise-private-once` service, deployment `private-railway-id`, built from Git commit `6d3dfbb18d0c2cdbc66b68a4e0f8d2f7b32511f9`. Successful Railway build reported **127 passed in 0.28s**; deployment status **SUCCESS**. GitHub Actions has not independently reported a completed run for that commit; Docker build success is not GitHub Actions success.
 - Same 20 previously retained private morning R-logs, each with a full 40-character recorded-build `initData.gitCommit` match to `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`. The recorded source working tree and installed executable remain unverified. No new independent driving route was acquired.
 
 ## Identified measurement defect and correction
