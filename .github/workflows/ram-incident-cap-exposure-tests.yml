@@ -28,3 +28,16 @@ jobs:
         run: |
           cd ram1500-development
           python3 -m unittest -v test_incident_cap_exposure test_incident_rlog_probe test_incident_qlog_probe test_incident_route_inventory test_incident_route_metadata
+      - name: Verify installed-build Chrysler controller and measurement-limiter source blobs
+        run: |
+          set -euo pipefail
+          pinned=1f7233cb983f3c13fdbba47a86f8fbc796ad9211
+          base="https://raw.githubusercontent.com/sunnypilot/sunnypilot/${pinned}/opendbc_repo/opendbc/car"
+          mkdir -p "$RUNNER_TEMP/ram-controller-source"
+          curl --fail --location --silent --show-error --retry 3 --max-time 45 "$base/chrysler/values.py" -o "$RUNNER_TEMP/ram-controller-source/values.py"
+          curl --fail --location --silent --show-error --retry 3 --max-time 45 "$base/chrysler/carcontroller.py" -o "$RUNNER_TEMP/ram-controller-source/carcontroller.py"
+          curl --fail --location --silent --show-error --retry 3 --max-time 45 "$base/lateral.py" -o "$RUNNER_TEMP/ram-controller-source/lateral.py"
+          test "$(git hash-object "$RUNNER_TEMP/ram-controller-source/values.py")" = 4a9b6a93cd2563abb4a12d921994e64ece77c72a
+          test "$(git hash-object "$RUNNER_TEMP/ram-controller-source/carcontroller.py")" = 0ac0b7e8b4ff5f339e1f9b59ad7957f412a01215
+          test "$(git hash-object "$RUNNER_TEMP/ram-controller-source/lateral.py")" = 9d120e308b7f56c49ece55b4a5037ab002717235
+          echo 'Verified recorded-build controller values, 50-Hz update path, and motor-torque measurement limiter blobs. No actuation run.'
