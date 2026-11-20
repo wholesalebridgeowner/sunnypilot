@@ -32,6 +32,83 @@ def percentile(values, frac):
         return round(values[lower], 4)
     return round(values[lower] * (upper - i) + values[upper] * (i - lower), 4)
 
+
+class FactoryAccObservedMotion:
+    """Q-log kinematics conditional on parsed stock-PCM cruise, NOT throttle authority.
+
+    Never bridge a missing/invalid sample, pedal override, cruise-off sample, or
+    telemetry gap when differentiating acceleration. This is not a raw DAS_3
+    cross-check and cannot establish factory accelerator/brake commands.
+    """
+    VERSION = "parsed_pcm_cruise_contiguous_v1"
+
+    def __init__(self):
+        self.params = None
+        self.source_conflict = False
+        self.last = None
+        self.samples = 0
+        self.episodes = 0
+        self.duration = 0.0
+        self.acceleration = []
+        self.abs_jerk = []
+
+    def set_car_params(self, openpilot_long, pcm_cruise):
+        candidate = (openpilot_long, pcm_cruise)
+        if self.params is not None and candidate != self.params:
+            # Contradictory authority metadata invalidates ALL earlier results.
+            self.source_conflict = True
+            self.samples = self.episodes = 0
+            self.duration = 0.0
+            self.acceleration.clear()
+            self.abs_jerk.clear()
+        self.params = candidate
+        self.last = None
+
+    def ingest_car_state(self, t, data):
+        if (self.source_conflict or self.params != (False, True)
+                or get(data, "cruiseState", "enabled") is not True
+                or get(data, "gasPressed") is not False
+                or get(data, "brakePressed") is not False):
+            self.last = None
+            return
+        speed = get(data, "vEgo")
+        accel = get(data, "aEgo")
+        if not number(speed) or speed <= 2 or not number(accel):
+            self.last = None
+            return
+        self.samples += 1
+        self.acceleration.append(float(accel))
+        if self.last is None:
+            self.episodes += 1
+        else:
+            dt = t - self.last[0]
+            # Q-log sampled carState cadence; do not bridge gaps or clock ties.
+            if 0.03 <= dt <= 0.3:
+                self.duration += dt
+                self.abs_jerk.append(abs((accel - self.last[1]) / dt))
+            else:
+                self.episodes += 1
+        self.last = (t, accel)
+
+    def report(self):
+        verified = (not self.source_conflict and self.params == (False, True))
+        return {
+            "measurementVersion": self.VERSION,
+            "pcmCarParamsSourceQualified": verified,
+            "sourceMetadataConflict": self.source_conflict,
+            "eligibleCruiseSamples": self.samples if verified else 0,
+            "contiguousObservedWindows": self.episodes if verified else 0,
+            "observedDurationSeconds": round(self.duration, 4) if verified else 0.0,
+            "observedAccelP10Mps2": percentile(self.acceleration, .1) if verified else None,
+            "observedAccelMedianMps2": percentile(self.acceleration, .5) if verified else None,
+            "observedAccelP90Mps2": percentile(self.acceleration, .9) if verified else None,
+            "qualifiedJerkPairs": len(self.abs_jerk) if verified else 0,
+            "p90AbsSampledJerkMps3": percentile(self.abs_jerk, .9) if verified else None,
+            "actuatorAttributionVerified": False,
+            "calibrationEligible": False,
+            "caution": "Q-log sampled vehicle kinematics during parsed stock PCM cruise only; no independent DAS_3 cross-check, throttle/brake command, physical gap target, or causality established",
+        }
+
 class RouteMetrics:
     def __init__(self):
         self.counts = Counter()
@@ -50,6 +127,7 @@ class RouteMetrics:
         self.headway = []
         self.jerk = []
         self.lateral_rates = []
+        self.factory_acc_motion = FactoryAccObservedMotion()
         self.steering_saturated_samples = 0
         self.steering_activity_samples = 0
 
@@ -63,6 +141,7 @@ class RouteMetrics:
         self.last = t if self.last is None else max(self.last, t)
         self.counts[kind] += 1
         if kind == "carState":
+            self.factory_acc_motion.ingest_car_state(t, data)
             self.last_car = {"t": t,
                  "speed": get(data, "vEgo"),
                  "accel": get(data, "aEgo"),
@@ -91,6 +170,8 @@ class RouteMetrics:
         elif kind == "carParams":
             self.car_params["openpilotLongitudinalControl"] = get(data, "openpilotLongitudinalControl")
             self.car_params["pcmCruise"] = get(data, "pcmCruise")
+            self.factory_acc_motion.set_car_params(
+                self.car_params["openpilotLongitudinalControl"], self.car_params["pcmCruise"])
         elif kind == "radarState":
             lead = get(data, "leadOne")
             car = self.last_car
@@ -179,10 +260,11 @@ class RouteMetrics:
                 "p90Seconds": percentile(self.headway, .9),
                 "caution": "May be model-derived lead, not factory ACC gap target",
             },
+            "factoryAccObservedMotion": self.factory_acc_motion.report(),
             "comfort": {
                 "observedAccelerationJerkSamples": len(self.jerk),
                 "p90AbsJerkMps3": percentile(self.jerk, .9),
-                "caution": "Unfiltered acceleration differencing is noisy; trend-only",
+                "caution": "All-driving, unfiltered acceleration differencing; NOT factory ACC-specific; noisy trend only",
             },
             "steering": {
                 "lateralSaturationStateSamples": self.steering_saturated_samples,
