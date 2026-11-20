@@ -62,6 +62,39 @@ class AuditTests(unittest.TestCase):
         for h in s[1:-1]: h["windowCpuPercentOneCore"] = None
         self.assertIn("insufficient_cpu_windows", assess(s)["reasons"])
 
+    def test_missing_one_interior_cpu_window_fails_even_with_enough_others(self):
+        s = fixture()
+        s[5]["windowCpuPercentOneCore"] = None
+        r = assess(s)
+        self.assertEqual(r["status"], "not_validated")
+        self.assertIn("missing_or_invalid_periodic_cpu_window", r["reasons"])
+        self.assertNotIn("insufficient_cpu_windows", r["reasons"])
+
+    def test_terminal_health_requires_unwindowed_cpu_row(self):
+        s = fixture()
+        s[-2]["windowCpuPercentOneCore"] = 8.0
+        self.assertIn("unwindowed_terminal_health_missing", assess(s)["reasons"])
+
+    def test_terminal_health_must_have_explicit_none_not_missing_field(self):
+        s = fixture()
+        s[-2].pop("windowCpuPercentOneCore")
+        self.assertIn("unwindowed_terminal_health_missing", assess(s)["reasons"])
+
+    def test_terminal_health_can_share_rounded_clock_with_last_periodic(self):
+        s = fixture()
+        s[-2]["wallElapsedS"] = s[-3]["wallElapsedS"]
+        self.assertEqual(assess(s)["metricGate"], "passed")
+
+    def test_late_clustered_samples_cannot_fake_full_session_cpu_coverage(self):
+        s = fixture()
+        # Twelve nominal CPU windows packed into the last ~20s would pass
+        # old count, span and gap checks despite no startup observations.
+        for i, h in enumerate(s[1:-2]):
+            h["wallElapsedS"] = 100.0 + 19.0 * i / 11
+        r = assess(s)
+        self.assertIn("initial_health_window_missing", r["reasons"])
+        self.assertEqual(r["metricGate"], "failed_or_incomplete")
+
     def test_out_of_order_or_gap_cannot_pass(self):
         s = fixture(); s[6]["wallElapsedS"] = 999
         self.assertIn("invalid_health_clock", assess(s)["reasons"])

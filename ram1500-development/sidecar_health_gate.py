@@ -79,10 +79,22 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         if stop.get("reason") != "duration reached":
             problems.append("capture_did_not_finish_normally")
         durations = [h.get("wallElapsedS") for h in health]
+        # The on-device logger emits a final health row in its finally block,
+        # immediately before sidecar_stop. That terminal row has NO window CPU
+        # metric, and its 0.01 s-rounded clock may equal the prior timed row.
+        # Ordinary timed health observations must still increase strictly.
         if (not all(_number(d) for d in durations)
-                or any(b <= a for a, b in zip(durations, durations[1:]))):
+                or any(b <= a for a, b in zip(durations[:-2], durations[1:-1]))
+                or durations[-1] < durations[-2]
+                or (durations[-1] == durations[-2]
+                    and health[-1].get("windowCpuPercentOneCore") is not None)):
             problems.append("invalid_health_clock")
             return result
+        # Counting many samples at the END is not coverage of the start.
+        # The source's HEALTH_INTERVAL_S is 10 seconds; allow one delayed
+        # window, but never accept an unobserved first 20+ seconds.
+        if not 0 < durations[0] <= 20.0:
+            problems.append("initial_health_window_missing")
         duration = durations[-1]
         result["durationSeconds"] = round(duration, 2)
         if duration < 0.95 * expected_seconds or duration > 1.20 * expected_seconds:
@@ -96,8 +108,15 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         result["cpuWindows"] = len(valid_windows)
         if len(valid_windows) < max(2, math.floor(expected_seconds / 10) - 2):
             problems.append("insufficient_cpu_windows")
-        if any(v is not None and not _number(v) for v in cpu_values):
-            problems.append("invalid_cpu_window")
+        # Historical device_telemetry.py emits a timed CPU figure for EVERY
+        # periodic health row; the final unwindowed health row is intentionally
+        # None. Missing an interior CPU window means an unobserved potential
+        # overhead spike, even when the total window count looks sufficient.
+        if any(not _number(v) for v in cpu_values[:-1]):
+            problems.append("missing_or_invalid_periodic_cpu_window")
+        if ("windowCpuPercentOneCore" not in health[-1]
+                or cpu_values[-1] is not None):
+            problems.append("unwindowed_terminal_health_missing")
         if valid_windows:
             result["cpuPeakPercentOneCore"] = round(max(valid_windows), 2)
             if max(valid_windows) > cpu_limit:
