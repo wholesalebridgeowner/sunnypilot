@@ -3,13 +3,22 @@ on:
   push:
     branches:
       - ram1500-acc-motion-equal-time-radar-20261119
+      - ram1500-acc-carstate-time-integrity-20261119
     paths:
       - 'ram1500-development/ramtools/acc_motion_integrity.py'
+      - 'ram1500-development/ramtools/carstate_timestamp_integrity.py'
+      - 'ram1500-development/ramtools/comfort_episodes.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_comfort_episodes.py'
       - 'ram1500-development/tests/test_acc_motion_integrity.py'
       - '.github/workflows/ram-acc-motion-radar-time-integrity.yml'
   pull_request:
     paths:
       - 'ram1500-development/ramtools/acc_motion_integrity.py'
+      - 'ram1500-development/ramtools/carstate_timestamp_integrity.py'
+      - 'ram1500-development/ramtools/comfort_episodes.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_comfort_episodes.py'
       - 'ram1500-development/tests/test_acc_motion_integrity.py'
       - '.github/workflows/ram-acc-motion-radar-time-integrity.yml'
 jobs:

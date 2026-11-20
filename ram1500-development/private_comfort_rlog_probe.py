@@ -169,7 +169,8 @@ def summarize(records: list[dict], read_results) -> dict:
     lanes = analyze_lanes(records)
     following = episodes.get("following", {})
     allowed_following = (
-        "validCruiseLeadObservations", "minimumEpisodeSeconds",
+        "validCruiseLeadObservations", "repeatedCarStateTimestampRows",
+        "ambiguousCarStateTimestampGroups", "minimumEpisodeSeconds",
         "qualifyingEpisodeCount", "qualifyingEpisodeTotalSeconds",
         "medianEpisodeGapSeconds", "medianObservedGapSeconds",
         "p10ObservedGapSeconds", "fractionObservedBelow1p5Seconds",
@@ -193,7 +194,8 @@ def summarize(records: list[dict], read_results) -> dict:
             "validityRejections": {
                 k: int(following.get("leadFilteringRejections", {}).get(k, 0))
                 for k in ("invalidCarStateOrCan", "invalidRadarMessage",
-                          "ambiguousRadarTimestamp")
+                          "ambiguousRadarTimestamp",
+                          "ambiguousCarStateTimestamp")
             },
         },
         "laneModelPhases": public_lane_summary(lanes),

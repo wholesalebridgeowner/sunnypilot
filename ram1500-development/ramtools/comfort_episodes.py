@@ -11,6 +11,7 @@ from itertools import groupby
 from math import isfinite
 
 from .timeline import Index
+from .carstate_timestamp_integrity import canonical_car_states
 
 NS=1_000_000_000
 
@@ -83,9 +84,13 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   """
   if minimum_follow_s<0 or min_lane_samples<1:
     raise ValueError("invalid quality parameters")
-  ix=Index(sorted((r for r in records
-                   if (r.get("valid") is not False or r.get("service") == "carState")
-                   and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"]))
+  # Preserve invalid/contradictory carState timestamps as as-of barriers.
+  # Never let an insertion-order tie label an ambiguous instant as cruising.
+  states, state_timing = canonical_car_states(records)
+  other = (r for r in records if r.get("service") != "carState"
+           and r.get("valid") is not False
+           and type(r.get("t")) is int and r["t"] >= 0)
+  ix=Index(sorted([*other, *states], key=lambda r: r["t"]))
   # Preserve invalid carState as an as-of barrier. Filtering it away can
   # reuse an older good sample and falsely maintain a following episode.
   base=ix.first_t()
@@ -116,6 +121,8 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
     vehicle,age=ix.asof("carState",rec["t"],.15)
     if vehicle is None:
       drop["staleCarState"]+=1;continuity+=1;continue
+    if vehicle.get("_ambiguousCarStateSameTimestamp") is True:
+      drop["ambiguousCarStateTimestamp"]+=1;continuity+=1;continue
     if (type(vehicle.get("segment")) is not int or
         vehicle["segment"] != rec["segment"]):
       drop["carStateSegmentMismatch"]+=1;continuity+=1;continue
@@ -193,6 +200,7 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   return {
     "status":"ok",
     "following":{"validCruiseLeadObservations":len(lead),
+                 **state_timing,
                  "leadFilteringRejections":dict(drop),
                  "minimumEpisodeSeconds":minimum_follow_s,
                  "qualifyingEpisodeCount":len(long_follow),
@@ -213,6 +221,7 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
     "caveats":["No individual event timestamps, route positions, device IDs or raw CAN frames are exported.",
       "Following measurements require same-segment radar/carState observations within a single selected route.",
       "Invalid or unknown radar validity, carState validity, and vehicle CAN status break following continuity.",
+      "Conflicting equal-time carState rows break causal following continuity regardless of insertion order.",
       "Following measurements depend on lead-source validity and are not the factory ACC programmed gap.",
       "TTC is distance/closing-speed only; it does not account for acceleration or predict actual collision risk.",
       "An incomplete or short lane-change model phase is excluded from quality percentiles.",
