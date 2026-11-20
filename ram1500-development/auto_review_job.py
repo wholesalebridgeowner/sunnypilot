@@ -76,6 +76,9 @@ def clock_audit_key(candidate):
 def bounded_trial_key(candidate):
     return PREFIX + "bounded-trials/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
 
+def regression_origin_key(candidate):
+    return PREFIX + "regression-origins/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
+
 def read_json_or_none(s3, bucket, key):
     try:
         raw = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -176,7 +179,11 @@ def safe_trial_rejection_reason(exc):
         "invalid-event-clock": "invalid_clock",
         "non-finite-event-clock": "invalid_clock",
         "late-event-beyond-window": "lateness_exceeds_window",
+        # Keep the old combined token for interpretation of older fixtures;
+        # new runs distinguish two disjoint rejection origins, not vehicle faults.
         "cross-segment-or-watermark-regression": "event_clock_regression",
+        "cross-segment-clock-regression": "segment_boundary_regression",
+        "emitted-watermark-regression": "emitted_order_regression",
         "bounded-memory-ceiling": "bounded_memory_exceeded",
         "non-empty-counters": "internal_contract_invalid",
     }
@@ -238,6 +245,43 @@ def run_quarantine_bounded_trial(s3, bucket, selected, reader):
     return outcome
 
 
+def run_quarantine_regression_origin_audit(s3, bucket, selected, reader):
+    """Re-classify only an OLD, combined clock rejection in separate private data.
+
+    No metrics, timestamps, events, per-segment details or original trial result
+    are written. This cannot turn a quarantined recording into an accepted one.
+    """
+    with tempfile.TemporaryDirectory(prefix="ram-qlog-origin-") as folder:
+        paths = []
+        for segment, obj in selected["items"]:
+            output = Path(folder) / str(segment) / "qlog.zst"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, obj["Key"], str(output))
+            if not (0 < output.stat().st_size <= MAX_COMPRESSED):
+                raise ValueError("Invalid compressed input size")
+            paths.append(output)
+        try:
+            # Exhaust the same source-pinned bounded-order stream, but NEVER
+            # pass observations into the driving-metrics aggregator.
+            for _ in source_pinned_bounded_messages(paths, reader, {}):
+                pass
+            origin = "previous_rejection_not_reproduced"
+        except OrderingTrialError as exc:
+            origin = safe_trial_rejection_reason(exc)
+        except Exception:
+            origin = "decode_or_metrics_invalid"
+    put_private_json(s3, bucket, regression_origin_key(selected), {
+        "status": "diagnostic_only", "reportVersion": 1,
+        "reason": origin, "routeHash": selected["hash"],
+        "inputFingerprint": selected["fingerprint"],
+        "segmentCount": len(paths), "schemaCommit": SCHEMA_COMMIT,
+        "releaseAuthorized": False,
+        "caution": "Previously quarantined: do not promote to accepted route or infer a vehicle fault",
+    })
+    return {"status": "regression_origin_saved", "reason": origin,
+            "segments": len(paths), "releaseAuthorized": False}
+
+
 def run(s3, bucket, now, reader):
     pages = s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="logs/")
     objects = (obj for page in pages for obj in page.get("Contents", ()))
@@ -245,6 +289,7 @@ def run(s3, bucket, now, reader):
     selected = None
     quarantined_for_diagnostic = None
     candidate_for_trial = None
+    candidate_for_regression_origin = None
     previous_anonymous_counts = None
     for candidate in candidates:
         existing = read_json_or_none(s3, bucket, route_key(candidate))
@@ -256,17 +301,29 @@ def run(s3, bucket, now, reader):
                 quarantined_for_diagnostic = candidate
             elif previous_anonymous_counts is None:
                 previous_anonymous_counts = anonymous_clock_counts(previous)
+            old_trial = read_json_or_none(s3, bucket, bounded_trial_key(candidate))
             if (candidate_for_trial is None
                     and isinstance(previous, dict)
                     and previous.get("status") == "clock_order_audited"
                     and type(previous.get("inversionsOverHalfSecond")) is int
                     and previous["inversionsOverHalfSecond"] > 0
-                    and read_json_or_none(s3, bucket, bounded_trial_key(candidate)) is None):
+                    and old_trial is None):
                 candidate_for_trial = candidate
+            # Never rewrite the older coarse rejection; add only a separate
+            # immutable diagnostic scoped to that exact source/input fingerprint.
+            if (candidate_for_regression_origin is None
+                    and isinstance(old_trial, dict)
+                    and old_trial.get("status") == "trial_rejected"
+                    and old_trial.get("reason") == "event_clock_regression"
+                    and read_json_or_none(s3, bucket, regression_origin_key(candidate)) is None):
+                candidate_for_regression_origin = candidate
     # Test one previously diagnosed quarantine against a bounded-observation
     # trial, without changing original results or writing latest.json.
     if candidate_for_trial is not None:
         return run_quarantine_bounded_trial(s3, bucket, candidate_for_trial, reader)
+    if candidate_for_regression_origin is not None:
+        return run_quarantine_regression_origin_audit(
+            s3, bucket, candidate_for_regression_origin, reader)
     # Otherwise investigate one prior failure before ingesting another route.
     if quarantined_for_diagnostic is not None:
         result = run_quarantine_clock_audit(s3, bucket, quarantined_for_diagnostic, reader)
