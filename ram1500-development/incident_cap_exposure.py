@@ -139,7 +139,7 @@ class NativeCapExposure:
             "nativeCommandCeilingSourceReference": self.ceiling,
             "caution": (
                 "Same-segment past-only snapshots, not proven synchronous actuator cycles. "
-                "R-log cap duration is sampled exposure, not EPS acceptance or motor torque. "
+                "CarOutput may repeat a held controller value between source-defined 50 Hz CAN send cycles; sample counts are not independent CAN transmissions. R-log cap run spans are sampled exposure, not EPS acceptance or motor torque. "
                 "Controller saturation and native ceiling can differ; no steering-limit change authorized."
             ),
             "noVehicleWrite": True,
