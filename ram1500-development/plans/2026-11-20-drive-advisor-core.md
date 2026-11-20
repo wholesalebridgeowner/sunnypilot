@@ -1569,3 +1569,11 @@ git push -u origin ram1500-drive-advisor
 - [ ] **Step 4: Rollout step 1 on stored drives (owner go-ahead required)**
 
 Reading drives from the private log bucket needs the owner's explicit go-ahead at that time. With it, download the newest engaged drive's Q-logs to a private scratch folder (never into the repository), run `replay_report.py` with the `1f7233cb` schema, and report only the printed numbers. Adjust the thresholds at the top of `rules.py` only if known calm drives produce suggestions or known weaving drives produce none, and add a regression test for each adjustment.
+
+---
+
+## Execution notes (2026-11-20)
+
+- All tasks implemented as written; 67 tests passed at the end of Task 8.
+- Real-format check: synthetic messages built with the installed build's Cap'n Proto schema confirmed every field path in Task 6.
+- **Deviation, Task 6:** that check exposed a sampling bug. A strict "time since last sample" test dropped a third of jittered 10 Hz Q-log samples (67 of 100). `SampleBuilder` now samples on a fixed schedule with 25% tolerance and restarts the schedule after a gap. Two regression tests were added (`test_jittered_ten_hz_input_keeps_every_sample`, `test_hundred_hz_input_is_reduced_to_ten_hz`); the suite now has 69 tests.

@@ -31,6 +31,16 @@ class SampleBuilderTests(unittest.TestCase):
         self.assertIsNone(b.ingest("carState", 50_000_000, CS))
         self.assertIsNotNone(b.ingest("carState", 100_000_000, CS))
 
+    def test_jittered_ten_hz_input_keeps_every_sample(self):
+        b = SampleBuilder(sample_hz=10.0)
+        stamps = [i * 100_000_000 - (i % 3) * 1_000_000 for i in range(100)]
+        self.assertEqual(sum(b.ingest("carState", t, CS) is not None for t in stamps), 100)
+
+    def test_hundred_hz_input_is_reduced_to_ten_hz(self):
+        b = SampleBuilder(sample_hz=10.0)
+        count = sum(b.ingest("carState", i * 10_000_000, CS) is not None for i in range(1000))
+        self.assertAlmostEqual(count, 100, delta=1)
+
     def test_stale_messages_are_ignored(self):
         b = SampleBuilder(sample_hz=10.0)
         b.ingest("carControl", 0, ns(latActive=True))

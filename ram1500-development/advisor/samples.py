@@ -10,6 +10,7 @@ import math
 from metrics import Sample
 
 FRESH_NS = 500_000_000
+SCHEDULE_TOLERANCE = 0.25    # accept a sample up to 25% of an interval early (log timing jitter)
 LANE_CHANGE_OFF = {"off", "None", ""}
 RAM_STEER_LIMIT = 350
 
@@ -37,7 +38,7 @@ class SampleBuilder:
         self.steer_limit = steer_limit
         self.latest = {}
         self.alerts = frozenset()
-        self.last_sample_ns = None
+        self.next_due_ns = None
 
     def _fresh(self, service: str, t_ns: int):
         item = self.latest.get(service)
@@ -53,9 +54,15 @@ class SampleBuilder:
         if service != "carState":
             self.latest[service] = (t_ns, msg)
             return None
-        if self.last_sample_ns is not None and t_ns - self.last_sample_ns < self.interval_ns:
+        # Fixed schedule instead of "time since last sample": log timestamps
+        # jitter by about a millisecond, and a strict gap test drops a third of
+        # 10 Hz Q-log samples. After a gap the schedule restarts from now.
+        if self.next_due_ns is not None and t_ns < self.next_due_ns - int(self.interval_ns * SCHEDULE_TOLERANCE):
             return None
-        self.last_sample_ns = t_ns
+        if self.next_due_ns is None:
+            self.next_due_ns = t_ns + self.interval_ns
+        else:
+            self.next_due_ns = max(self.next_due_ns + self.interval_ns, t_ns + self.interval_ns)
         control = self._fresh("carControl", t_ns)
         controls_state = self._fresh("controlsState", t_ns)
         torque = _number(get(self._fresh("carOutput", t_ns), "actuatorsOutput", "torqueOutputCan"))
