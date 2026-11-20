@@ -76,6 +76,10 @@ class FactoryAccObservedMotion:
         if not number(speed) or speed <= 2 or not number(accel):
             self.last = None
             return
+        if self.last is not None and t <= self.last[0]:
+            # A duplicate or reversed clock cannot supply a new observation.
+            self.last = None
+            return
         self.samples += 1
         self.acceleration.append(float(accel))
         if self.last is None:
