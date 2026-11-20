@@ -83,6 +83,7 @@ def observe(paths, reader, target=TARGET):
     }
     names=Counter()
     observedEvents=[]
+    telemetry=[]
     for path in paths:
         messages=list(reader(path))
         headers=[m for m in messages if str(m.which())=="initData"]
@@ -127,10 +128,24 @@ def observe(paths, reader, target=TARGET):
                 if t is not None:summary["epsSteeringTorqueMaxAbs"]=round(max(summary["epsSteeringTorqueMaxAbs"] or 0,abs(t)),3)
                 rate=num(d,"steeringRateDeg")
                 if rate is not None:summary["steeringRateMaxAbsDegPerSecond"]=round(max(summary["steeringRateMaxAbsDegPerSecond"] or 0,abs(rate)),3)
+                telemetry.append((offset,"carState",{"speedMps":v,"epsTorque":t,"driverTorque":num(d,"steeringTorque"),"steeringRate":rate}))
             elif kind=="carControl":
                 summary["carControlSamples"]+=1
                 if m.carControl.latActive:summary["latActiveTrueSamples"]+=1
                 else:summary["latActiveFalseSamples"]+=1
+                telemetry.append((offset,"carControl",{"latActive":bool(m.carControl.latActive),
+                    "requestedTorque":num(m.carControl.actuators,"torque")}))
+            elif kind=="carOutput":
+                telemetry.append((offset,"carOutput",{"nativeOutputTorque":num(m.carOutput.actuatorsOutput,"torque")}))
+            elif kind=="controlsState":
+                state=m.controlsState.lateralControlState
+                try:
+                    which=state.which()
+                    state=getattr(state,which)
+                    sat=bool(state.saturated) if hasattr(state,"saturated") else None
+                except (AttributeError,TypeError,ValueError):
+                    sat=None
+                telemetry.append((offset,"controlsState",{"saturated":sat}))
             elif kind=="onroadEvents":
                 for e in m.onroadEvents:
                     name=str(e.name)
@@ -138,6 +153,7 @@ def observe(paths, reader, target=TARGET):
                         names[name]+=1
                         observedEvents.append({
                             "secondsFromWarning":int(round(offset)),
+                            "secondsExact":round(offset,2),
                             "name":name,
                             "warning":bool(e.warning),
                             "softDisable":bool(e.softDisable),
@@ -145,7 +161,51 @@ def observe(paths, reader, target=TARGET):
                         })
     if summary["segmentsWithWallClockAnchor"]==0:
         summary["status"]="no_valid_utc_wall_clock_alignment"
-    summary["events"]=observedEvents[:30]
+    # Prioritize actual warning labels instead of flooding the console with
+    # consecutive steerOverride event samples. These are sample counts only.
+    summary["events"]=sorted(observedEvents,key=lambda e:(
+        0 if e["name"] in ("steerSaturated","steerTimeLimit","steerUnavailable",
+                          "steerTempUnavailable","excessiveActuation") else 1,
+        abs(e["secondsExact"])))[:16]
+    by_name={}
+    for sample in observedEvents:
+        name=sample["name"]
+        t=sample["secondsExact"]
+        by_name.setdefault(name,[]).append(t)
+    summary["eventTimeBoundsSeconds"]={
+        name:{"first":min(times),"last":max(times),"nearest":min(times,key=abs),
+              "sampleCount":len(times)}
+        for name,times in sorted(by_name.items())}
+    saturated=by_name.get("steerSaturated",[])
+    if saturated:
+        event_t=min(saturated,key=abs)
+        samples=[(kind,data) for t,kind,data in telemetry if abs(t-event_t)<=5]
+        def dist(kind,field):
+            vals=sorted(abs(d[field]) for k,d in samples if k==kind
+                        and finite(d.get(field)))
+            if not vals:return {"samples":0}
+            idx=min(len(vals)-1,int((len(vals)-1)*0.9))
+            return {"samples":len(vals),"p90Abs":round(vals[idx],3),
+                    "maxAbs":round(vals[-1],3)}
+        summary["saturationEventContext"]={
+            "secondsFromReportedTime":event_t,
+            "halfWindowSeconds":5,
+            "carControlLatActiveTrue":sum(1 for k,d in samples if k=="carControl"
+                                          and d.get("latActive") is True),
+            "carControlLatActiveFalse":sum(1 for k,d in samples if k=="carControl"
+                                           and d.get("latActive") is False),
+            "controlsStateSaturatedTrue":sum(1 for k,d in samples if k=="controlsState"
+                                             and d.get("saturated") is True),
+            "controlsStateSaturatedFalse":sum(1 for k,d in samples if k=="controlsState"
+                                              and d.get("saturated") is False),
+            "requestedTorque":dist("carControl","requestedTorque"),
+            "nativeOutputTorque":dist("carOutput","nativeOutputTorque"),
+            "epsTorque":dist("carState","epsTorque"),
+            "driverTorque":dist("carState","driverTorque"),
+            "steeringRate":dist("carState","steeringRate"),
+            "speedMps":dist("carState","speedMps"),
+            "caveat":"Q-log samples do not resolve 100 Hz control phasing or CAN acceptance. No R-log in matched incident segment range."
+        }
     summary["eventStatus"]="candidate_alert_present" if observedEvents else "not_observed"
     summary["eventSampleCounts"]=dict(sorted(names.items()))
     summary["clockAlignmentRequired"]=True
