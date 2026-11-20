@@ -1,0 +1,28 @@
+name: Ram historical collector backfill fixture tests
+
+on:
+  push:
+    paths:
+      - "ram1500-development/collector_backfill_gate.py"
+      - "ram1500-development/test_collector_backfill_gate.py"
+      - "ram1500-development/reports/2026-11-18-collector-backfill-window-audit.md"
+      - ".github/workflows/ram-collector-backfill-fixtures.yml"
+  pull_request:
+    paths:
+      - "ram1500-development/collector_backfill_gate.py"
+      - "ram1500-development/test_collector_backfill_gate.py"
+      - "ram1500-development/reports/2026-11-18-collector-backfill-window-audit.md"
+      - ".github/workflows/ram-collector-backfill-fixtures.yml"
+
+jobs:
+  collector-backfill-synthetic:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate historical collector eligibility and provenance assertions
+        run: python -m unittest discover -s ram1500-development -p 'test_collector_backfill_gate.py' -v
