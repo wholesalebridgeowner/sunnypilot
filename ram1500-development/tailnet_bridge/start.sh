@@ -37,4 +37,5 @@ if ! tailscale up --auth-key="$AUTHKEY" --hostname=ram-railway-pi-probe --accept
 fi
 unset AUTHKEY
 printf '%s\n' 'RAM_PI_TAILNET {"status":"tailnet_node_registered","deviceWrites":false}'
+python3 -u /opt/ram/ssh_auth_probe.py
 exec python3 -u /opt/ram/probe.py
