@@ -4,5 +4,6 @@ FROM alpine:3.21
 RUN apk add --no-cache python3 tailscale ca-certificates
 WORKDIR /opt/ram
 COPY probe.py /opt/ram/probe.py
+COPY mint_authkey.py /opt/ram/mint_authkey.py
 COPY start.sh /opt/ram/start.sh
 CMD ["/bin/sh","/opt/ram/start.sh"]
