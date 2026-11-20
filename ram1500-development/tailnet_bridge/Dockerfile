@@ -6,5 +6,6 @@ WORKDIR /opt/ram
 COPY probe.py /opt/ram/probe.py
 COPY mint_authkey.py /opt/ram/mint_authkey.py
 COPY ssh_auth_probe.py /opt/ram/ssh_auth_probe.py
+COPY one_time_session.py /opt/ram/one_time_session.py
 COPY start.sh /opt/ram/start.sh
 CMD ["/bin/sh","/opt/ram/start.sh"]
