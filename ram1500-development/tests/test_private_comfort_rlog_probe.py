@@ -5,7 +5,7 @@ import pytest
 
 from private_comfort_rlog_probe import (
     PINNED_COMMIT, parse_segments, pinned_recorded_build, public_lane_summary,
-    select_keys, summarize,
+    select_keys, summarize, require_comfort_segment_source_pins,
 )
 
 PREFIX = "aabbccdd"
@@ -152,3 +152,68 @@ def test_following_validity_counts_only_emit_known_aggregate_reason_keys():
     assert secret not in json.dumps(out)
     assert set(out["following"]["validityRejections"]) == {
         "invalidCarStateOrCan", "invalidRadarMessage"}
+
+
+# Synthetic, identifier-free tests for exact per-segment source provenance.
+def _source_record(seg, commit=PINNED_COMMIT):
+    return {"service": "initData", "segment": seg, "gitCommit": commit}
+
+
+def _read_result(seg):
+    return SimpleNamespace(segment=seg, messages=100, error=None, truncated=False)
+
+
+def test_comfort_source_gate_accepts_full_pin_per_selected_segment():
+    out = require_comfort_segment_source_pins(
+        [_source_record(29), _source_record(30), _source_record(30)],
+        [_read_result(29), _read_result(30)])
+    assert out == {"sourceVerifiedSegments": 2, "sourceVerifiedHeaderCount": 3}
+
+
+@pytest.mark.parametrize("bad_commit", [
+    PINNED_COMMIT[:8], PINNED_COMMIT[:12], PINNED_COMMIT[:39],
+    PINNED_COMMIT.upper(), PINNED_COMMIT + " ", None, "",
+    PINNED_COMMIT[:-1] + "0",
+])
+def test_comfort_rejects_prefix_malformed_or_disagreeing_source(bad_commit):
+    assert not pinned_recorded_build([_source_record(29, bad_commit)])[
+        "recordedCommitMatchedPinned"]
+    with pytest.raises(ValueError) as ex:
+        require_comfort_segment_source_pins(
+            [_source_record(29, PINNED_COMMIT), _source_record(30, bad_commit)],
+            [_read_result(29), _read_result(30)])
+    if bad_commit:
+        assert str(bad_commit) not in str(ex.value)
+    assert "segment 30" not in str(ex.value)
+
+
+def test_comfort_missing_header_in_one_segment_fails_even_with_valid_other():
+    with pytest.raises(ValueError, match="missing recorded build metadata"):
+        require_comfort_segment_source_pins(
+            [_source_record(29)],
+            [_read_result(29), _read_result(30)])
+
+
+@pytest.mark.parametrize("files,records", [
+    ([], []),
+    ([_read_result(29), _read_result(29)], [_source_record(29)]),
+    ([SimpleNamespace(segment=None)], [_source_record(29)]),
+    ([SimpleNamespace(segment=True)], [_source_record(29)]),
+    ([_read_result(29)], [_source_record(29), _source_record(30)]),
+    ([_read_result(29)], [{"service": "initData", "segment": "29", "gitCommit": PINNED_COMMIT}]),
+])
+def test_comfort_rejects_missing_duplicate_or_unscoped_file_provenance(files, records):
+    with pytest.raises(ValueError) as ex:
+        require_comfort_segment_source_pins(records, files)
+    assert "1f7233" not in str(ex.value)
+
+
+def test_comfort_source_integrity_never_exports_private_record_fields():
+    rows = [_source_record(29), _source_record(30)]
+    rows[0]["gps"] = "SECRET_PRIVATE_GPS"
+    rows[1]["vin"] = "SECRET_PRIVATE_VIN"
+    import json
+    output = require_comfort_segment_source_pins(
+        rows, [_read_result(29), _read_result(30)])
+    assert "SECRET_PRIVATE" not in json.dumps(output)
+    assert set(output) == {"sourceVerifiedSegments", "sourceVerifiedHeaderCount"}
