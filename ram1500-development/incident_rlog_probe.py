@@ -14,6 +14,7 @@ import tempfile
 from urllib.parse import quote, urlencode
 
 from auto_review import SCHEMA_COMMIT
+from incident_cap_exposure import NativeCapExposure
 from incident_route_inventory import KEY, TARGET
 from incident_route_metadata import safe_api
 from incident_qlog_probe import private_candidate, num, finite
@@ -37,9 +38,11 @@ def percentiles(values):
 def read_rlog(paths, reader, target=TARGET):
     event=target.timestamp()+WARNING_SECONDS_AFTER_MINUTE
     points=[]
+    cap=NativeCapExposure()
     heads=0
     clocked=0
     for path in paths:
+        cap.segment_boundary()
         anchor=None
         saw_source=False
         first_data_checked=False
@@ -76,19 +79,25 @@ def read_rlog(paths, reader, target=TARGET):
                     "rate":num(d,"steeringRateDeg"),
                     "angle":num(d,"steeringAngleDeg"),
                     "steeringPressed":bool(d.steeringPressed),
+                    "canValid":getattr(d,"canValid",None),
+                    "steerFaultTemporary":getattr(d,"steerFaultTemporary",None),
+                    "steerFaultPermanent":getattr(d,"steerFaultPermanent",None),
                 }))
+                cap.observe(kind,offset,points[-1][2])
             elif kind=="carControl":
                 d=m.carControl
                 points.append((offset,kind,{
                     "latActive":bool(d.latActive),
                     "request":num(getattr(d,"actuators",None),"torque"),
                 }))
+                cap.observe(kind,offset,points[-1][2])
             elif kind=="carOutput":
                 a=getattr(m.carOutput,"actuatorsOutput",None)
                 points.append((offset,kind,{
                     "torqueOutputCan":num(a,"torqueOutputCan"),
                     "torqueOutputNormalized":num(a,"torque"),
                 }))
+                cap.observe(kind,offset,points[-1][2])
             elif kind=="controlsState":
                 state=getattr(m.controlsState,"lateralControlState",None)
                 try:
@@ -99,6 +108,7 @@ def read_rlog(paths, reader, target=TARGET):
                     saturated=None
                     output=None
                 points.append((offset,kind,{"saturated":saturated,"controllerOutput":output}))
+                cap.observe(kind,offset,points[-1][2])
             elif kind=="onroadEvents":
                 for ev in m.onroadEvents:
                     if str(ev.name) in ("steerSaturated","steerOverride","steerTimeLimit"):
@@ -124,6 +134,7 @@ def read_rlog(paths, reader, target=TARGET):
         "outerSecondsEachSide":OUTER_SECONDS,
         "recordsInOuterWindow":len(points),
         "recordsInFocusWindow":len(near),
+        "nativeCeilingExposure":cap.report(),
         "samples":{
             "carState":len(r["carState"]),
             "carControl":len(r["carControl"]),

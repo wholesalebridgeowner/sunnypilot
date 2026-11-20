@@ -43,6 +43,27 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(summary["nativeCommandTorqueField"]["maxAbs"],280.0)
         self.assertEqual(summary["epsSteeringTorqueSensor"]["maxAbs"],250.0)
         self.assertNotIn("vin",str(summary).lower())
+    def test_cap_context_integrates_but_requires_live_health_fields(self):
+        def reader(_):
+            yield header()
+            yield Msg("carState", 200, SimpleNamespace(
+                vEgo=10.0, steeringTorqueEps=200, steeringTorque=0,
+                steeringRateDeg=10, steeringAngleDeg=4, steeringPressed=False,
+                canValid=True, steerFaultTemporary=False, steerFaultPermanent=False))
+            yield Msg("carControl", 200.001, SimpleNamespace(
+                latActive=True, actuators=SimpleNamespace(torque=1.0)))
+            yield Msg("controlsState", 200.002, SimpleNamespace(
+                lateralControlState=State()))
+            yield Msg("carOutput", 200.003, SimpleNamespace(
+                actuatorsOutput=SimpleNamespace(torqueOutputCan=350, torque=1.0)))
+        result = read_rlog([Path("38/rlog.zst")], reader)
+        context = result["nativeCeilingExposure"]
+        self.assertEqual(context["status"], "qualified_observational_coverage")
+        self.assertEqual(context["qualifiedCommaLateralAtCeilingSamples"], 1)
+        self.assertEqual(context["qualifiedWithControllerSaturated"], 1)
+        self.assertEqual(context["nativeCommandCeilingSourceReference"], 350)
+        self.assertTrue(context["noVehicleWrite"])
+
     def test_wrong_source_rejected(self):
         def reader(_):
             yield header("wrong")
