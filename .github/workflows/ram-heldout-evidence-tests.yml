@@ -1,0 +1,25 @@
+name: Ram held-out evidence fail-closed tests
+on:
+  push:
+    branches: [ram1500-heldout-scorecard-gates-20261119]
+    paths:
+      - 'ram1500-development/heldout_stability_gate.py'
+      - 'ram1500-development/test_heldout_stability_gate.py'
+      - '.github/workflows/ram-heldout-evidence-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/heldout_stability_gate.py'
+      - 'ram1500-development/test_heldout_stability_gate.py'
+      - '.github/workflows/ram-heldout-evidence-tests.yml'
+jobs:
+  heldout-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s ram1500-development -p 'test_heldout_stability_gate.py' -v
+      - run: python -m compileall -q ram1500-development/heldout_stability_gate.py
