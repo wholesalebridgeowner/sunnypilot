@@ -20,7 +20,9 @@ jobs:
         with:
           python-version: '3.11'
       - name: Read-only network probe fixtures
-        run: python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_probe.py' -v
+        run: |
+          python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_probe.py' -v
+          python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_mint_authkey.py' -v
       - name: Verify no vehicle actuation, SSH commands, or privileged container
         shell: bash
         run: |
