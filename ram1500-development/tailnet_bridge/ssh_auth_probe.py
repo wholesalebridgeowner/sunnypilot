@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from probe import validated_pi_address, ProbeError
+from probe import validated_pi_address, ProbeError, ssh_port_banner_probe
 
 PI_USERNAME = "markswerner"
 MAX_SECONDS = 12
@@ -64,26 +64,6 @@ def classify_ssh_failure(message: str, timed_out: bool = False) -> str:
     return "unclassified_authentication_failure"
 
 
-def ssh_banner_probe(ip, runner=subprocess.run):
-    """Read the server SSH greeting through the authenticated Tailscale tunnel.
-
-    No client credentials are offered, and no SSH command is sent. The
-    greeting is reduced to a boolean (never print the server version).
-    """
-    validated_pi_address(ip)
-    try:
-        result = runner(
-            ["tailscale", "nc", ip, "22"], timeout=6,
-            input="", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env={**os.environ, "TERM": "dumb"},
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return {"sshProtocolBannerObserved": None}
-    first = result.stdout.splitlines()[0] if result.stdout else ""
-    return {"sshProtocolBannerObserved": first.startswith("SSH-2.0-")}
-
-
-
 def ssh_advertised(ip, runner=subprocess.run):
     """Only a boolean; never log peer IDs, host keys or private tailnet state."""
     validated_pi_address(ip)
@@ -119,7 +99,7 @@ def main():
         advertised = ssh_advertised(ip)
         result = auth_probe(ip)
         result["peerAdvertisesTailscaleSSH"] = advertised
-        result.update(ssh_banner_probe(ip))
+        result.update(ssh_port_banner_probe(ip))
     except (ProbeError, ValueError):
         result = {"status": "pi_ssh_auth_skipped_bad_target",
                   "sshAuthenticated": False, "deviceWrites": False}
