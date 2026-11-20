@@ -36,4 +36,6 @@ jobs:
           assert "SSH" not in Path("ram1500-development/tailnet_bridge/Dockerfile").read_text()
           assert "subprocess" not in s
           assert "deviceWrites" in s
+          start=Path("ram1500-development/tailnet_bridge/start.sh").read_text()
+          assert "python3 -u /opt/ram/ssh_auth_probe.py" in start
           PY
