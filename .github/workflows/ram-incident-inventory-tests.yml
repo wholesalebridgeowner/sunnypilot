@@ -9,6 +9,8 @@ on:
       - 'ram1500-development/test_incident_route_metadata.py'
       - 'ram1500-development/incident_qlog_probe.py'
       - 'ram1500-development/test_incident_qlog_probe.py'
+      - 'ram1500-development/incident_rlog_probe.py'
+      - 'ram1500-development/test_incident_rlog_probe.py'
       - '.github/workflows/ram-incident-inventory-tests.yml'
 jobs:
   route-inventory:
@@ -24,3 +26,4 @@ jobs:
           python3 -m unittest discover -s ram1500-development -p 'test_incident_route_inventory.py' -v
           python3 -m unittest discover -s ram1500-development -p 'test_incident_route_metadata.py' -v
           python3 -m unittest discover -s ram1500-development -p 'test_incident_qlog_probe.py' -v
+          python3 -m unittest discover -s ram1500-development -p 'test_incident_rlog_probe.py' -v
