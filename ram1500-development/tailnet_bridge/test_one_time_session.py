@@ -15,8 +15,9 @@ class TestOneTimeSession(unittest.TestCase):
         command=read_only_command("100.93.4.64")
         self.assertEqual(command[:3],["tailscale","ssh","markswerner@100.93.4.64"])
         self.assertIn("python3 -c ",command[3])
-        self.assertIn("192.168.43.1",PI_DIAGNOSTIC)
-        self.assertIn("10.81.244.220",PI_DIAGNOSTIC)
+        self.assertIn("10.0.0.174",PI_DIAGNOSTIC)
+        self.assertIn("StrictHostKeyChecking=yes",PI_DIAGNOSTIC)
+        self.assertIn("BatchMode=yes",PI_DIAGNOSTIC)
         self.assertNotIn("rm -",command[3])
         self.assertNotIn("sudo ",command[3])
         for invalid in ("192.168.1.30","localhost","8.8.8.8","100.128.0.1"):
@@ -24,20 +25,21 @@ class TestOneTimeSession(unittest.TestCase):
                 validated_pi_ip(invalid)
 
     def test_privacy_allowlisted_pi_success(self):
-        data={"piShellConfirmed":True,"commaCandidateSsh":{
-            "known_hotspot":"no_tcp22_route","observed_other":"tcp22_reachable"},
-            "commaAuthenticated":False,"deviceWrites":False}
-        raw="Login info\nRAM_PI_TO_COMMA "+json.dumps(data)+"\n"
-        parsed=results_from_output(raw)
+        data = {"piShellConfirmed":True,"commaSshTcpReachable":True,
+                "commaSshAuthentication":"pi_key_not_authorized_on_comma",
+                "commaAuthenticated":False,"deviceWrites":False}
+        raw = "Login info\\nRAM_PI_TO_COMMA " + json.dumps(data) + "\\n"
+        parsed = results_from_output(raw)
         self.assertTrue(parsed["piShellAuthenticated"])
         self.assertFalse(parsed["commaAuthenticated"])
-        self.assertEqual(parsed["commaCandidateSsh"]["observed_other"],"tcp22_reachable")
+        self.assertEqual(parsed["commaSshAuthentication"], "pi_key_not_authorized_on_comma")
         self.assertNotIn("Login info",str(parsed))
 
     def test_untrusted_output_not_interpreted(self):
-        self.assertIsNone(results_from_output('RAM_PI_TO_COMMA {"piShellConfirmed":true,"commaCandidateSsh":{"anything":"yes"}}'))
-        self.assertIsNone(results_from_output('RAM_PI_TO_COMMA {"piShellConfirmed":true,"commaCandidateSsh":{"known_hotspot":"secret","observed_other":"tcp22_reachable"}}'))
+        self.assertIsNone(results_from_output('RAM_PI_TO_COMMA {"piShellConfirmed":true,"commaSshTcpReachable":true,"commaSshAuthentication":"secret"}'))
+        self.assertIsNone(results_from_output('RAM_PI_TO_COMMA {"piShellConfirmed":true,"commaSshTcpReachable":true,"commaSshAuthentication":"ssh_authenticated","commaAuthenticated":false}'))
         self.assertIsNone(results_from_output('PI_RESPONSE private_data'))
-        
+
+
 if __name__=="__main__":
     unittest.main()
