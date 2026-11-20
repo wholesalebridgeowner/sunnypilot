@@ -77,6 +77,45 @@ def ssh_port_probe(pi_address: str, *, proxy_host="127.0.0.1", proxy_port=1055,
                 "piSshTcpReachable": False, "deviceWrites": False}
 
 
+
+def ssh_port_banner_probe(ip, *, proxy_host="127.0.0.1", proxy_port=1055, timeout=5.0):
+    """Observe the SSH wire-protocol greeting; never authenticate or log bytes.
+
+    Tailscale identifies the peer network endpoint, but this is NOT SSH
+    host-key verification. The Pi's local SSH trust still requires an
+    explicitly authorized identity and a pinned SSH host key.
+    """
+    validated_pi_address(ip)
+    try:
+        with socket.create_connection((proxy_host, proxy_port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(b"\\x05\\x01\\x00")
+            if exactly(sock, 2) != b"\\x05\\x00":
+                return {"sshProtocolBannerObserved": None}
+            sock.sendall(b"\\x05\\x01\\x00\\x01"
+                         + validated_pi_address(ip) + struct.pack("!H", 22))
+            answer = exactly(sock, 4)
+            if answer[0] != 5 or answer[1] != 0:
+                return {"sshProtocolBannerObserved": None}
+            if answer[3] == 1:
+                exactly(sock, 6)
+            elif answer[3] == 4:
+                exactly(sock, 18)
+            elif answer[3] == 3:
+                length = exactly(sock, 1)[0]
+                exactly(sock, length + 2)
+            else:
+                return {"sshProtocolBannerObserved": None}
+            # SSH servers send their version banner before authentication.
+            greeting = sock.recv(256)
+            if not greeting:
+                return {"sshProtocolBannerObserved": None}
+            return {"sshProtocolBannerObserved": greeting.startswith(b"SSH-2.0-")}
+    except (socket.timeout, OSError, ProbeError):
+        return {"sshProtocolBannerObserved": None}
+
+
+
 def run_once():
     value = os.getenv("TAILNET_PI_IP", "")
     if not value:
