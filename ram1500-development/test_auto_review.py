@@ -787,8 +787,7 @@ class FactoryACCRadarPairingTests(unittest.TestCase):
             "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2")
         result = compare(current, old)
         self.assertNotIn("leadHeadway.medianSeconds", result["metrics"])
-        self.assertIn("factoryAccObservedMotion.p90AbsObservedJerkMps3",
-                         [*result["metrics"], "factoryAccObservedMotion.p90AbsObservedJerkMps3"])
+        self.assertFalse(any(k.startswith("leadHeadway.") for k in result["metrics"]))
 
 
 class ComparisonProvenanceTests(unittest.TestCase):
