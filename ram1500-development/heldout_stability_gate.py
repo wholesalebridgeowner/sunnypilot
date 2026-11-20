@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 SOURCE = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
-QUALITY = "source_pinned_rlog_independent_lateral_and_physical_lane_ground_truth_v1"
+QUALITY = "source_pinned_rlog_independent_lateral_and_physical_lane_ground_truth_v2"
 # Exactly comparable paired replay quantities. "Smaller" must mean no worse;
 # no weights or fabricated target controller values are introduced.
 FLOAT_METRICS = (
@@ -37,10 +37,16 @@ def finite_nonnegative(value):
     return (type(value) in (int, float) and math.isfinite(value) and value >= 0)
 
 
+def _canonical_sha256(value):
+    """Canonical lowercase SHA-256, kept only in local input; never returned."""
+    return (type(value) is str and len(value) == 64 and
+            all(c in "0123456789abcdef" for c in value))
+
+
 def evaluate(doc):
     """Return a privacy-preserving decision: never echo route tokens/measurements.
 
-    An operator's provenance attestations are NOT cryptographic proof. A
+    Caller-supplied hashes are not independently verified provenance. A
     positive result is ONLY eligible for independent offline review.
     """
     problems = []
@@ -74,6 +80,16 @@ def evaluate(doc):
         problems.append("route_identity_missing_repeated_or_overlapping")
     if any(not isinstance(r, dict) or r.get("sourceCommit") != SOURCE for r in dev):
         problems.append("development_source_not_pinned")
+    # Caller-provided route tokens cannot prove that a renamed route was not
+    # reused as an independent holdout. Require private SHA-256 commitments
+    # to the exact frozen replay inputs; independent reviewers must recompute.
+    input_fingerprints = []
+    for route in dev:
+        digest = route.get("routeInputSha256") if isinstance(route, dict) else None
+        if not _canonical_sha256(digest):
+            problems.append("development_input_fingerprint_invalid")
+        else:
+            input_fingerprints.append(digest)
     improved = 0
     for i, route in enumerate(hold):
         label = f"heldout_{i + 1}"
@@ -89,6 +105,16 @@ def evaluate(doc):
         if not isinstance(baseline, dict) or not isinstance(candidate, dict):
             problems.append(label + "_missing_paired_replay")
             continue
+        # Identical counts and elapsed seconds do not prove identical replay
+        # source data or exact eligible observation windows.
+        for field in ("routeInputSha256", "eligibleWindowSha256"):
+            before_hash, after_hash = baseline.get(field), candidate.get(field)
+            if (not _canonical_sha256(before_hash)
+                    or not _canonical_sha256(after_hash)
+                    or before_hash != after_hash):
+                problems.append(label + "_unpaired_or_invalid_" + field)
+        if _canonical_sha256(baseline.get("routeInputSha256")):
+            input_fingerprints.append(baseline["routeInputSha256"])
         # Both runs must evaluate the same qualified window/inputs.
         seconds = [x.get("eligibleSeconds") for x in (baseline, candidate)]
         samples = [x.get("eligibleSamples") for x in (baseline, candidate)]
@@ -108,6 +134,8 @@ def evaluate(doc):
                 problems.append(label + "_regressed_" + key)
             elif b < a:
                 improved += 1
+    if len(input_fingerprints) != len(set(input_fingerprints)):
+        problems.append("route_input_fingerprint_reused_across_cohorts")
     if not improved:
         problems.append("no_measured_nonregressing_improvement")
     # No release decision can be made from an aggregate scorecard alone.
@@ -121,7 +149,7 @@ def evaluate(doc):
         "vehicleReleaseAuthorized": False,
         "calibrationAuthorized": False,
         "interpretation": (
-            "Attested offline paired-replay gate only; no causal or real-world "
+            "Attested offline paired-replay gate with unverified local hashes; no causal or real-world "
             "safety claim. Independent log provenance, hardware and controlled "
             "vehicle testing remain separate mandatory gates."
         ),
