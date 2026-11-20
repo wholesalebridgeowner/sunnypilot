@@ -12,13 +12,19 @@ import os
 import subprocess
 from probe import validated_pi_address, ProbeError, ssh_port_banner_probe
 
-PI_USERNAME = "markswerner"
+# The Pi OS user name is private: it comes only from the Railway
+# TAILNET_PI_USER variable and is never committed to public git.
 MAX_SECONDS = 12
 
 
 def auth_probe(ip, runner=subprocess.run):
     validated_pi_address(ip)
-    command = ["tailscale", "ssh", f"{PI_USERNAME}@{ip}", "true"]
+    user = os.environ.get("TAILNET_PI_USER", "").strip()
+    if not user or not user.replace("-", "").replace("_", "").isalnum():
+        return {"status": "pi_ssh_auth_skipped_missing_user",
+                "sshAuthenticated": False, "failureClass": "missing_pi_user",
+                "deviceWrites": False}
+    command = ["tailscale", "ssh", f"{user}@{ip}", "true"]
     try:
         completed = runner(
             command, timeout=MAX_SECONDS, stdin=subprocess.DEVNULL,

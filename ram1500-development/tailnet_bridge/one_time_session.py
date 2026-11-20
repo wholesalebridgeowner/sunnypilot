@@ -23,7 +23,6 @@ import signal
 import time
 
 TARGET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-PI_USER = "markswerner"
 MAX_SESSION_SECONDS = 900
 AUTH_LINK = re.compile(r"https://login\.tailscale\.com/a/[A-Za-z0-9_-]{5,180}")
 
@@ -31,7 +30,7 @@ AUTH_LINK = re.compile(r"https://login\.tailscale\.com/a/[A-Za-z0-9_-]{5,180}")
 # reachable from Sunnyslope or valid on the current home Wi-Fi.
 PI_DIAGNOSTIC = """
 import json,socket
-known=(('known_hotspot','192.168.43.1'),('observed_other','10.81.244.220'))
+known=(('known_hotspot','192.168.43.1'),('observed_other',__COMMA_OTHER_IP__))
 results={}
 for label,host in known:
     try:
@@ -42,6 +41,26 @@ for label,host in known:
         results[label]='no_tcp22_route'
 print('RAM_PI_TO_COMMA '+json.dumps({'piShellConfirmed':True,'commaCandidateSsh':results,'commaAuthenticated':False,'deviceWrites':False},separators=(',',':')),flush=True)
 """
+
+# Private targets come only from Railway variables, never public git:
+# TAILNET_PI_USER, COMMA_HOME_IP, COMMA_OTHER_IP.
+def private_setting(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ValueError("missing_" + name.lower())
+    return value
+
+def pi_user() -> str:
+    user = private_setting("TAILNET_PI_USER")
+    if not user.replace("-", "").replace("_", "").isalnum():
+        raise ValueError("invalid_tailnet_pi_user")
+    return user
+
+def private_comma_ip(name: str) -> str:
+    ip = ipaddress.IPv4Address(private_setting(name))
+    if not ip.is_private:
+        raise ValueError("comma_address_not_private")
+    return str(ip)
 
 def validated_pi_ip(raw: str) -> str:
     try:
@@ -55,9 +74,11 @@ def validated_pi_ip(raw: str) -> str:
 def read_only_command(ip: str) -> list[str]:
     ip = validated_pi_ip(ip)
     # tailscale ssh is the built-in SSH client with Tailscale policy + check.
-    # The host command is constant, never constructed from user text.
-    remote = "python3 -c " + shlex.quote(PI_DIAGNOSTIC)
-    return ["tailscale", "ssh", f"{PI_USER}@{ip}", remote]
+    # The host program is fixed; only validated private addresses from
+    # Railway variables are substituted, never free-form text.
+    program = PI_DIAGNOSTIC.replace("__COMMA_OTHER_IP__", repr(private_comma_ip("COMMA_OTHER_IP")))
+    remote = "python3 -c " + shlex.quote(program)
+    return ["tailscale", "ssh", f"{pi_user()}@{ip}", remote]
 
 def authorization_link(text: str) -> str | None:
     # Never print arbitrary SSH stderr. Only recognized login.tailscale.com/a
@@ -91,7 +112,11 @@ def run():
     except ValueError:
         print('RAM_SESSION {"status":"invalid_or_missing_pi_ip","deviceWrites":false}', flush=True)
         return 2
-    command = read_only_command(ip)
+    try:
+        command = read_only_command(ip)
+    except ValueError:
+        print('RAM_SESSION {"status":"missing_or_invalid_private_target","deviceWrites":false}', flush=True)
+        return 2
 
     # Tailscale check can require /dev/tty to show the browser approval URL.
     # pty.fork gives it a real controlling terminal, unlike subprocess.PIPE.

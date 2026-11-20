@@ -8,17 +8,30 @@ import ssh_auth_probe as auth
 
 
 class TestSshAuthProbe(unittest.TestCase):
+    def setUp(self):
+        env = patch.dict("os.environ", {"TAILNET_PI_USER": "pi-user"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_missing_pi_user_fails_closed_without_running_ssh(self):
+        calls=[]
+        with patch.dict("os.environ", {"TAILNET_PI_USER": ""}):
+            result=auth.auth_probe("100.64.0.10", lambda *a, **k: calls.append(a))
+        self.assertEqual(result["status"], "pi_ssh_auth_skipped_missing_user")
+        self.assertFalse(result["sshAuthenticated"])
+        self.assertEqual(calls, [])
+
     def test_exact_readonly_command_and_no_key_leak(self):
         calls=[]
         def runner(args, **kwargs):
             calls.append((args,kwargs))
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        result=auth.auth_probe("100.93.4.64", runner)
+        result=auth.auth_probe("100.64.0.10", runner)
         self.assertEqual(result["status"], "pi_ssh_authenticated_readonly")
         self.assertTrue(result["sshAuthenticated"])
         self.assertFalse(result["deviceWrites"])
         command, kwargs=calls[0]
-        self.assertEqual(command, ["tailscale","ssh","markswerner@100.93.4.64","true"])
+        self.assertEqual(command, ["tailscale","ssh","pi-user@100.64.0.10","true"])
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
         self.assertEqual(kwargs["timeout"], 12)
         self.assertEqual(kwargs["env"]["SSH_ASKPASS_REQUIRE"], "never")
@@ -27,7 +40,7 @@ class TestSshAuthProbe(unittest.TestCase):
         secret="sensitive_private_device_identifier"
         def runner(*args,**kwargs):
             return SimpleNamespace(returncode=255, stdout="",stderr=secret)
-        result=auth.auth_probe("100.93.4.64",runner)
+        result=auth.auth_probe("100.64.0.10",runner)
         self.assertEqual(result["status"], "pi_ssh_auth_not_confirmed")
         self.assertNotIn(secret,str(result))
 
@@ -35,24 +48,24 @@ class TestSshAuthProbe(unittest.TestCase):
         def runner(*args,**kwargs):
             raise AssertionError("runner must not be used")
         with self.assertRaises(Exception):
-            auth.auth_probe("192.168.1.30",runner)
+            auth.auth_probe("192.168.1.250",runner)
 
     def test_detects_advertised_ssh_keys_without_showing_them(self):
         import json
         sample={"Peer":{"private-peer":{
-            "TailscaleIPs":["100.93.4.64"],
+            "TailscaleIPs":["100.64.0.10"],
             "SSHHostKeys":["PRIVATE_HOST_KEY_DO_NOT_LOG"]}}}
         def runner(*args, **kwargs):
             return SimpleNamespace(returncode=0,stdout=json.dumps(sample),stderr="")
-        self.assertIs(auth.ssh_advertised("100.93.4.64",runner),True)
+        self.assertIs(auth.ssh_advertised("100.64.0.10",runner),True)
         sample["Peer"]["private-peer"]["SSHHostKeys"]=[]
-        self.assertIs(auth.ssh_advertised("100.93.4.64",runner),False)
-        self.assertNotIn("PRIVATE_HOST_KEY",str(auth.ssh_advertised("100.93.4.64",runner)))
+        self.assertIs(auth.ssh_advertised("100.64.0.10",runner),False)
+        self.assertNotIn("PRIVATE_HOST_KEY",str(auth.ssh_advertised("100.64.0.10",runner)))
 
     def test_timeout_fails_closed(self):
         def runner(*args,**kwargs):
             raise subprocess.TimeoutExpired("ssh",12)
-        result=auth.auth_probe("100.93.4.64",runner)
+        result=auth.auth_probe("100.64.0.10",runner)
         self.assertFalse(result["sshAuthenticated"])
 
 
@@ -72,16 +85,16 @@ class TestSshAuthProbe(unittest.TestCase):
         def runner(args,**kwargs):
             calls.append((args,kwargs))
             return SimpleNamespace(returncode=0,stdout="SSH-2.0-OpenSSH_9.2\\r\\n",stderr="")
-        result=auth.ssh_banner_probe("100.93.4.64",runner)
+        result=auth.ssh_banner_probe("100.64.0.10",runner)
         self.assertTrue(result["sshProtocolBannerObserved"])
-        self.assertEqual(calls[0][0],["tailscale","nc","100.93.4.64","22"])
+        self.assertEqual(calls[0][0],["tailscale","nc","100.64.0.10","22"])
         self.assertEqual(calls[0][1]["input"],"")
         self.assertNotIn("OpenSSH",str(result))
 
     def test_banner_probe_unavailable_reports_unknown(self):
         def runner(*a,**k):
             raise subprocess.TimeoutExpired("tailscale",6)
-        result=auth.ssh_banner_probe("100.93.4.64",runner)
+        result=auth.ssh_banner_probe("100.64.0.10",runner)
         self.assertIsNone(result["sshProtocolBannerObserved"])
 
 
