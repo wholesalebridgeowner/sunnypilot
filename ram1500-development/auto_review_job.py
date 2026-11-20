@@ -16,6 +16,7 @@ import tempfile
 
 from auto_review import SCHEMA_COMMIT, compare, summarize_log_messages
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
+from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
 
 PATH = re.compile(r"^logs/(.+)/([0-9]+)/qlog\.zst$")
 MAX_SEGMENTS = 96
@@ -71,6 +72,9 @@ def route_key(candidate):
 
 def clock_audit_key(candidate):
     return PREFIX + "clock-audits/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
+
+def bounded_trial_key(candidate):
+    return PREFIX + "bounded-trials/" + candidate["hash"] + "/" + candidate["fingerprint"] + ".json"
 
 def read_json_or_none(s3, bucket, key):
     try:
@@ -158,12 +162,67 @@ def run_quarantine_clock_audit(s3, bucket, selected, reader):
             "anonymousClockCounts": anonymous_clock_counts(diagnostic)}
 
 
+def run_quarantine_bounded_trial(s3, bucket, selected, reader):
+    """Keep original quarantine; save a distinct private, non-release trial."""
+    with tempfile.TemporaryDirectory(prefix="ram-qlog-trial-") as folder:
+        paths = []
+        for segment, obj in selected["items"]:
+            output = Path(folder) / str(segment) / "qlog.zst"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, obj["Key"], str(output))
+            if not (0 < output.stat().st_size <= MAX_COMPRESSED):
+                raise ValueError("Invalid compressed input size")
+            paths.append(output)
+        counters = {}
+        try:
+            metrics = summarize_log_messages(
+                source_pinned_bounded_messages(paths, reader, counters))
+            if counters["verifiedSegments"] != len(paths):
+                raise OrderingTrialError("source-verification-incomplete")
+            result = {
+                "status": "experimental_bounded_observation",
+                "reportVersion": 1, "schemaCommit": SCHEMA_COMMIT,
+                "routeHash": selected["hash"],
+                "inputFingerprint": selected["fingerprint"],
+                "segmentCount": len(paths),
+                "clockOrder": counters,
+                "metrics": metrics,
+                "releaseAuthorized": False,
+                "caution": "Previously quarantined data; candidate observation only, not a validated drive review or controller replay",
+            }
+            outcome = {"status": "bounded_trial_saved",
+                       "segments": len(paths),
+                       "arrivalInversions": counters["arrivalInversionsOverHalfSecond"],
+                       "releaseAuthorized": False}
+        except OrderingTrialError:
+            result = {"status": "trial_rejected", "reportVersion": 1,
+                      "reason": "bounded_order_or_source_invalid",
+                      "routeHash": selected["hash"],
+                      "inputFingerprint": selected["fingerprint"],
+                      "segmentCount": len(paths)}
+            outcome = {"status": "bounded_trial_rejected",
+                       "reason": "bounded_order_or_source_invalid",
+                       "segments": len(paths)}
+        except Exception:
+            result = {"status": "trial_rejected", "reportVersion": 1,
+                      "reason": "decode_or_metrics_invalid",
+                      "routeHash": selected["hash"],
+                      "inputFingerprint": selected["fingerprint"],
+                      "segmentCount": len(paths)}
+            outcome = {"status": "bounded_trial_rejected",
+                       "reason": "decode_or_metrics_invalid",
+                       "segments": len(paths)}
+    put_private_json(s3, bucket, bounded_trial_key(selected), result)
+    return outcome
+
+
 def run(s3, bucket, now, reader):
     pages = s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="logs/")
     objects = (obj for page in pages for obj in page.get("Contents", ()))
     candidates = group_routes(objects, now)
     selected = None
     quarantined_for_diagnostic = None
+    candidate_for_trial = None
     previous_anonymous_counts = None
     for candidate in candidates:
         existing = read_json_or_none(s3, bucket, route_key(candidate))
@@ -175,8 +234,18 @@ def run(s3, bucket, now, reader):
                 quarantined_for_diagnostic = candidate
             elif previous_anonymous_counts is None:
                 previous_anonymous_counts = anonymous_clock_counts(previous)
-    # Prefer diagnosing the existing repeated route failures before consuming
-    # additional recordings and generating more permanent quarantines.
+            if (candidate_for_trial is None
+                    and isinstance(previous, dict)
+                    and previous.get("status") == "clock_order_audited"
+                    and type(previous.get("inversionsOverHalfSecond")) is int
+                    and previous["inversionsOverHalfSecond"] > 0
+                    and read_json_or_none(s3, bucket, bounded_trial_key(candidate)) is None):
+                candidate_for_trial = candidate
+    # Test one previously diagnosed quarantine against a bounded-observation
+    # trial, without changing original results or writing latest.json.
+    if candidate_for_trial is not None:
+        return run_quarantine_bounded_trial(s3, bucket, candidate_for_trial, reader)
+    # Otherwise investigate one prior failure before ingesting another route.
     if quarantined_for_diagnostic is not None:
         result = run_quarantine_clock_audit(s3, bucket, quarantined_for_diagnostic, reader)
         if previous_anonymous_counts is not None:
