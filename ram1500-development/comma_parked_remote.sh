@@ -48,7 +48,7 @@ expected="1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 test -d /data/openpilot && test -x /usr/local/venv/bin/python3 || { echo 'NO_GO: original installation or Python missing'; exit 11; }
 actual=$(git -C /data/openpilot rev-parse HEAD)
 test "$actual" = "$expected" || { echo 'NO_GO: installed source differs from pinned baseline'; exit 12; }
-test -z "$(git -C /data/openpilot status --porcelain)" || { echo 'NO_GO: installed tree has local changes'; exit 13; }
+test -z "$(git --no-optional-locks -C /data/openpilot status --porcelain)" || { echo 'NO_GO: installed tree has local changes'; exit 13; }
 test "$(uname -m)" = aarch64 || { echo 'NO_GO: not the expected device architecture'; exit 14; }
 test -w /data || { echo 'NO_GO: /data not writable for diagnostic files'; exit 15; }
 free_mb=$(df -Pm /data | awk 'NR==2 {print $4}')
@@ -83,6 +83,7 @@ set -eu
 umask 077
 mkdir -p /data/ram-diag
 test ! -L /data/ram-diag || { echo 'NO_GO: diagnostic directory symlink'; exit 31; }
+test ! -e /data/ram-diag/last-diagnostic-backup || { echo 'NO_GO: previous diagnostic install exists; inspect before another update'; exit 34; }
 chmod 700 /data/ram-diag
 mktemp -d /data/ram-diag/.incoming-XXXXXX
 REMOTE
@@ -127,6 +128,19 @@ test -f /data/ram-diag/parked_capture_acceptance.py || { echo 'NO_GO: diagnostic
 cd /data/openpilot
 # This checks msgq slots before allocating even one subscriber.
 PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 /data/ram-diag/device_telemetry.py --check-slots
+PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 - <<'PY'
+import sys
+sys.path.insert(0, "/data/ram-diag")
+import device_telemetry as d
+counts = d.msgq_reader_counts(d.SERVICES)
+bad = sorted(name for name in d.SERVICES
+             if type(counts.get(name)) is not int
+             or counts[name] >= d.NUM_READERS)
+if bad:
+    print("NO_GO: missing or fully allocated msgq subscriber slots; do not retry before a parked reboot")
+    raise SystemExit(41)
+print("READY: subscriber headroom confirmed for one parked run")
+PY
 # Only one parked trial per Comma reboot; no --allow-moving or --all-can-ids.
 mkdir -p /data/ram-telemetry
 chmod 700 /data/ram-telemetry
