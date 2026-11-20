@@ -7,10 +7,11 @@ COPY probe.py /opt/ram/probe.py
 COPY mint_authkey.py /opt/ram/mint_authkey.py
 COPY ssh_auth_probe.py /opt/ram/ssh_auth_probe.py
 COPY one_time_session.py /opt/ram/one_time_session.py
+COPY comma_direct_probe.py /opt/ram/comma_direct_probe.py
 COPY comma_subnet_probe.py /opt/ram/comma_subnet_probe.py
 COPY test_comma_subnet_probe.py /opt/ram/test_comma_subnet_probe.py
 COPY test_one_time_session.py /opt/ram/test_one_time_session.py
-RUN python3 -m py_compile /opt/ram/one_time_session.py /opt/ram/mint_authkey.py /opt/ram/probe.py /opt/ram/comma_subnet_probe.py \
+RUN python3 -m py_compile /opt/ram/one_time_session.py /opt/ram/mint_authkey.py /opt/ram/probe.py /opt/ram/comma_direct_probe.py /opt/ram/comma_subnet_probe.py \
   && cd /opt/ram && python3 -m unittest test_one_time_session.py test_comma_subnet_probe.py -v
 COPY set_pi_key_expiry.py /opt/ram/set_pi_key_expiry.py
 COPY test_set_pi_key_expiry.py /opt/ram/test_set_pi_key_expiry.py
