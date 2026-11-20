@@ -92,6 +92,123 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-monotonic"):
             a.ingest("carState", 8, {})
 
+
+class FactoryAccObservedKinematicsTests(unittest.TestCase):
+    """Synthetic stock-cruise observations, not an OEM ACC or chassis replay."""
+
+    @staticmethod
+    def state(t, accel, *, cruise=True, gas=False, brake=False, speed=20.0):
+        return t, {
+            "vEgo": speed, "aEgo": accel, "cruiseState": {"enabled": cruise},
+            "gasPressed": gas, "brakePressed": brake,
+        }
+
+    @staticmethod
+    def stock():
+        a = RouteMetrics()
+        a.ingest("carParams", 1, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True,
+        })
+        return a
+
+    def test_contiguous_pcm_cruise_no_pedal_acceleration_and_jerk(self):
+        a = self.stock()
+        for t, state in (
+            self.state(10, 0.0), self.state(10.1, 0.2),
+            self.state(10.2, 0.1)):
+            a.ingest("carState", t, state)
+        v = a.report()["factoryAccObservedMotion"]
+        self.assertTrue(v["pcmCarParamsSourceQualified"])
+        self.assertEqual(v["eligibleCruiseSamples"], 3)
+        self.assertEqual(v["contiguousObservedWindows"], 1)
+        self.assertAlmostEqual(v["observedDurationSeconds"], .2)
+        self.assertEqual(v["qualifiedJerkPairs"], 2)
+        self.assertEqual(v["observedAccelMedianMps2"], .1)
+        self.assertAlmostEqual(v["p90AbsSampledJerkMps3"], 1.9)
+        self.assertFalse(v["actuatorAttributionVerified"])
+        self.assertFalse(v["calibrationEligible"])
+        self.assertIn("NOT factory ACC-specific", a.report()["comfort"]["caution"])
+
+    def test_cruise_off_driver_override_and_invalid_state_break_jerk(self):
+        a = self.stock()
+        samples = [
+            self.state(10, 0), self.state(10.1, .1),
+            self.state(10.2, 4, brake=True),
+            self.state(10.3, .1),
+            self.state(10.4, 8, cruise=False),
+            self.state(10.5, .1),
+            self.state(10.6, 9, gas=True),
+            self.state(10.7, .1),
+            self.state(10.8, 2, speed=float("nan")),
+            self.state(10.9, .1),
+            self.state(11.0, .1, gas=None),
+        ]
+        for t, state in samples:
+            a.ingest("carState", t, state)
+        v = a.report()["factoryAccObservedMotion"]
+        self.assertEqual(v["eligibleCruiseSamples"], 6)
+        self.assertEqual(v["contiguousObservedWindows"], 5)
+        self.assertEqual(v["qualifiedJerkPairs"], 1)
+        self.assertAlmostEqual(v["observedDurationSeconds"], .1)
+
+    def test_no_stock_pcm_provenance_is_ineligible(self):
+        for params in (None,
+                       {"openpilotLongitudinalControl": True, "pcmCruise": True},
+                       {"openpilotLongitudinalControl": False, "pcmCruise": False},
+                       {"openpilotLongitudinalControl": False, "pcmCruise": None}):
+            a = RouteMetrics()
+            if params is not None:
+                a.ingest("carParams", 1, params)
+            for t, d in (self.state(10, .2), self.state(10.1, .3)):
+                a.ingest("carState", t, d)
+            v = a.report()["factoryAccObservedMotion"]
+            self.assertFalse(v["pcmCarParamsSourceQualified"])
+            self.assertEqual(v["eligibleCruiseSamples"], 0)
+            self.assertEqual(v["qualifiedJerkPairs"], 0)
+            self.assertIsNone(v["p90AbsSampledJerkMps3"])
+
+    def test_conflicting_source_metadata_wipes_earlier_motion(self):
+        a = self.stock()
+        for t, d in (self.state(10, .2), self.state(10.1, .3)):
+            a.ingest("carState", t, d)
+        a.ingest("carParams", 10.15, {
+            "openpilotLongitudinalControl": True, "pcmCruise": True,
+        })
+        a.ingest("carParams", 10.16, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True,
+        })
+        for t, d in (self.state(10.2, .2), self.state(10.3, .3)):
+            a.ingest("carState", t, d)
+        v = a.report()["factoryAccObservedMotion"]
+        self.assertTrue(v["sourceMetadataConflict"])
+        self.assertFalse(v["pcmCarParamsSourceQualified"])
+        self.assertEqual(v["eligibleCruiseSamples"], 0)
+        self.assertEqual(v["qualifiedJerkPairs"], 0)
+
+    def test_gap_clock_tie_and_reversal_cannot_create_jerk(self):
+        a = self.stock()
+        samples = [self.state(10, 0), self.state(10.6, 1),
+                   self.state(10.6, 9), self.state(10.55, -9),
+                   self.state(10.56, 8, cruise=False), self.state(10.7, 1)]
+        for t, d in samples:
+            a.ingest("carState", t, d)
+        v = a.report()["factoryAccObservedMotion"]
+        self.assertEqual(v["eligibleCruiseSamples"], 4)
+        self.assertEqual(v["qualifiedJerkPairs"], 0)
+        self.assertEqual(v["observedDurationSeconds"], 0)
+        self.assertEqual(v["contiguousObservedWindows"], 4)
+
+    def test_no_route_timestamps_or_raw_vehicle_fields_in_aggregate(self):
+        a = self.stock()
+        for t, d in (self.state(123456789.1, .1), self.state(123456789.2, .2)):
+            a.ingest("carState", t, d)
+        safe = json.dumps(a.report()["factoryAccObservedMotion"])
+        self.assertNotIn("123456789", safe)
+        self.assertNotIn("route", safe.lower())
+        self.assertNotIn("VIN", safe)
+        self.assertNotIn("throttleCommand", safe)
+
+
 class FakeMessage:
     def __init__(self, kind, time, payload):
         self.kind = kind
