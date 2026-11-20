@@ -1,0 +1,57 @@
+name: Ram Comma phone and Pi maintenance client tests
+on:
+  push:
+    branches: [ram1500-parked-diagnostics-acceptance-20261119]
+    paths:
+      - 'ram1500-development/comma_parked_remote.sh'
+      - '.github/workflows/ram-comma-mobile-maintenance-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/comma_parked_remote.sh'
+      - '.github/workflows/ram-comma-mobile-maintenance-tests.yml'
+jobs:
+  client-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Verify Bash syntax and refuse malformed addresses
+        run: |
+          set -euo pipefail
+          bash -n ram1500-development/comma_parked_remote.sh
+          if bash ram1500-development/comma_parked_remote.sh preflight 'bad;host' > /tmp/bad-host-output 2>&1; then
+            echo 'Refused host unexpectedly accepted'
+            exit 1
+          fi
+          grep -q 'Provide one reachable host' /tmp/bad-host-output
+          if bash ram1500-development/comma_parked_remote.sh install 127.0.0.1 > /tmp/unapproved-output 2>&1; then
+            echo 'Unapproved install unexpectedly accepted'
+            exit 1
+          fi
+          grep -q 'parked-owner confirmation missing' /tmp/unapproved-output
+      - name: Verify file locks against immutable source revision
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from urllib.request import urlopen
+          source = Path("ram1500-development/comma_parked_remote.sh").read_text()
+          revision = "dc94a83a121d7e53d7605973cb2efae3719f140d"
+          assert f'SOURCE_COMMIT="{revision}"' in source
+          for name, blob_hash in (
+              ("device_telemetry.py", "af3e8e4d832bf378820026b41fc1eb96e563b0ed"),
+              ("parked_capture_acceptance.py", "972dcef6eac3ee5345be7b31d5b5391e850daf40"),
+              ("summarize_can_capture.py", "6c28788d3d7b4278c5e6f5b5e2cc7be6e700ac2a"),
+          ):
+              url = ("https://raw.githubusercontent.com/wholesalebridgeowner/sunnypilot/"
+                     f"{revision}/ram1500-development/{name}")
+              with urlopen(url, timeout=30) as response:
+                  contents = response.read(2000000)
+              actual = hashlib.sha1(b"blob " + str(len(contents)).encode() + b"\0" + contents).hexdigest()
+              assert actual == blob_hash, f"Mismatch for {name}"
+              assert blob_hash in source
+          for unsafe in ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "allow-moving", "all-can-ids"):
+              assert unsafe not in source, f"Unsafe option in operator script: {unsafe}"
+          print("Immutable file locks and operator safeguards verified")
+          PY
