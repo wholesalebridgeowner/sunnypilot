@@ -1,0 +1,36 @@
+name: Ram Railway-to-Pi Tailnet read-only probe tests
+on:
+  push:
+    branches: [ram1500-tailnet-railway-probe-20261119]
+    paths:
+      - 'ram1500-development/tailnet_bridge/**'
+      - '.github/workflows/ram-tailnet-probe-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/tailnet_bridge/**'
+      - '.github/workflows/ram-tailnet-probe-tests.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Read-only network probe fixtures
+        run: python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_probe.py' -v
+      - name: Verify no vehicle actuation, SSH commands, or privileged container
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -Eq '(/dev/net/tun|--privileged|sshpass|StrictHostKeyChecking=no)' ram1500-development/tailnet_bridge/Dockerfile ram1500-development/tailnet_bridge/start.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("ram1500-development/tailnet_bridge/probe.py").read_text()
+          assert 'struct.pack("!H", 22)' in s
+          assert "SSH" not in Path("ram1500-development/tailnet_bridge/Dockerfile").read_text()
+          assert "subprocess" not in s
+          assert "deviceWrites" in s
+          PY
