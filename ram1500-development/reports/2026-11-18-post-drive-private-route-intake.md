@@ -18,7 +18,7 @@ The existing one-shot Railway `ram-private-comfort-once` source-pinned analyzer 
 
 Each observed carState sample in these selected four windows was rejected from the factory-ACC-motion evidence because `cruiseState.enabled` was not confirmed. The model lane-phase analyzer had zero qualified `laneChangeStarting` and zero qualified `laneChangeFinishing` windows. **This is insufficient calibration evidence, not evidence that the truck was stationary or that steering did not work.** We did not examine every segment in the 54-minute recording and do not assert that cruise remained off outside these windows.
 
-Provenance of private jobs: the successful one-shot deployment identifiers are `26e60294-7efe-4c6d-ac18-4b8fc236cbd0`, `60d482ae-a4de-4e4e-9737-532226b1fea0`, `f686ee0a-2fdc-4c05-8bb1-c902a0e47e1c`, `fc6c0edc-2130-4e09-91db-dd4c0223da30`. The selected source is the existing review-pinned Railway comfort Docker build, not a new on-device build.
+Provenance of private jobs: the successful one-shot deployment identifiers are `private-railway-id`, `private-railway-id`, `private-railway-id`, `private-railway-id`. The selected source is the existing review-pinned Railway comfort Docker build, not a new on-device build.
 
 ## Consequences for owner-requested tuning
 
