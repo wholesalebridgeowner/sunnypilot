@@ -4,11 +4,14 @@
 Validates only the known Comma's TCP/22 and SSH protocol banner. No
 credentials, Comma files, CAN, or controller commands are transmitted.
 """
+import ipaddress
 import json
+import os
 import socket
 import struct
 
-COMMA_LAN_IPV4 = "10.0.0.174"
+# The Comma's home-LAN address is private: it comes only from the Railway
+# COMMA_HOME_IP variable and is never committed to public git.
 COMMA_SSH_PORT = 22
 
 
@@ -22,8 +25,20 @@ def exact(sock, count):
     return bytes(data)
 
 
-def check_comma(proxy_host="127.0.0.1", proxy_port=1055, connect=socket.create_connection):
-    ip = socket.inet_aton(COMMA_LAN_IPV4)
+def comma_address(raw=None):
+    raw = os.environ.get("COMMA_HOME_IP", "") if raw is None else raw
+    try:
+        address = ipaddress.IPv4Address(raw.strip())
+    except (ipaddress.AddressValueError, AttributeError):
+        return None
+    return address.packed if address.is_private else None
+
+
+def check_comma(proxy_host="127.0.0.1", proxy_port=1055, connect=socket.create_connection, comma_ip=None):
+    ip = comma_address(comma_ip)
+    if ip is None:
+        return {"status":"comma_home_ip_missing","commaSshTcpReachable":False,
+                "commaSshBannerObserved":None,"commaAuthenticated":False,"deviceWrites":False}
     result = {"status":"comma_direct_route_not_confirmed",
               "commaSshTcpReachable":False, "commaSshBannerObserved":None,
               "commaAuthenticated":False,"deviceWrites":False}

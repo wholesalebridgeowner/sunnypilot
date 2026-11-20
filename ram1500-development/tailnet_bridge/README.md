@@ -5,7 +5,7 @@ The Raspberry Pi is **already a member of the owner's Tailscale tailnet**. It do
 ## Deployment created
 
 - Railway project: `ram-drive-log-bridge`, production.
-- Separate service: **`ram-pi-tailnet-probe`** (service ID `8b4679cd-33ca-4363-b96c-a2dcd95eaacf`).
+- Separate service: **`ram-pi-tailnet-probe`** (service ID `private-railway-id`).
 - Source branch `ram1500-tailnet-railway-probe-20261119` pinned to commit `213b5c7703714ecee5502ca38a8d2cb0178c058d`.
 - Build: `ram1500-development/tailnet_bridge/Dockerfile` (Alpine, Python, Tailscale; userspace SOCKS5, **no TUN privileges**).
 - Private Railway variable `TAILNET_PI_IP` is configured to the existing Pi's tailnet address. Do not publish this network locator or other private device identifiers in GitHub or runtime logs.
@@ -28,11 +28,11 @@ The read-only worker never holds a Comma key, initiates SSH authentication, writ
 - Railway service `ram-pi-tailnet-probe` was updated to support a Tailscale **API access token** (`tskey-api-`), which is not itself a device auth key. Its `mint_authkey.py` exchanges that token through the documented Tailscale REST API for a **single-use, ephemeral, 1-hour `tskey-auth-` key**. The temporary token is consumed in process memory without logging it.
 - The API credential is stored privately as `TS_API_KEY` in this one Railway service, **not** in GitHub. `TS_AUTHKEY` remains an optional preferred direct device key if provided.
 - **Verified live:** on pinned commit `b572cc82313ef9dfb408a58bf4a16e391124b8bf`, the worker logged `tailnet_node_registered` and `pi_ssh_port_reachable`. This proves userspace Tailscale and TCP/22 reach the existing Sunnyslope Pi.
-- **Verified next gate:** on pinned commit `c3029b8f90ebdc9e058f9d2226b5f9601cba1445`, the one-time Tailscale SSH attempt running only `true` as Pi user `markswerner` logged `pi_ssh_auth_not_confirmed`. TCP/22 is still reachable, but **authenticated remote command execution is NOT established**. This could mean Pi Tailscale SSH is not enabled or policy requires an identity or confirmation; no remote command was executed.
+- **Verified next gate:** on pinned commit `c3029b8f90ebdc9e058f9d2226b5f9601cba1445`, the one-time Tailscale SSH attempt running only `true` as Pi user `pi-user` logged `pi_ssh_auth_not_confirmed`. TCP/22 is still reachable, but **authenticated remote command execution is NOT established**. This could mean Pi Tailscale SSH is not enabled or policy requires an identity or confirmation; no remote command was executed.
 - Therefore **no files on Pi or Comma were read or written**; no diagnostic installation or driving-control modification occurred. Do not infer that a Tailscale network connection is sufficient for SSH authorization.
 
 ### Security follow-up
 
 The API access key was provided in a chat. **Treat it as exposed** and replace it with a narrowly scoped OAuth client or a dedicated restricted `tskey-auth-` credential stored only in Railway, then **revoke the original API access key** in the Tailscale Keys admin console. Revoking the API key now would not terminate the current registered node until the container restarts, but it would prevent automatic re-enrollment with the present stateless worker.
 
-For unattended SSH maintenance, establish a dedicated restricted identity through one supported route: (a) enable Tailscale SSH on the Pi and grant the Railway node user-to-Pi policy, or (b) authorize a dedicated Railway SSH public key in the Pi's `markswerner` account and verify its host key. This requires a one-time **trusted administrative action on the Pi**; the current Tailscale API credential does not grant arbitrary host-shell permissions.
+For unattended SSH maintenance, establish a dedicated restricted identity through one supported route: (a) enable Tailscale SSH on the Pi and grant the Railway node user-to-Pi policy, or (b) authorize a dedicated Railway SSH public key in the Pi's `pi-user` account and verify its host key. This requires a one-time **trusted administrative action on the Pi**; the current Tailscale API credential does not grant arbitrary host-shell permissions.
