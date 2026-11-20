@@ -45,6 +45,16 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaisesRegex(ApprovalError, "malformed"):
             verify_approval(KEY, make(nonce="abc"), now=1100.0, used_nonces=set())
 
+    def test_nightly_approval_lasts_twelve_hours(self):
+        approval = make(mode="nightly", change={"NeuralNetworkLateralControl": True})
+        self.assertEqual(verify_approval(KEY, approval, now=1000.0 + 11 * 3600, used_nonces=set())["mode"], "nightly")
+        with self.assertRaisesRegex(ApprovalError, "expired"):
+            verify_approval(KEY, approval, now=1000.0 + 13 * 3600, used_nonces=set())
+
+    def test_live_approval_still_expires_after_ten_minutes(self):
+        with self.assertRaisesRegex(ApprovalError, "expired"):
+            verify_approval(KEY, make(mode="live"), now=1601.0, used_nonces=set())
+
     def test_not_a_dict_refused(self):
         with self.assertRaisesRegex(ApprovalError, "malformed"):
             verify_approval(KEY, "approve", now=1100.0, used_nonces=set())

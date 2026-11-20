@@ -10,7 +10,7 @@ import hmac
 import json
 import math
 
-APPROVAL_TTL_S = 600
+APPROVAL_TTL_S = {"live": 600, "nightly": 12 * 3600}  # the Comma can be off overnight
 MAX_CLOCK_SKEW_S = 60
 _FIELDS = ("suggestion_id", "mode", "change", "issued_at", "nonce")
 
@@ -52,7 +52,7 @@ def verify_approval(key: bytes, approval: dict, *, now: float, used_nonces: set)
     age = now - issued
     if age < -MAX_CLOCK_SKEW_S:
         raise ApprovalError("issued_in_future")
-    if age > APPROVAL_TTL_S:
+    if age > APPROVAL_TTL_S[fields["mode"]]:
         raise ApprovalError("expired")
     if fields["nonce"] in used_nonces:
         raise ApprovalError("already_used")
