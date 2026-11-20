@@ -3,9 +3,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 import unittest
+import json
+from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
-from auto_review import RouteMetrics, compare
-from auto_review_job import group_routes, route_key, MAX_COMPRESSED
+from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
+from auto_review_job import (group_routes, route_key, MAX_COMPRESSED,
+                             pinned_qlog_messages, SourcePinError, run, PREFIX)
 
 T = datetime(2026, 11, 19, 15, 0, tzinfo=timezone.utc)
 
@@ -31,6 +34,8 @@ class AnalysisTests(unittest.TestCase):
         a.ingest("onroadEvents", 1.4, ["steerSaturated"])
         a.ingest("drivingModelData", 2.5, {"meta": {"laneChangeState": "laneChangeFinishing",
                                                       "laneChangeDirection": "left"}})
+        # A new alert episode requires an observed published absence.
+        a.ingest("onroadEvents", 2.6, [])
         a.ingest("onroadEvents", 3.1, ["steerSaturated"])
         result = a.report()
         self.assertEqual(result["leadHeadway"]["medianSeconds"], 1.6)
@@ -83,6 +88,133 @@ class AnalysisTests(unittest.TestCase):
         a.ingest("carState", 10, {})
         with self.assertRaisesRegex(ValueError, "non-monotonic"):
             a.ingest("carState", 8, {})
+
+class FakeMessage:
+    def __init__(self, kind, time, payload):
+        self.kind = kind
+        self.logMonoTime = int(time * 1_000_000_000)
+        setattr(self, kind, payload)
+
+    def which(self):
+        return self.kind
+
+
+def source_header(time=-900, commit=SCHEMA_COMMIT):
+    return FakeMessage("initData", time, SimpleNamespace(gitCommit=commit))
+
+
+def car_state(time):
+    return FakeMessage("carState", time, {"vEgo": 20.0,
+                       "aEgo": 0.0, "cruiseState": {"enabled": False}})
+
+
+class MissingKey(Exception):
+    response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class FixtureS3:
+    def __init__(self, objects):
+        self.objects = objects
+        self.reports = {}
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return self
+
+    def paginate(self, **_):
+        return [{"Contents": self.objects}]
+
+    def get_object(self, *, Key, **_):
+        if Key not in self.reports:
+            raise MissingKey()
+        return {"Body": SimpleNamespace(read=lambda: json.dumps(self.reports[Key]).encode())}
+
+    def put_object(self, *, Key, Body, **_):
+        self.reports[Key] = json.loads(Body)
+
+    def download_file(self, _bucket, _key, output):
+        Path(output).write_bytes(b"synthetic")
+
+
+class ContinuityTests(unittest.TestCase):
+    def test_replayed_old_initdata_does_not_shift_or_reverse_route_clock(self):
+        def read(path):
+            segment = int(Path(path).parent.name)
+            yield source_header(-900 if segment else 1)
+            yield car_state(10 + 10 * segment)
+        data = summarize_log_messages(
+            pinned_qlog_messages([Path("0/qlog.zst"), Path("1/qlog.zst")], read))
+        self.assertEqual(data["messageCounts"]["carState"], 2)
+        self.assertEqual(data["durationSeconds"], 10.0)
+        self.assertIn("Q-logs are sampled", " ".join(data["limitations"]))
+
+    def test_missing_or_mismatched_per_segment_source_fails_closed(self):
+        def wrong(path):
+            if Path(path).parent.name == "1":
+                yield source_header(commit="bad")
+            else:
+                yield source_header()
+            yield car_state(10)
+        with self.assertRaises(SourcePinError):
+            list(pinned_qlog_messages([Path("0/qlog.zst"), Path("1/qlog.zst")], wrong))
+
+        def missing(path):
+            if Path(path).parent.name != "1":
+                yield source_header()
+            yield car_state(10)
+        with self.assertRaises(SourcePinError):
+            list(pinned_qlog_messages([Path("0/qlog.zst"), Path("1/qlog.zst")], missing))
+
+    def test_real_out_of_order_motion_is_not_silently_sorted(self):
+        def read(_):
+            yield source_header()
+            yield car_state(10)
+            yield car_state(8)
+        with self.assertRaisesRegex(ValueError, "non-monotonic"):
+            summarize_log_messages(pinned_qlog_messages([Path("0/qlog.zst")], read))
+
+    def test_heartbeat_is_not_a_second_alert_episode(self):
+        review = RouteMetrics()
+        review.ingest("onroadEvents", 1.0, ["steerSaturated"])
+        review.ingest("onroadEvents", 2.002, ["steerSaturated"])
+        self.assertEqual(review.report()["steering"]["steerSaturatedEventEpisodes"], 1)
+        review.ingest("onroadEvents", 3.004, [])
+        review.ingest("onroadEvents", 4.005, ["steerSaturated"])
+        self.assertEqual(review.report()["steering"]["steerSaturatedEventEpisodes"], 2)
+
+    def test_failed_route_written_private_then_skipped_on_next_cron(self):
+        s3 = FixtureS3([obj("synthetic|000003d8--abc", 0)])
+        def fail(_):
+            yield source_header()
+            raise ValueError("SENSITIVE_UNTRUSTED_EXCEPTION_MESSAGE")
+        first = run(s3, "fake-bucket", T, fail)
+        self.assertEqual(first["status"], "route_quarantined")
+        self.assertEqual(first["reason"], "decode_or_order_invalid")
+        self.assertEqual(len(s3.reports), 1)
+        self.assertNotIn("SENSITIVE", json.dumps(s3.reports))
+        self.assertNotIn("synthetic|", json.dumps(s3.reports))
+        second = run(s3, "fake-bucket", T, fail)
+        self.assertEqual(second["status"], "no_new_eligible_routes")
+
+    def test_same_route_reupload_is_not_an_independent_comparison(self):
+        s3 = FixtureS3([obj("synthetic|000003d8--abc", 0, etag="v2")])
+        candidate = group_routes(s3.objects, T)[0]
+        s3.reports[PREFIX + "latest.json"] = {
+            "routeHash": candidate["hash"],
+            "metrics": {"steering": {"steerSaturatedEventEpisodes": 99}},
+            "routeUpdatedAt": (T - timedelta(days=1)).isoformat(),
+        }
+        def read(_):
+            yield source_header()
+            yield car_state(10)
+        result = run(s3, "fake-bucket", T, read)
+        self.assertEqual(result["status"], "review_saved")
+        self.assertFalse(result["comparisonBaseline"])
+        self.assertEqual(s3.reports[route_key(candidate)]["sourceVerifiedSegments"], 1)
+        self.assertNotIn("largeDifference", str(compare(
+            {"steering": {"steerSaturatedEventEpisodes": 1}},
+            {"steering": {"steerSaturatedEventEpisodes": 0}})))
+
 
 if __name__ == "__main__":
     unittest.main()
