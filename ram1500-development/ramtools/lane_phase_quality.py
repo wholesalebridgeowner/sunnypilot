@@ -58,6 +58,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   # Never use a future car sample to fill a missing past one.
   open_phase = None
   previous_t = None
+  previous_segment = None
   car_index = 0
 
   def complete(phase, end_t):
@@ -77,6 +78,12 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       i += 1
     if len(selected) < min_steering_samples:
       phase_counts[name]["insufficientCarState"] += 1
+      return
+    # A timestamp match alone is not evidence that a carState observation
+    # belongs to this model-phase segment. Fail closed on ambiguous overlap.
+    if any(type(r.get("segment")) is not int or
+           r["segment"] != phase["segment"] for r in selected):
+      phase_counts[name]["carStateSegmentMismatch"] += 1
       return
     if any(r.get("valid") is False for r in selected):
       phase_counts[name]["invalidCarState"] += 1
@@ -111,22 +118,30 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
 
   for rec in models:
     t = rec["t"]
-    interrupted = (rec.get("valid") is False or previous_t is not None and
-                   not 0 < (t - previous_t) / NS <= max_model_gap_s)
-    if interrupted:
+    seg = rec.get("segment")
+    segment = seg if type(seg) is int and seg >= 0 else None
+    invalid_segment = segment is None
+    boundary = previous_segment is not None and segment != previous_segment
+    invalid_or_gap = (rec.get("valid") is False or previous_t is not None and
+                      not 0 < (t - previous_t) / NS <= max_model_gap_s)
+    if invalid_segment or boundary or invalid_or_gap:
       if open_phase:
-        phase_counts[open_phase["state"]]["censoredByGapOrInvalidModel"] += 1
+        reason = ("censoredBySegmentBoundaryOrUnverified"
+                  if invalid_segment or boundary else "censoredByGapOrInvalidModel")
+        phase_counts[open_phase["state"]][reason] += 1
       open_phase = None
       previous_t = None
-      if rec.get("valid") is False:
+      previous_segment = None
+      if rec.get("valid") is False or invalid_segment:
         continue
     previous_t = t
+    previous_segment = segment
     state = str(rec.get("meta.laneChangeState") or "")
     if open_phase and state != open_phase["state"]:
       complete(open_phase, t)
       open_phase = None
     if state in PHASES and open_phase is None:
-      open_phase = {"state": state, "start": t,
+      open_phase = {"state": state, "start": t, "segment": segment,
                     "direction": str(rec.get("meta.laneChangeDirection") or "unknown")}
 
   if open_phase:
@@ -151,7 +166,8 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "laneChangeStarting is a model entry/crossing-phase proxy, not evidence of an actual lane boundary crossing.",
       "laneChangeFinishing is a model recenter-phase proxy, not proof of settled vehicle position.",
       "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
-      "Only complete, continuously sampled, driver-not-steering windows enter comfort percentiles.",
+      "Only complete, same-segment continuously sampled driver-not-steering windows enter comfort percentiles.",
+      "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "This is offline observation only; do not tune or deploy a controller from these metrics alone.",
     ],
   }

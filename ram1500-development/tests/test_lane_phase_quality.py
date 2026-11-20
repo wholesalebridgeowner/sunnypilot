@@ -4,14 +4,14 @@ from ramtools.lane_phase_quality import analyze
 N = 1_000_000_000
 
 def row(service, seconds, **fields):
-  return {"service": service, "t": round(seconds * N), "valid": True, **fields}
+  return {"service": service, "t": round(seconds * N), "valid": True, "segment": 30, **fields}
 
-def cs(t, rate, speed=20, pressed=False):
-  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed, vEgo=speed)
+def cs(t, rate, speed=20, pressed=False, segment=30):
+  return row("carState", t, steeringRateDeg=rate, steeringPressed=pressed, vEgo=speed, segment=segment)
 
-def model(t, state, direction="left", valid=True):
+def model(t, state, direction="left", valid=True, segment=30):
   return row("drivingModelData", t, **{"meta.laneChangeState": state,
-          "meta.laneChangeDirection": direction, "valid": valid})
+          "meta.laneChangeDirection": direction, "valid": valid, "segment": segment})
 
 def test_entry_and_recenter_are_separate_complete_phases_without_crossing_claim():
   inputs = [model(0,"off"), model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
@@ -77,3 +77,47 @@ def test_invalid_parameters_and_empty():
     try:analyze([],**k)
     except ValueError:pass
     else:raise AssertionError(k)
+
+
+def test_model_phase_is_censored_at_recording_segment_boundary():
+  # Two unrelated model phases on consecutive R-log segments must never be
+  # interpreted as a single completed lane-change entry.
+  models=[model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
+          model(.3,"laneChangeFinishing",segment=31),
+          model(.4,"laneChangeFinishing",segment=31), model(.5,"off",segment=31)]
+  cars=[cs(.1,1),cs(.2,2),cs(.25,3),
+        cs(.3,4,segment=31),cs(.4,5,segment=31),cs(.45,6,segment=31)]
+  report=analyze(models+cars)
+  start=report["phaseWindows"]["laneChangeStarting"]
+  assert start["counts"]["censoredBySegmentBoundaryOrUnverified"]==1
+  assert start["counts"].get("qualifiedWindows",0)==0
+
+
+def test_unknown_model_segment_censors_prior_phase():
+  rows=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",segment=None),
+        model(.3,"laneChangeFinishing"),model(.4,"off")]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
+  report=analyze(rows)["phaseWindows"]["laneChangeStarting"]
+  assert report["counts"]["censoredBySegmentBoundaryOrUnverified"]==1
+  assert report["counts"].get("qualifiedWindows",0)==0
+
+
+def test_mixed_segment_car_states_cannot_qualify_model_phase():
+  rows=[model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
+        model(.3,"laneChangeStarting"), model(.4,"off")]
+  rows += [cs(.1,1),cs(.2,2,segment=31),cs(.3,3)]
+  phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["carStateSegmentMismatch"]==1
+  assert phase["counts"].get("qualifiedWindows",0)==0
+
+
+def test_independent_same_segment_model_phases_remain_qualified():
+  # A legitimate completed phase in each segment is still counted.
+  rows=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
+        model(.4,"off"), model(.5,"laneChangeStarting",segment=31),
+        model(.6,"laneChangeStarting",segment=31),model(.8,"off",segment=31)]
+  rows += [cs(.1,1),cs(.2,2),cs(.3,3),
+           cs(.5,4,segment=31),cs(.6,5,segment=31),cs(.7,6,segment=31)]
+  phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["qualifiedWindows"]==2
+  assert phase["counts"].get("censoredBySegmentBoundaryOrUnverified",0)==0
