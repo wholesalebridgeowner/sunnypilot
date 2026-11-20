@@ -13,7 +13,7 @@ This demonstrates a **measurement-attribution problem**: the old `steering.p90Ab
 `auto_review.RouteMetrics` now **keeps** the old `p90AbsSteeringRateDegPerSecond` as a backward-compatible **all-vehicle** raw wheel-rate statistic with an explicit caution and exposure count. A *separate* `p90AbsCommaLateralWheelRateDegPerSecond` and sample count include a carState steering-rate observation only when:
 - the immediately past `carControl.latActive` is **exactly true**, with age 0–150 ms;
 - the **current** carState has `canValid=true`, no temporary or permanent EPS steering fault, and `steeringPressed=false`;
-- observations remain inside an explicitly emitted, independently source-verified log-segment boundary; the latest lateral state is discarded on each boundary.
+- observations occur **after** an explicitly emitted, independently source-verified log-segment boundary; pre-boundary records cannot enter the qualified sample pool, and the latest lateral state is discarded at every boundary.
 
 The new **v1 qualification marker** distinguishes the separately gated wheel-rate series from historical unqualified raw data. No old wheel-rate delta is added to the cross-route comparator. No speed cutoff is assumed: the truck may continue lateral steering below its initial ~32 mph engagement threshold. A clean low-speed latActive observation remains eligible; an OEM parking or manually steered sample with latActive=false is not.
 
@@ -21,7 +21,7 @@ These source checks **do not independently prove** who physically turned the whe
 
 ## Synthetic regression and release gates
 
-`test_auto_review.py` adds four synthetic tests: unassisted high-rate wheel motion excluded from Comma series; verified Comma active/healthy steering included; stale/disengaged/CAN-fault/driver-override excluded; and segment-boundary/unverified source behavior. Test results must be read from the exact head's GitHub Actions run, not assumed from source.
+`test_auto_review.py` adds four synthetic tests: unassisted high-rate wheel motion excluded from Comma series; verified Comma active/healthy steering included; stale/disengaged/CAN-fault/driver-override excluded; and segment-boundary/unverified source behavior. **Verified CI at code/test commit `5460f8cadaa61d451d5343ced97146aa6b45da6c`:** [dedicated review CI #44662604949](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44662604949) passed **65/65 tests**; [general analyzer CI #44662604937](https://github.com/wholesalebridgeowner/sunnypilot/actions/runs/44662604937) passed **211 tests (one skipped)**, including recorded-build EPS status DBC provenance. These are synthetic fixtures only; no new private-route replay was run.
 
 The scheduled private reviewer is **not** moved to this branch; successful fixture CI cannot authorize a real-route replay or calibration. No private log, VIN, location, CAN payload, on-device code, factory control channel, steering/braking actuation or Panda/OEM safety gate has been altered.
 
