@@ -30,17 +30,57 @@ AUTH_LINK = re.compile(r"https://login\.tailscale\.com/a/[A-Za-z0-9_-]{5,180}")
 # Explicit known, historically observed Comma SSH locators; NOT assumed
 # reachable from Sunnyslope or valid on the current home Wi-Fi.
 PI_DIAGNOSTIC = """
-import json,socket
-known=(('known_hotspot','192.168.43.1'),('observed_other','10.81.244.220'))
-results={}
-for label,host in known:
-    try:
-        conn=socket.create_connection((host,22),timeout=2)
-        conn.close()
-        results[label]='tcp22_reachable'
-    except (OSError,TimeoutError):
-        results[label]='no_tcp22_route'
-print('RAM_PI_TO_COMMA '+json.dumps({'piShellConfirmed':True,'commaCandidateSsh':results,'commaAuthenticated':False,'deviceWrites':False},separators=(',',':')),flush=True)
+import json
+import pathlib
+import socket
+import subprocess
+
+target='10.0.0.174'
+reachable=False
+try:
+    with socket.create_connection((target,22),timeout=4):
+        reachable=True
+except OSError:
+    pass
+
+auth='not_attempted_no_tcp_route'
+if reachable:
+    key=pathlib.Path.home()/'.ssh'/'id_ed25519'
+    if not key.is_file():
+        auth='existing_pi_private_key_not_found'
+    else:
+        try:
+            result=subprocess.run(
+                ['ssh','-i',str(key),'-o','BatchMode=yes',
+                 '-o','StrictHostKeyChecking=yes',
+                 '-o','ConnectTimeout=4','-o','NumberOfPasswordPrompts=0',
+                 'comma@'+target,'true'],
+                capture_output=True,text=True,timeout=9,check=False
+            )
+            if result.returncode == 0:
+                auth='ssh_authenticated'
+            else:
+                error=result.stderr.lower()
+                if 'permission denied' in error:
+                    auth='pi_key_not_authorized_on_comma'
+                elif 'host key verification failed' in error or 'host key' in error:
+                    auth='comma_ssh_host_key_not_verified'
+                elif 'known_hosts' in error or 'host key is not cached' in error:
+                    auth='comma_ssh_host_key_not_verified'
+                elif 'connection refused' in error:
+                    auth='comma_ssh_connection_refused'
+                else:
+                    auth='ssh_attempt_failed'
+        except (OSError, subprocess.TimeoutExpired):
+            auth='ssh_attempt_timed_out'
+
+print('RAM_PI_TO_COMMA '+json.dumps({
+    'piShellConfirmed':True,
+    'commaSshTcpReachable':reachable,
+    'commaSshAuthentication':auth,
+    'commaAuthenticated':auth=='ssh_authenticated',
+    'deviceWrites':False
+},separators=(',',':')),flush=True)
 """
 
 def validated_pi_ip(raw: str) -> str:
@@ -66,6 +106,16 @@ def authorization_link(text: str) -> str | None:
     return found.group(0) if found else None
 
 def results_from_output(text: str) -> dict | None:
+    allowed_auth = {
+        "not_attempted_no_tcp_route",
+        "existing_pi_private_key_not_found",
+        "ssh_authenticated",
+        "pi_key_not_authorized_on_comma",
+        "comma_ssh_host_key_not_verified",
+        "comma_ssh_connection_refused",
+        "ssh_attempt_failed",
+        "ssh_attempt_timed_out",
+    }
     for line in text.splitlines():
         if not line.startswith("RAM_PI_TO_COMMA "):
             continue
@@ -75,14 +125,18 @@ def results_from_output(text: str) -> dict | None:
             continue
         if not isinstance(data, dict) or data.get("piShellConfirmed") is not True:
             continue
-        values = data.get("commaCandidateSsh", {})
-        allowed = {"tcp22_reachable", "no_tcp22_route"}
-        if not isinstance(values, dict) or set(values) != {"known_hotspot", "observed_other"}:
+        tcp, auth = data.get("commaSshTcpReachable"), data.get("commaSshAuthentication")
+        if type(tcp) is not bool or auth not in allowed_auth:
             continue
-        if not all(v in allowed for v in values.values()):
+        if bool(data.get("commaAuthenticated")) != (auth == "ssh_authenticated"):
             continue
-        return {"piShellAuthenticated": True, "commaCandidateSsh": values,
-                "commaAuthenticated": False, "deviceWrites": False}
+        return {
+            "piShellAuthenticated": True,
+            "commaSshTcpReachable": tcp,
+            "commaSshAuthentication": auth,
+            "commaAuthenticated": auth == "ssh_authenticated",
+            "deviceWrites": False,
+        }
     return None
 
 def run():
