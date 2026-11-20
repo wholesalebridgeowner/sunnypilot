@@ -162,6 +162,27 @@ def run_quarantine_clock_audit(s3, bucket, selected, reader):
             "anonymousClockCounts": anonymous_clock_counts(diagnostic)}
 
 
+def safe_trial_rejection_reason(exc):
+    """Map only known local failure tokens to a privacy-safe categorical reason.
+
+    Never put exception messages or arbitrary reader-supplied strings in S3 or
+    console output. This is a diagnostic label, not a release acceptance.
+    """
+    if type(exc) is not OrderingTrialError:
+        return "decode_or_metrics_invalid"
+    known = {
+        "recorded-source-not-verified": "source_unverified",
+        "missing-segment-source-header": "source_unverified",
+        "invalid-event-clock": "invalid_clock",
+        "non-finite-event-clock": "invalid_clock",
+        "late-event-beyond-window": "lateness_exceeds_window",
+        "cross-segment-or-watermark-regression": "event_clock_regression",
+        "bounded-memory-ceiling": "bounded_memory_exceeded",
+        "non-empty-counters": "internal_contract_invalid",
+    }
+    return known.get(str(exc), "bounded_order_or_source_invalid")
+
+
 def run_quarantine_bounded_trial(s3, bucket, selected, reader):
     """Keep original quarantine; save a distinct private, non-release trial."""
     with tempfile.TemporaryDirectory(prefix="ram-qlog-trial-") as folder:
@@ -194,14 +215,15 @@ def run_quarantine_bounded_trial(s3, bucket, selected, reader):
                        "segments": len(paths),
                        "arrivalInversions": counters["arrivalInversionsOverHalfSecond"],
                        "releaseAuthorized": False}
-        except OrderingTrialError:
+        except OrderingTrialError as exc:
+            reason = safe_trial_rejection_reason(exc)
             result = {"status": "trial_rejected", "reportVersion": 1,
-                      "reason": "bounded_order_or_source_invalid",
+                      "reason": reason,
                       "routeHash": selected["hash"],
                       "inputFingerprint": selected["fingerprint"],
                       "segmentCount": len(paths)}
             outcome = {"status": "bounded_trial_rejected",
-                       "reason": "bounded_order_or_source_invalid",
+                       "reason": reason,
                        "segments": len(paths)}
         except Exception:
             result = {"status": "trial_rejected", "reportVersion": 1,
