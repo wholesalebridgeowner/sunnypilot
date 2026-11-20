@@ -130,7 +130,7 @@ def public_lane_summary(lanes: dict) -> dict:
         "completedTransitions", "invalidDuration", "insufficientCarState",
         "invalidCarState", "driverOverrideOrUnknown", "incompleteCarCoverage",
         "carStateGap", "missingKinematics", "lowSpeedExcluded",
-        "invalidOrUnknownCan", "epsFaultOrUnknown",
+        "invalidOrUnknownCan", "epsFaultOrUnknown", "lateralInactiveOrUnverified",
         "qualifiedWindows", "censoredByGapOrInvalidModel", "censoredAtEnd",
         "censoredBySegmentBoundaryOrUnverified", "carStateSegmentMismatch",
         "censoredByDirectionChangeOrUnknown",
@@ -167,7 +167,7 @@ def summarize(records: list[dict], read_results) -> dict:
     # Corrupt/unknown services cannot supply an invented time anchor.
     timed = [r for r in records if type(r.get("t")) is int and r["t"] >= 0]
     episodes = analyze_episodes(timed)
-    lanes = analyze_lanes(records)
+    lanes = analyze_lanes(records, require_lateral_active=True)
     following = episodes.get("following", {})
     allowed_following = (
         "validCruiseLeadObservations", "repeatedCarStateTimestampRows",
@@ -203,7 +203,7 @@ def summarize(records: list[dict], read_results) -> dict:
         "interpretation": (
             "OEM ACC target distance, throttle and brake commands not decoded; "
             "lead/source and acceleration are observational only. "
-            "Model lane phases do not establish physical lane crossing. "
+            "Model lane phases require verified Comma lateral-active control and do not establish physical lane crossing. "
             "Segments and successive samples are correlated, not independent trials."
         ),
     }

@@ -41,7 +41,7 @@ def main():
   result=metrics(records)
   result["comfortEpisodes"]=evaluate(records)
   result["accMotionIntegrity"]=analyze_acc_motion(records)
-  result["laneModelPhases"]=analyze_lane_phases(records)
+  result["laneModelPhases"]=analyze_lane_phases(records, require_lateral_active=True)
   result["readFiles"]=len(read_results)
   result["truncatedFiles"]=sum(bool(r.error) for r in read_results)
   result["driveBuild"]="1f7233cb983f3c13fdbba47a86f8fbc796ad9211"

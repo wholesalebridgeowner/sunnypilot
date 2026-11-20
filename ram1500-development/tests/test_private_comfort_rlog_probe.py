@@ -277,3 +277,46 @@ def test_lane_can_eps_health_rejections_export_only_fixed_counters():
     assert counts["epsFaultOrUnknown"] == 3
     assert "LEAK_THIS_PRIVATE_LOCATION" not in json.dumps(out)
     assert "PRIVATE_VIN" not in json.dumps(out)
+
+
+def test_private_lane_ownership_rejection_is_count_only_and_safe():
+    import json
+    out = public_lane_summary({
+        "modelSamples": 4,
+        "phaseWindows": {"laneChangeStarting": {
+            "counts": {"lateralInactiveOrUnverified": 2,
+                       "PRIVATE_LOCATION_SHOULD_NOT_APPEAR": 1234},
+            "qualifiedByDirection": {"PRIVATE_VIN": 1},
+        }},
+    })
+    counts = out["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts["lateralInactiveOrUnverified"] == 2
+    assert "PRIVATE_LOCATION_SHOULD_NOT_APPEAR" not in json.dumps(out)
+    assert "PRIVATE_VIN" not in json.dumps(out)
+
+
+def test_private_comfort_never_qualifies_unowned_model_lane_phase():
+    from ramtools.lane_phase_quality import analyze as model_phase_analyze
+    n = 1_000_000_000
+    models = [
+        {"service": "drivingModelData", "t": round(t*n),
+         "valid": True, "segment": 30,
+         "meta.laneChangeState": state,
+         "meta.laneChangeDirection": "left"}
+        for t, state in ((0, "off"), (.1, "laneChangeStarting"),
+                         (.2, "laneChangeStarting"),
+                         (.3, "laneChangeStarting"), (.4, "off"))
+    ]
+    cars = [
+        {"service": "carState", "t": round(t*n), "valid": True,
+         "segment": 30, "vEgo": 20., "steeringRateDeg": rate,
+         "steeringPressed": False, "canValid": True,
+         "steerFaultTemporary": False, "steerFaultPermanent": False}
+        for t, rate in ((.1, 2.), (.2, 4.), (.3, 6.))
+    ]
+    rows = models + cars
+    assert model_phase_analyze(rows)["phaseWindows"]["laneChangeStarting"]["counts"]["qualifiedWindows"] == 1
+    private = summarize(rows, [])
+    counts = private["laneModelPhases"]["phaseWindows"]["laneChangeStarting"]["counts"]
+    assert counts["qualifiedWindows"] == 0
+    assert counts["lateralInactiveOrUnverified"] == 1
