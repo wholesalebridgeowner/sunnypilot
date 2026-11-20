@@ -21,7 +21,14 @@ test "$(git hash-object /tmp/ram-parked-device.py)" = a04c069b2e7daa40c9c66f6e21
 /usr/local/venv/bin/python3 /tmp/ram-parked-device.py preflight
 ```
 
-If `curl` is unavailable, stop and ask for the Python-only downloader. Do not disable HTTPS or the checksum.
+If `curl` is unavailable on the Comma, use the **Python-only** alternative below. It makes the same pinned HTTPS request, computes the Git blob SHA-1, and will refuse to execute any changed script:
+
+```sh
+/usr/local/venv/bin/python3 -c 'import hashlib,urllib.request,pathlib; u="https://raw.githubusercontent.com/wholesalebridgeowner/sunnypilot/99975835d3a0255996a5cac2ce7b30b69b47145b/ram1500-development/comma_device_parked.py"; b=urllib.request.urlopen(u,timeout=25).read(200000); h=hashlib.sha1(b"blob "+str(len(b)).encode()+b"\\0"+b).hexdigest(); assert h=="a04c069b2e7daa40c9c66f6e2191ceedad3ada84"; pathlib.Path("/tmp/ram-parked-device.py").write_bytes(b)' &&
+/usr/local/venv/bin/python3 /tmp/ram-parked-device.py preflight
+```
+
+Do not disable HTTPS or bypass the checksum.
 
 3. If preflight reports `parked_device_preflight_pass`, the vehicle is confirmed physically parked, and you approve this **diagnostic-only** change, run:
 
