@@ -9,6 +9,7 @@ import math
 
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_latest_radar_per_carstate_qlog_v3"
+HEADWAY_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_equal_time_radar_conflict_guarded_qlog_v4"
 LANE_QUALITY = "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4"
 UNSEGMENTED_QUALITY = "segment_boundaries_unverified_not_for_comparison"
 
@@ -65,6 +66,7 @@ class RouteMetrics:
         self.lane_rejections = Counter()
         self.lanes = []
         self.headway = []
+        self.headway_ambiguous_samples = 0
         self.jerk = []
         self.lateral_rates = []
         self.steering_saturated_samples = 0
@@ -135,6 +137,7 @@ class RouteMetrics:
             self._flush_pending_headway()
             self.last_car = {"t": t,
                  "headwayCandidate": None, "headwayRadarTime": None,
+                 "headwayRadarEvidence": None, "headwayAmbiguous": False,
                  "speed": get(data, "vEgo"),
                  "accel": get(data, "aEgo"),
                  "cruise": get(data, "cruiseState", "enabled"),
@@ -200,20 +203,32 @@ class RouteMetrics:
                 self.last_factory_accel = None
         elif kind == "radarState":
             car = self.last_car
-            # A carState speed sample may be reused by multiple higher-rate
-            # radar frames. Keep only the newest eligible, past-only paired
-            # radar estimate for that carState; a newer lost lead clears it.
+            # Retain at most one sample per carState. Two disagreeing radar
+            # observations at the same monotonic timestamp have no defensible
+            # order: quarantine this vehicle-state pairing, even if a later
+            # radar frame arrives. Identical repeated observations are benign.
             if (car is not None and self._factory_acc_eligible()
                     and 0 <= t - car["t"] <= .35
+                    and not car["headwayAmbiguous"]
                     and (car["headwayRadarTime"] is None
                          or t >= car["headwayRadarTime"])):
                 lead = get(data, "leadOne")
+                status = get(lead, "status")
                 d = get(lead, "dRel")
-                gap = (d / car["speed"] if get(lead, "status") is True
-                       and number(d) and d > 0 else None)
-                car["headwayRadarTime"] = t
-                car["headwayCandidate"] = (
-                    gap if number(gap) and 0 <= gap <= 20 else None)
+                evidence = (status if status is True or status is False else None,
+                            d if status is True and number(d) else None)
+                if t == car["headwayRadarTime"]:
+                    if evidence != car["headwayRadarEvidence"]:
+                        car["headwayAmbiguous"] = True
+                        car["headwayCandidate"] = None
+                        self.headway_ambiguous_samples += 1
+                else:
+                    gap = (d / car["speed"] if status is True
+                           and number(d) and d > 0 else None)
+                    car["headwayRadarTime"] = t
+                    car["headwayRadarEvidence"] = evidence
+                    car["headwayCandidate"] = (
+                        gap if number(gap) and 0 <= gap <= 20 else None)
         elif kind == "drivingModelData":
             state = str(get(data, "meta", "laneChangeState"))
             direction = str(get(data, "meta", "laneChangeDirection"))
@@ -323,12 +338,13 @@ class RouteMetrics:
                 "caution": "Model start-to-finish with consistent direction only; sampled Comma lateral-active and CAN/EPS health required. Unfinished model windows are rejected. Physical lane crossing and full-resolution comfort are unverified.",
             },
             "leadHeadway": {
-                "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
+                "qualification": HEADWAY_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
                 "eligibleCruiseSamples": len(qualified_headway),
+                "equalTimeRadarRejectedCarStateSamples": self.headway_ambiguous_samples,
                 "medianSeconds": percentile(qualified_headway, .5),
                 "p10Seconds": percentile(qualified_headway, .1),
                 "p90Seconds": percentile(qualified_headway, .9),
-                "caution": "One latest, past-carState-paired model lead per carState sample under factory ACC; Q-log sampled observed headway, not OEM selected gap or confirmed radar authority",
+                "caution": "One latest, past-carState-paired model lead per carState; contradictory equal-time radar evidence rejects that sample. Q-log observed headway, not OEM selected gap or confirmed radar authority",
             },
             "factoryAccObservedMotion": {
                 "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
