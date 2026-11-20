@@ -271,14 +271,17 @@ class AnonymousClockAuditTests(unittest.TestCase):
             yield source_header()
             yield car_state(10)
             yield car_state(8)
-        first = run(s3, "fake", T, reversed_clock)
-        self.assertEqual(first["status"], "route_quarantined")
+        # This is a pre-existing quarantine from the old arrival-order
+        # implementation. The new cross-segment path can now safely sort
+        # the bounded 2s inversion instead of quarantining a new upload.
         cand = group_routes(s3.objects, T)[0]
-        self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
-        second = run(s3, "fake", T, reversed_clock)
-        self.assertEqual(second["status"], "clock_diagnostic_saved")
-        self.assertEqual(second["diagnostic"], "clock_order_audited")
-        self.assertEqual(second["anonymousClockCounts"]["inversionsOverHalfSecond"], 1)
+        s3.reports[route_key(cand)] = {
+            "status": "quarantined", "reason": "historical_decode_or_order_invalid",
+        }
+        first = run(s3, "fake", T, reversed_clock)
+        self.assertEqual(first["status"], "clock_diagnostic_saved")
+        self.assertEqual(first["diagnostic"], "clock_order_audited")
+        self.assertEqual(first["anonymousClockCounts"]["inversionsOverHalfSecond"], 1)
         self.assertEqual(s3.reports[route_key(cand)]["status"], "quarantined")
         self.assertEqual(s3.reports[clock_audit_key(cand)]["inversionsOverHalfSecond"], 1)
         self.assertNotIn("secret-", json.dumps(s3.reports))
