@@ -5,7 +5,7 @@
 ## Private-data provenance
 
 - Railway private one-shot analysis service: `ram-private-rlog-probe`.
-- Deployment: `809e0807-bec2-4a5d-bec9-1858ff1624eb`, **SUCCESS**, pinned source commit `cf3226a30fc9d71565b4dd9d1c82ece22a91eed3`.
+- Deployment: `private-railway-id`, **SUCCESS**, pinned source commit `cf3226a30fc9d71565b4dd9d1c82ece22a91eed3`.
 - Pinned installed-device Cap'n Proto schema: `sunnypilot/sunnypilot@1f7233cb983f3c13fdbba47a86f8fbc796ad9211`.
 - Historical Chrysler model used for **hypothetical** actuation replay: `sunnypilot/opendbc@df807f8be394231b2366a1ecd9c9265ab51d2400`, `opendbc/car/chrysler/carcontroller.py`, `values.py` and `opendbc/car/lateral.py`. This revision is NOT proven identical to the installed runtime or its private working tree.
 - Private November 17 route, four R-log segments (0, 29, 30, 31); 421,253 decoded messages in selected segments. Only aggregate, anonymized statistics were emitted.
