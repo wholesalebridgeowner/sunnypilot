@@ -28,7 +28,7 @@ class TestOneTimeSession(unittest.TestCase):
         data = {"piShellConfirmed":True,"commaSshTcpReachable":True,
                 "commaSshAuthentication":"pi_key_not_authorized_on_comma",
                 "commaAuthenticated":False,"deviceWrites":False}
-        raw = "Login info\\nRAM_PI_TO_COMMA " + json.dumps(data) + "\\n"
+        raw = "Login info\nRAM_PI_TO_COMMA " + json.dumps(data) + "\n"
         parsed = results_from_output(raw)
         self.assertTrue(parsed["piShellAuthenticated"])
         self.assertFalse(parsed["commaAuthenticated"])
