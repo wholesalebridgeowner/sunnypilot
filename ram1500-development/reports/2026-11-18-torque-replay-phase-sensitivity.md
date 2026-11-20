@@ -5,7 +5,7 @@
 ## Verified provenance
 
 - Private Railway service: `ram-private-rlog-probe`
-- Successful Railway deployment: `f3c06fac-de19-4edb-bc8d-68757a22c387`
+- Successful Railway deployment: `private-railway-id`
 - Tested/deployed source commit: `312a209f9dd8608e73b0b2c1b7d7f6457771a03f`
 - Log schema pinned to the observed Comma software revision `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`
 - Private November 17 driving data; selected R-log segments 0, 29, 30 and 31 (421,253 messages), focusing on seconds 1800–1807 (7 seconds)
