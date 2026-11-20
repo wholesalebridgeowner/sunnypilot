@@ -148,11 +148,15 @@ def run():
                         **result,
                     }, separators=(",", ":")), flush=True)
                     return 0
-            done_pid, _ = os.waitpid(child, os.WNOHANG)
-            if done_pid == child:
-                child_reaped = True
-                if not selector.get_map():
-                    break
+            if not child_reaped:
+                try:
+                    done_pid, _ = os.waitpid(child, os.WNOHANG)
+                except ChildProcessError:
+                    done_pid = child
+                if done_pid == child:
+                    child_reaped = True
+            if child_reaped and not selector.get_map():
+                break
         reason = ("approval_window_expired" if printed_link
                   else "ssh_not_authenticated_or_check_url_unavailable")
         print("RAM_SESSION " + json.dumps({
