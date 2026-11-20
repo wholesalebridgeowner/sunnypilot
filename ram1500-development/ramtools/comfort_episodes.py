@@ -51,7 +51,11 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   """
   if minimum_follow_s<0 or min_lane_samples<1:
     raise ValueError("invalid quality parameters")
-  ix=Index(sorted((r for r in records if r.get("valid") is not False),key=lambda r:r["t"]))
+  ix=Index(sorted((r for r in records
+                   if (r.get("valid") is not False or r.get("service") == "carState")
+                   and type(r.get("t")) is int and r["t"] >= 0), key=lambda r: r["t"]))
+  # Preserve invalid carState as an as-of barrier. Filtering it away can
+  # reuse an older good sample and falsely maintain a following episode.
   base=ix.first_t()
   if base is None:return {"status":"no_data","following":{},"laneChange":{}}
   lead=[]
@@ -68,7 +72,7 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
       drop["radarSegmentUnknown"]+=1
       continuity+=1
       continue
-    if rec.get("valid") is False:
+    if rec.get("valid") is not True:
       drop["invalidRadarMessage"]+=1
       continuity+=1
       continue
@@ -80,6 +84,10 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
     if (type(vehicle.get("segment")) is not int or
         vehicle["segment"] != rec["segment"]):
       drop["carStateSegmentMismatch"]+=1;continuity+=1;continue
+    # Message validity and vehicle CAN health are different signals. A fresh
+    # invalid state must break continuity, never fall back to an older state.
+    if vehicle.get("valid") is not True or vehicle.get("canValid") is not True:
+      drop["invalidCarStateOrCan"]+=1;continuity+=1;continue
     speed=_num(vehicle.get("vEgo"))
     dist=_num(rec.get("leadOne.dRel"))
     rel=_num(rec.get("leadOne.vRel"))
@@ -169,6 +177,7 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
                   "derivedRatePairs":sum(x["steeringRateDerivativePairs"] for x in lane)},
     "caveats":["No individual event timestamps, route positions, device IDs or raw CAN frames are exported.",
       "Following measurements require same-segment radar/carState observations within a single selected route.",
+      "Invalid or unknown radar validity, carState validity, and vehicle CAN status break following continuity.",
       "Following measurements depend on lead-source validity and are not the factory ACC programmed gap.",
       "TTC is distance/closing-speed only; it does not account for acceleration or predict actual collision risk.",
       "An incomplete or short lane-change model phase is excluded from quality percentiles.",

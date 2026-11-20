@@ -155,7 +155,15 @@ def summarize(records: list[dict], read_results) -> dict:
             "truncatedFiles": sum(bool(f.truncated or f.error) for f in read_results),
         },
         "accMotionIntegrity": motion,
-        "following": {k: following.get(k) for k in allowed_following},
+        "following": {
+            **{k: following.get(k) for k in allowed_following},
+            # Fixed known reason codes only; never forward raw diagnostic keys,
+            # event text, segment identifiers or per-observation data.
+            "validityRejections": {
+                k: int(following.get("leadFilteringRejections", {}).get(k, 0))
+                for k in ("invalidCarStateOrCan", "invalidRadarMessage")
+            },
+        },
         "laneModelPhases": public_lane_summary(lanes),
         "interpretation": (
             "OEM ACC target distance, throttle and brake commands not decoded; "

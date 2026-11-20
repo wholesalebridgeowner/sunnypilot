@@ -4,6 +4,8 @@ from ramtools.comfort_episodes import evaluate
 NS=1000000000
 
 def row(s,ts,**attrs):
+  if s == "carState":
+    attrs.setdefault("canValid", True)
   return {"service":s,"t":round(ts*NS),"valid":True,"segment":30,**attrs}
 
 def test_follow_requires_cruise_no_pedal_and_fresh_state():
@@ -141,3 +143,41 @@ def test_following_missing_radar_segment_is_not_observational_evidence():
   result=evaluate(records)["following"]
   assert result["validCruiseLeadObservations"]==0
   assert result["leadFilteringRejections"]["radarSegmentUnknown"]==30
+
+def test_invalid_or_unknown_vehicle_state_and_can_health_break_following_continuity():
+  # One poisoned snapshot between two 1.6-s bursts must not be ignored by an
+  # as-of join or turn into a fabricated qualifying 3.3-s follow episode.
+  for signal, bad_value in (("valid", False), ("valid", None),
+                            ("canValid", False), ("canValid", None)):
+    records=[]
+    for i in range(34):
+      t=i*.1
+      state=row("carState", t, vEgo=20., gasPressed=False, brakePressed=False,
+                **{"cruiseState.enabled": True})
+      if i == 17:
+        state[signal] = bad_value
+      records.append(state)
+      records.append(row("radarState", t+.02,
+                         **{"leadOne.status": True, "leadOne.dRel": 35.,
+                            "leadOne.vRel": -1., "leadOne.radar": True}))
+    observed=evaluate(records)["following"]
+    assert observed["validCruiseLeadObservations"] == 33, (signal, bad_value)
+    assert observed["leadFilteringRejections"]["invalidCarStateOrCan"] == 1
+    assert observed["qualifyingEpisodeCount"] == 0
+
+
+def test_unknown_radar_message_validity_cannot_extend_following():
+  records=[]
+  for i in range(34):
+    t=i*.1
+    records.append(row("carState", t, vEgo=20., gasPressed=False,
+                       brakePressed=False, **{"cruiseState.enabled": True}))
+    radar=row("radarState", t+.02, **{"leadOne.status": True,
+              "leadOne.dRel": 35., "leadOne.vRel": -1.})
+    if i == 17:
+      radar["valid"] = None
+    records.append(radar)
+  following=evaluate(records)["following"]
+  assert following["validCruiseLeadObservations"] == 33
+  assert following["leadFilteringRejections"]["invalidRadarMessage"] == 1
+  assert following["qualifyingEpisodeCount"] == 0
