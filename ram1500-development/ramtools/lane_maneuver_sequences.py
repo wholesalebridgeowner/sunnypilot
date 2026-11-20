@@ -89,7 +89,7 @@ def _post_exit_wheel_observation(cars, model_rows, exit_t, end_t, segment,
         return None, "postExitModelCoverageUnverified"
     if any(r.get("valid") is not True or
            type(r.get("segment")) is not int or r["segment"] != segment or
-           r.get("meta.laneChangeState") not in NEUTRAL for r in model):
+           r.get("meta.laneChangeState") != "off" for r in model):
         return None, "postExitModelNotNeutral"
     rows = [r for r in cars if exit_t <= r["t"] < end_t]
     if (len(rows) < 4 or rows[0]["t"] - exit_t > car_gap_ns or
@@ -250,21 +250,27 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
                             joined_rate_peaks.append(envelope[0])
                             joined_rate_derivative_peaks.append(envelope[1])
                             phase_transition_slope_peaks.append(envelope[2])
-                        # Separate post-exit wheel-rate observation. This is
-                        # never a physical recentering or overshoot measurement.
-                        post_end = t + round(post_exit_seconds * NS)
-                        if not owned(t, t, post_end, segment):
-                            counts["postExitLateralOwnershipUnverified"] += 1
+                        # A later healthy tail alone cannot establish
+                        # same-maneuver comfort if the preceding commanded
+                        # lane-change interval has missing, faulty or
+                        # driver-overridden wheel evidence.
+                        # Post-exit is observational, NOT physical recentering.
+                        if reason:
+                            counts["postExitManeuverKinematicsUnqualified"] += 1
                         else:
-                            post, post_reason = _post_exit_wheel_observation(
-                                cars, models, t, post_end, segment,
-                                max_car_gap_ns, max_model_gap_ns, min_speed_mps)
-                            if post_reason:
-                                counts[post_reason] += 1
+                            post_end = t + round(post_exit_seconds * NS)
+                            if not owned(t, t, post_end, segment):
+                                counts["postExitLateralOwnershipUnverified"] += 1
                             else:
-                                counts["qualifiedPostExitWheelObservations"] += 1
-                                post_exit_peaks.append(post[0])
-                                post_exit_tail_medians.append(post[1])
+                                post, post_reason = _post_exit_wheel_observation(
+                                    cars, models, t, post_end, segment,
+                                    max_car_gap_ns, max_model_gap_ns, min_speed_mps)
+                                if post_reason:
+                                    counts[post_reason] += 1
+                                else:
+                                    counts["qualifiedPostExitWheelObservations"] += 1
+                                    post_exit_peaks.append(post[0])
+                                    post_exit_tail_medians.append(post[1])
                 else:
                     counts["incompleteModelSequence"] += 1
             pending = None
@@ -312,6 +318,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
         "qualifiedHealthyKinematicSequences": counts["qualifiedHealthyKinematicSequences"],
         "qualifiedPostExitWheelObservations": counts["qualifiedPostExitWheelObservations"],
         "postExitWindowSeconds": post_exit_seconds,
+        "postExitObservationDefinition": "healthy_maneuver_off_only_v2",
         "p90PeakPostExitAbsSteeringRateDegPerSecond": _percentile(post_exit_peaks, .9),
         "medianPostExitTailAbsSteeringRateDegPerSecond": (
             round(median(post_exit_tail_medians), 3) if post_exit_tail_medians else None),
@@ -339,7 +346,9 @@ def analyze(records, *, max_model_gap_s=0.75, max_control_age_s=0.15,
             "A valid entry, crossing-model phase and recenter-model phase can be observed without proving road comfort.",
             "Steering-rate derivative measures wheel angular acceleration, NOT chassis lateral jerk.",
             "Wheel-rate derivative v2 includes the adjacent starting-to-finishing phase boundary; older phase-internal-only statistics are not comparable.",
-            "A post-exit neutral model interval measures residual wheel motion, NOT physical lane recentering or positional settle-out.",
+            "A post-exit off-only model interval measures residual wheel motion, NOT physical lane recentering or positional settle-out.",
+            "Post-exit wheel statistics require independently qualified healthy two-phase kinematics; preceding driver input, faults, gaps or missing samples exclude the tail.",
+            "preLaneChange during the post-exit window is preparation for another maneuver, not a verified settled tail; v2 post-exit metrics must not be compared to prior versions.",
             "Post-exit rates require continued Comma lateral activation and continuous same-segment model and healthy vehicle evidence.",
             "Healthy two-phase kinematics exclude invalid CAN, EPS faults, steering override, low speed, gaps and unknown data.",
             "A joined steering envelope is observational and does NOT establish physical lane crossing or recentering.",
