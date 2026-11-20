@@ -122,3 +122,64 @@ def test_combine_never_claims_a_validated_setting():
 def test_bad_input_raises():
     with pytest.raises(ValueError):
         analyze_segment([(0,True)],[],[],[])
+
+
+def test_conflicting_same_clock_vehicle_state_cannot_fabricate_reversal():
+    states,cc,curve,out=route(reversing=False)
+    original=states[200]
+    contradictory=original[:5]+(-2.5,)+original[6:]
+    # Opposite wheel-rate evidence for an identical clock must be censored
+    # regardless of arrival order, not counted as extra evidence.
+    for candidate in (states+[contradictory], [contradictory]+states):
+        result=analyze_segment(candidate,cc,curve,out)
+        assert result["eligibleSamples"]==599
+        assert result["rejections"]["ambiguous_vehicle_timestamp"]==1
+        assert result["stableSignReversals"]==0
+        assert result["measurementQualification"]==REVERSAL_QUALIFICATION
+
+
+def test_exact_duplicate_state_does_not_weight_rate_or_duration_twice():
+    states,cc,curve,out=route(reversing=True)
+    baseline=analyze_segment(states,cc,curve,out)
+    duplicate=analyze_segment(states+[states[200],states[200]],cc,curve,out)
+    assert duplicate["eligibleSamples"]==600
+    assert duplicate["stableSignReversals"]==baseline["stableSignReversals"]
+    assert duplicate["eligibleContinuousSeconds"]==baseline["eligibleContinuousSeconds"]
+    assert "ambiguous_vehicle_timestamp" not in duplicate["rejections"]
+
+
+def test_same_clock_conflicting_vehicle_health_is_fail_closed():
+    states,cc,curve,out=route(reversing=False)
+    changed=states[200][:1]+(False,)+states[200][2:]
+    for candidate in (states+[changed], [changed]+states):
+        result=analyze_segment(candidate,cc,curve,out)
+        assert result["eligibleSamples"]==599
+        assert result["rejections"]["ambiguous_vehicle_timestamp"]==1
+        assert result["stableSignReversals"]==0
+
+
+@pytest.mark.parametrize("timestamp", [True, -1, 2.0, None])
+def test_malformed_carstate_clock_rejected_before_sort(timestamp):
+    states,cc,curve,out=route()
+    bad=[(timestamp,)+states[0][1:]]+states
+    with pytest.raises(ValueError,match="invalid scalar vehicle observation"):
+        analyze_segment(bad,cc,curve,out)
+
+
+def test_v2_segment_cannot_mix_with_requalified_vehicle_clock_v3():
+    result=analyze_segment(*route())
+    old=dict(result,measurementQualification="straight_wheel_rate_reversal_neutral_gap_source_conflict_v2")
+    with pytest.raises(ValueError,match="incompatible"):
+        combine([result,old])
+
+
+def test_ambiguous_vehicle_clock_breaks_confirmed_sign_continuity():
+    states,cc,curve,out=route(reversing=False)
+    crossing=[row[:5]+(2.5 if i<=300 else -2.5,)+row[6:]
+              for i,row in enumerate(states)]
+    assert analyze_segment(crossing,cc,curve,out)["stableSignReversals"]==1
+    contradictory=crossing[300][:5]+(-2.5,)+crossing[300][6:]
+    for candidate in (crossing+[contradictory], [contradictory]+crossing):
+        result=analyze_segment(candidate,cc,curve,out)
+        assert result["stableSignReversals"]==0
+        assert result["rejections"]["ambiguous_vehicle_timestamp"]==1
