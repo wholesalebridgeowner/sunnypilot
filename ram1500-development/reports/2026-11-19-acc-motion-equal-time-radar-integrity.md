@@ -15,7 +15,7 @@ Each segment now coalesces exact duplicate radar records, counts repeated rows, 
 - Synthetic tests: `c5df792810e760ba44f6feb85eae2b643dc05366`; four new cases (exact duplicate, order-reversed source conflict, validity conflict, relative-velocity conflict).
 - Dedicated CI workflow and exact **private validation source/test** commit: `4b6993c7970f93ebb74b4bb03fd77205a4118293`.
 - GitHub Actions run **44516562159**: `Ram ACC motion equal-time radar integrity`, **completed SUCCESS**. Existing pinned comfort workflow run **44516562089**: **completed SUCCESS** on the same exact commit. These are fixture checks, not physical or replay safety tests.
-- Existing isolated Railway research service `ram-private-comfort-once` repinned to that exact commit; deployment **`df05dd8d-f508-4a20-91fa-70e49497c043` SUCCESS**. Docker build passed **165/165 pytest tests** (formerly 161 on parent). No source, image, or data from the truck was modified.
+- Existing isolated Railway research service `ram-private-comfort-once` repinned to that exact commit; deployment **`private-railway-id` SUCCESS**. Docker build passed **165/165 pytest tests** (formerly 161 on parent). No source, image, or data from the truck was modified.
 - Private runtime redecoded **20/20 full retained R-logs**, **20/20 exact recorded-build commit headers**, **2,005,758** messages, **0** truncated files. This establishes recorded **Git source header** equality, not equality to a potentially dirty on-device executable.
 
 ## Observed effect in the retained recording

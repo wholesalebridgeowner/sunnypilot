@@ -14,7 +14,7 @@ No additional early R-logs were retrieved, no active truck software or device di
 - Four synthetic test functions for twenty-item selection/order, 21-item and oversize failure, missing selected private object, and absence of one of twenty source headers: `3d4c4a36603649a16cdf859a74c789e7b7cd3447`.
 - Standalone offline CI workflow: `303dd3a3ac502cea5a1af3a4e127a0149eae2836`.
 - First private Railway Docker build at `303dd3a3` **FAILED**: 160 passed / 1 failed because an obsolete four-item rejection fixture still expected five selected segments to be invalid. The fixture was corrected, **without weakening bounds**, in `1883af2413902b943e89f85ba37cdc3a0077c4b1`.
-- Successful isolated private Railway deployment **`c5fc0c4e-2d60-4838-b6f7-e0b84facb355`**, pinned to exact source/test commit **`1883af2413902b943e89f85ba37cdc3a0077c4b1`**, **SUCCESS**; Docker build **161/161 pytest tests passed** and subsequent private runtime emitted a complete quality-gated aggregate. A completed GitHub Actions result was not independently confirmed; the private Docker pass must not be called a GitHub CI pass.
+- Successful isolated private Railway deployment **`private-railway-id`**, pinned to exact source/test commit **`1883af2413902b943e89f85ba37cdc3a0077c4b1`**, **SUCCESS**; Docker build **161/161 pytest tests passed** and subsequent private runtime emitted a complete quality-gated aggregate. A completed GitHub Actions result was not independently confirmed; the private Docker pass must not be called a GitHub CI pass.
 
 ## Private source-pinned results
 

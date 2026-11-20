@@ -15,7 +15,7 @@ The guard reuses `ramtools.recorded_source_integrity.require_exact_recorded_comm
 - Source change: `0a10d6efbdaeef0da919c4efff619d64473127ad`.
 - Synthetic test cases: `3ed9e3f873a3cb4794e2b9c586755ab6edc32648`. Initial isolated container build at `8489c6e7bd59b190a0021a402186ca9375ca0832` found **one test-fixture error**: the privacy assertion for an empty invalid string incorrectly checked that an empty string was absent from a nonempty exception. It passed 153 tests and failed 1; source analysis was not executed from that failed build.
 - Fixture correction: `f78bf78f6c4195c1b0ebaa1c2a4e1d36baa39479`.
-- Independent source-pinned Railway deployment: `ff47fd9e-ff0b-4a29-a44f-3b407d98437d`, **SUCCESS**, GitHub source commit exactly `f78bf78f6c4195c1b0ebaa1c2a4e1d36baa39479`; Docker executed **154/154 passing pytest tests**.
+- Independent source-pinned Railway deployment: `private-railway-id`, **SUCCESS**, GitHub source commit exactly `f78bf78f6c4195c1b0ebaa1c2a4e1d36baa39479`; Docker executed **154/154 passing pytest tests**.
 - Dedicated offline GitHub Actions workflow source: `8489c6e7bd59b190a0021a402186ca9375ca0832`; **GitHub Actions pass has not been verified**.
 - The Docker build includes original source/schema hash validation and the existing full-route, steering, ACC and lane regression suites. No private credentials entered any build argument or public test logs.
 
