@@ -15,7 +15,7 @@ Read-only `ramtools/lateral_stability_observer.py` now rejects contradictory sam
 
 ## Independent pinned regression and private replay
 
-Source-pinned isolated **Railway** service `ram-full-route-cruise-private-once`, deployment **`7dc25327-7a46-4080-bafb-10a8b438d210`**, built commit **`7e5b6d0d6aaff6486f5eb5e0119d19be4c363a03`**. Deployment status **SUCCESS**. The Docker build reported **137/137 tests passed**. This is an observed Railway Docker test pass, *not* a GitHub Actions pass (none registered at this checkpoint).
+Source-pinned isolated **Railway** service `ram-full-route-cruise-private-once`, deployment **`private-railway-id`**, built commit **`7e5b6d0d6aaff6486f5eb5e0119d19be4c363a03`**. Deployment status **SUCCESS**. The Docker build reported **137/137 tests passed**. This is an observed Railway Docker test pass, *not* a GitHub Actions pass (none registered at this checkpoint).
 
 The completed private replay of the **same 20 previously retained morning R-logs** returned **20 complete segments**, **2,005,758 decoded messages**, **20/20 exact full recorded-build commit matches** against `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`, and no truncated files. The observed steering proxy is unchanged: **1,903 qualified samples, 18.859 seconds, 17 continuous intervals, four at least two seconds, longest 5.889 seconds, 14.549 seconds in >=2-second intervals, zero sustained reversals**. This demonstrates no ambiguity failure in these selected recordings under the new guard, **not** that all available historic logs lack duplicates or that there is no ping-pong.
 
