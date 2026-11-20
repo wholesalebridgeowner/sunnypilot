@@ -1,5 +1,5 @@
 """Fixture tests for cautious steering reversal observer, not actual lane-centering."""
-from ramtools.lateral_stability_observer import analyze_segment, combine
+from ramtools.lateral_stability_observer import analyze_segment, combine, REVERSAL_QUALIFICATION
 import pytest
 
 NS=1_000_000_000
@@ -53,6 +53,62 @@ def test_limits_and_turns_excluded():
     corners=analyze_segment(states,cc,[(t,0.004) for t,_ in curve],out)
     assert corners["eligibleSamples"]==0
     assert corners["rejections"]["curvature_not_straight"]==600
+
+def test_long_neutral_dwell_does_not_bridge_unrelated_turns():
+    states,cc,curve,out=route(reversing=False)
+    changed=[]
+    for i,row in enumerate(states):
+        rate = 2.5 if i<100 else 0.0 if i<350 else -2.5
+        changed.append(row[:5]+(rate,)+row[6:])
+    result=analyze_segment(changed,cc,curve,out)
+    assert result["eligibleSamples"]==600
+    assert result["stableSignReversals"]==0
+    assert result["measurementQualification"]==REVERSAL_QUALIFICATION
+
+
+def test_brief_neutral_dwell_preserves_real_sign_transition():
+    states,cc,curve,out=route(reversing=False)
+    changed=[]
+    for i,row in enumerate(states):
+        rate = 2.5 if i<100 else 0.0 if i<110 else -2.5
+        changed.append(row[:5]+(rate,)+row[6:])
+    result=analyze_segment(changed,cc,curve,out)
+    assert result["stableSignReversals"]==1
+
+
+def test_equal_clock_lateral_conflict_quarantines_not_order_dependent():
+    states,cc,curve,out=route(reversing=False)
+    timestamp=2*NS
+    contradictory=[(timestamp, False)]
+    for controls in (cc+contradictory, contradictory+cc):
+        result=analyze_segment(states,controls,curve,out)
+        assert result["eligibleSamples"]==599
+        assert result["rejections"]["lateral_not_verified"]==1
+    # Harmless exact duplicates do not alter the metric.
+    assert analyze_segment(states,cc+[(timestamp,True)],curve,out)["eligibleSamples"]==600
+
+
+def test_equal_clock_output_conflict_quarantines_and_future_cannot_backfill():
+    states,cc,curve,out=route(reversing=False)
+    timestamp=2*NS
+    for outputs in (out+[(timestamp,320)],[(timestamp,320)]+out):
+        result=analyze_segment(states,cc,curve,outputs)
+        assert result["eligibleSamples"]==599
+        assert result["rejections"]["torque_limit_or_unavailable"]==1
+
+
+def test_incompatible_old_measurement_cannot_be_combined():
+    result=analyze_segment(*route())
+    bad=dict(result,measurementQualification="old_metric_v1")
+    with pytest.raises(ValueError):
+        combine([result,bad])
+
+
+def test_malformed_source_timestamp_fails_closed():
+    states,cc,curve,out=route()
+    with pytest.raises(ValueError):
+        analyze_segment(states,cc+[(True,True)],curve,out)
+
 
 def test_combine_never_claims_a_validated_setting():
     rows=[analyze_segment(*route()) for _ in range(2)]
