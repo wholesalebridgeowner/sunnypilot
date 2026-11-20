@@ -9,7 +9,7 @@ import math
 
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2"
-LANE_QUALITY = "model_start_to_finish_fresh_active_healthy_segment_isolated_qlog_v3"
+LANE_QUALITY = "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4"
 UNSEGMENTED_QUALITY = "segment_boundaries_unverified_not_for_comparison"
 
 def get(o, *names):
@@ -209,6 +209,7 @@ class RouteMetrics:
                 duration = t - self.active_lane["start"]
                 if (state == "laneChangeFinishing"
                         and not self.active_lane["invalid"]
+                        and direction == self.active_lane["direction"]
                         and self._lane_observation_ok(t)
                         and 0 < duration <= 30
                         and self.active_lane["steeringSamples"]):
@@ -219,6 +220,8 @@ class RouteMetrics:
                     # This remains a sampled model-phase proxy, not physical
                     # lane crossing or confirmed trajectory completion.
                     reason = ("model_phase_interrupted" if state != "laneChangeFinishing"
+                              else "model_direction_conflict"
+                              if direction != self.active_lane["direction"]
                               else "missing_active_or_healthy_evidence")
                     self.lane_rejections[reason] += 1
                 self.active_lane = None
@@ -252,6 +255,11 @@ class RouteMetrics:
                 self.steering_activity_samples += 1
 
     def report(self):
+        # An unfinished final model window must be visible as missing evidence.
+        # Keep report() idempotent: do not mutate persistent rejection counts.
+        lane_rejections = self.lane_rejections.copy()
+        if self.active_lane is not None:
+            lane_rejections["incomplete_at_route_end"] += 1
         durations = [a["duration"] for a in self.lanes]
         source_ok = (not self.long_source_conflict
                      and self.car_params.get("openpilotLongitudinalControl") is False
@@ -286,8 +294,8 @@ class RouteMetrics:
                 "medianStartingSeconds": percentile(durations, .5),
                 "p90StartingSeconds": percentile(durations, .9),
                 "p90PeakSteeringRateDegPerSecond": percentile(lane_rates, .9),
-                "rejectedModelWindows": dict(self.lane_rejections),
-                "caution": "Model start-to-finish only; sampled Comma lateral-active and CAN/EPS health required. Physical lane crossing and full-resolution comfort are unverified.",
+                "rejectedModelWindows": dict(lane_rejections),
+                "caution": "Model start-to-finish with consistent direction only; sampled Comma lateral-active and CAN/EPS health required. Unfinished model windows are rejected. Physical lane crossing and full-resolution comfort are unverified.",
             },
             "leadHeadway": {
                 "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
