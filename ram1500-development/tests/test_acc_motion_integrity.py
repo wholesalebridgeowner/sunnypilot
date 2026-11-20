@@ -145,3 +145,57 @@ def test_one_route_gate_rejects_other_routes_or_missing_provenance():
             assert "bbbbbbbbbb" not in str(exc)
         else:
             raise AssertionError("Mixed or unidentified route accepted")
+
+
+def _lead_observed_drive():
+    """Three seconds of synthetic cruise and same-segment model-flagged lead."""
+    return drive() + [radar(i*.1, flag=False) for i in range(31)]
+
+
+def test_repeated_identical_radar_observation_does_not_inflate_motion():
+    baseline = _lead_observed_drive()
+    original = next(x for x in baseline if x["service"] == "radarState"
+                    and x["t"] == round(1.5*N))
+    expected = analyze(baseline)
+    actual = analyze([*baseline, original.copy()])
+    assert expected["byObservedLeadContext"] == actual["byObservedLeadContext"]
+    assert actual["quality"]["qualifiedEpisodes"] == 1
+    assert actual["quality"]["repeatedRadarTimestampRows"] == 1
+    assert actual["quality"]["ambiguousRadarTimestampGroups"] == 0
+
+
+def test_conflicting_same_time_radar_flags_censor_both_record_orders():
+    baseline = _lead_observed_drive()
+    original = next(x for x in baseline if x["service"] == "radarState"
+                    and x["t"] == round(1.5*N))
+    contradictory = {**original, "leadOne.radar": True}
+    for data in ([*baseline, contradictory],
+                 [contradictory, *baseline]):
+        result = analyze(data)
+        assert result["quality"]["repeatedRadarTimestampRows"] == 1
+        assert result["quality"]["ambiguousRadarTimestampGroups"] == 1
+        assert result["byObservedLeadContext"]["model_flagged_lead"]["episodeCount"] == 0
+        assert result["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+        assert result["quality"]["qualifiedEpisodes"] == 0
+
+
+def test_same_time_radar_validity_conflict_cannot_backfill_prior_lead():
+    baseline = _lead_observed_drive()
+    original = next(x for x in baseline if x["service"] == "radarState"
+                    and x["t"] == round(1.5*N))
+    invalid = {**original, "valid": False}
+    for data in ([*baseline, invalid], [invalid, *baseline]):
+        stats = analyze(data)
+        assert stats["quality"]["ambiguousRadarTimestampGroups"] == 1
+        assert stats["quality"]["qualifiedEpisodes"] == 0
+
+
+def test_same_time_relative_velocity_disagreement_is_not_silently_accepted():
+    baseline = _lead_observed_drive()
+    original = next(x for x in baseline if x["service"] == "radarState"
+                    and x["t"] == round(1.5*N))
+    original["leadOne.vRel"] = -1.
+    inconsistent = {**original, "leadOne.vRel": -3.}
+    stats = analyze([*baseline, inconsistent])
+    assert stats["quality"]["ambiguousRadarTimestampGroups"] == 1
+    assert stats["quality"]["qualifiedEpisodes"] == 0
