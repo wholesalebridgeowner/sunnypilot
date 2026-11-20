@@ -781,13 +781,99 @@ class FactoryACCRadarPairingTests(unittest.TestCase):
         a.ingest("carState", 1.0, self.car())
         a.ingest("radarState", 1.05, {"leadOne": {"status": True, "dRel": 30}})
         current = a.report()
-        self.assertIn("latest_radar_per_carstate", current["leadHeadway"]["qualification"])
+        self.assertIn("equal_time_radar_conflict_guarded", current["leadHeadway"]["qualification"])
         old = json.loads(json.dumps(current))
         old["leadHeadway"]["qualification"] = (
             "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2")
         result = compare(current, old)
         self.assertNotIn("leadHeadway.medianSeconds", result["metrics"])
         self.assertFalse(any(k.startswith("leadHeadway.") for k in result["metrics"]))
+
+
+    def test_equal_timestamp_disagreeing_distances_are_quarantined_both_orders(self):
+        for distances in ((20, 40), (40, 20)):
+            with self.subTest(distances=distances):
+                a = self.metric()
+                a.ingest("carState", 1.0, self.car())
+                for d in distances:
+                    a.ingest("radarState", 1.04, {"leadOne": {
+                        "status": True, "dRel": d}})
+                result = a.report()["leadHeadway"]
+                self.assertEqual(result["eligibleCruiseSamples"], 0)
+                self.assertIsNone(result["medianSeconds"])
+                self.assertEqual(result["equalTimeRadarRejectedCarStateSamples"], 1)
+                self.assertEqual(a.report()["leadHeadway"], result)
+
+    def test_equal_timestamp_lead_presence_conflict_is_not_ordered(self):
+        for statuses in ((True, False), (False, True), (True, None)):
+            with self.subTest(statuses=statuses):
+                a = self.metric()
+                a.ingest("carState", 1.0, self.car())
+                for status in statuses:
+                    a.ingest("radarState", 1.04, {"leadOne": {
+                        "status": status, "dRel": 30}})
+                self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+                self.assertEqual(a.report()["leadHeadway"]["equalTimeRadarRejectedCarStateSamples"], 1)
+
+    def test_identical_equal_timestamp_replay_is_not_false_conflict(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        for _ in range(3):
+            a.ingest("radarState", 1.04, {"leadOne": {
+                "status": True, "dRel": 30}})
+        result = a.report()["leadHeadway"]
+        self.assertEqual(result["eligibleCruiseSamples"], 1)
+        self.assertEqual(result["medianSeconds"], 1.5)
+        self.assertEqual(result["equalTimeRadarRejectedCarStateSamples"], 0)
+
+    def test_conflict_cannot_be_rescued_by_later_radar_for_same_carstate(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.04, {"leadOne": {
+            "status": True, "dRel": 20}})
+        a.ingest("radarState", 1.04, {"leadOne": {
+            "status": True, "dRel": 80}})
+        a.ingest("radarState", 1.08, {"leadOne": {
+            "status": True, "dRel": 60}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.12, {"leadOne": {
+            "status": True, "dRel": 40}})
+        result = a.report()["leadHeadway"]
+        self.assertEqual(result["equalTimeRadarRejectedCarStateSamples"], 1)
+        self.assertEqual(result["eligibleCruiseSamples"], 1)
+        self.assertEqual(result["medianSeconds"], 2.0)
+
+    def test_conflict_isolated_to_old_segment_and_no_raw_evidence_in_report(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.04, {"leadOne": {
+            "status": True, "dRel": 999}})
+        a.ingest("radarState", 1.04, {"leadOne": {
+            "status": True, "dRel": 888}})
+        a.segment_boundary()
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.12, {"leadOne": {
+            "status": True, "dRel": 30}})
+        report = a.report()
+        self.assertEqual(report["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.assertEqual(report["leadHeadway"]["equalTimeRadarRejectedCarStateSamples"], 1)
+        self.assertNotIn("999", json.dumps(report))
+        self.assertNotIn("888", json.dumps(report))
+
+    def test_old_radar_version_suppressed_without_invalidating_jerk_observer(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.12, {"leadOne": {
+            "status": True, "dRel": 30}})
+        now = a.report()
+        prior = json.loads(json.dumps(now))
+        prior["leadHeadway"]["qualification"] = (
+            "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_latest_radar_per_carstate_qlog_v3")
+        result = compare(now, prior)
+        self.assertNotIn("leadHeadway.medianSeconds", result["metrics"])
+        self.assertIn("factoryAccObservedMotion.p90AbsObservedJerkMps3", result["metrics"])
 
 
 class ComparisonProvenanceTests(unittest.TestCase):
