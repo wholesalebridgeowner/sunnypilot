@@ -6,7 +6,7 @@
 - Owner reported activating factory automatic parallel parking at the end of a short drive on November 18, 2026. The owner's vehicle has functional factory self-steering parallel parking.
 - Exact vehicle's recorded Sunnypilot build: `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` (v0.10.1). The matching pinned cereal schema was validated and used.
 - Completed adjacent R-log segments 11 and 12 were requested through the existing authorized Comma cloud-uploader connection and downloaded into the existing **private** Railway S3 bucket. The two compressed private objects were 9,906,687 and 10,247,145 bytes.
-- One-shot isolated Railway private analyzer service `ram-factory-parking-private-analysis`, final successful deployment `250e3a06-9079-45d6-bd76-077019d795e2`, source commit `5526975353a9ea3ebe41ba0d3ee4349cac5de8fb`. No vehicle communication or CAN transmission from this process.
+- One-shot isolated Railway private analyzer service `ram-factory-parking-private-analysis`, final successful deployment `private-railway-id`, source commit `5526975353a9ea3ebe41ba0d3ee4349cac5de8fb`. No vehicle communication or CAN transmission from this process.
 - On each R-log segment, timing is anchored to **its first CAN event**, excluding a replayed `initData` header whose old timestamp would otherwise double the apparent route time. A fixture regression test catches that mistake.
 - The report contains no GPS, exact location, VIN, dongle ID, raw CAN payload or full route key.
 
@@ -18,7 +18,7 @@ The **exact installed driving build** includes a Chrysler RAM DT DBC that define
 - `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common.dbc`: `BO_ 544 EPS_2`, `SG_ AUTO_PARK_HAS_CONTROL_2 : 51|1@0+`
 - `opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common_ram.py`: address mapping `544: 49`
 
-Private reanalysis deployment `e214cb58-0252-4cc0-b1d6-de7c23445d70` **SUCCESS**, source commit `0186f8ea5c900c4df9e9b4bc69991939d9b59ea6`; GitHub CI passed all diagnostics fixtures including the bit-position/transition test.
+Private reanalysis deployment `private-railway-id` **SUCCESS**, source commit `0186f8ea5c900c4df9e9b4bc69991939d9b59ea6`; GitHub CI passed all diagnostics fixtures including the bit-position/transition test.
 
 | Route-relative interval | EPS `AUTO_PARK_HAS_CONTROL_2` true / observed | State transition |
 |---|---:|---|
@@ -31,7 +31,7 @@ Private reanalysis deployment `e214cb58-0252-4cc0-b1d6-de7c23445d70` **SUCCESS**
 
 The EPS reported factory auto-park control active for **approximately 14.6 seconds**, during the owner-identified low-speed maneuver. **Comma lateral control remained inactive and Comma native LKAS torque was zero throughout.** In the 690–695 s interval, 200 samples with reported speed ≤ 0.3 m/s spanned **354.1° of steering wheel angle**, while the factory control bit was active for that entire five-second bin.
 
-**Additional independent EPS status cross-check:** a follow-up private analyzer deployment `b350eb55-3179-44f2-816a-9bf1feb44f48` decoded two further status fields from that same installed-build DBC `EPS_2`: `LKAS_STATE : 23|4@0+` (byte 2, bits 7–4) and `TORQUE_OVERLAY_STATUS : 6|4@0+` (byte 0, bits 6–3). The historical schema provides ordinal values but no verified enumeration for these modes.
+**Additional independent EPS status cross-check:** a follow-up private analyzer deployment `private-railway-id` decoded two further status fields from that same installed-build DBC `EPS_2`: `LKAS_STATE : 23|4@0+` (byte 2, bits 7–4) and `TORQUE_OVERLAY_STATUS : 6|4@0+` (byte 0, bits 6–3). The historical schema provides ordinal values but no verified enumeration for these modes.
 
 | Status field | Factory auto-park flag true (1,460 EPS frames) | Factory auto-park flag false (10,539 EPS frames) |
 |---|---|---|
@@ -92,7 +92,7 @@ The truck's installed Ram software requires **initial Sunnypilot engagement arou
 
 ## High-resolution factory-control episode reconstruction (November 18 follow-up)
 
-A later independent one-shot replay (private Railway deployment `0f519093-3379-4fad-b99b-003255eea8c9`, **SUCCESS**, GitHub source commit `40bb763f941a6d3dc8c8b8464f64bb56b5d8379d`) reconstructed each contiguous `EPS_2.AUTO_PARK_HAS_CONTROL_2` control episode from 100-Hz records. It synchronized `carState`, `carControl`, and `carOutput` with **past-only as-of joins capped at 150 ms**.
+A later independent one-shot replay (private Railway deployment `private-railway-id`, **SUCCESS**, GitHub source commit `40bb763f941a6d3dc8c8b8464f64bb56b5d8379d`) reconstructed each contiguous `EPS_2.AUTO_PARK_HAS_CONTROL_2` control episode from 100-Hz records. It synchronized `carState`, `carControl`, and `carOutput` with **past-only as-of joins capped at 150 ms**.
 
 An initial attempt discarded some observations because different R-log services are interleaved out of timestamp order. That issue was identified through the production replay and corrected by sorting **only private, scalar signal observations** before constructing events. A synthetic regression test now reproduces out-of-order logger messages.
 
@@ -125,7 +125,7 @@ The near-stop range pools the near-stop points within the full 14.6-second facto
 
 ## Next passive experiment: matched-speed, matched-gear CAN activity
 
-A new private, source-pinned one-shot analysis (Railway deployment `332b56e5-e9c2-4686-aca4-565ecbd49488`, **SUCCESS**; GitHub commit `f82fa82359bdc0a95c1eda394e0ef30349fe7a99`, offline CI **passed**) matched each observed vehicle CAN frame to the **latest preceding EPS park-control status and carState**, both no more than 150 ms old. The comparison is limited to comparable reported speeds −0.1 to 0.8 m/s and **the same reported gear** (Drive or Reverse). It excludes forwarded harness duplicates, the defining EPS status message `0x31`, and two trailing payload bytes likely to contain counters/checksums. Raw CAN bytes are used only transiently inside the private analysis job; the output contains frame counts and aggregate rate-of-change statistics, not packets or signal bitmaps.
+A new private, source-pinned one-shot analysis (Railway deployment `private-railway-id`, **SUCCESS**; GitHub commit `f82fa82359bdc0a95c1eda394e0ef30349fe7a99`, offline CI **passed**) matched each observed vehicle CAN frame to the **latest preceding EPS park-control status and carState**, both no more than 150 ms old. The comparison is limited to comparable reported speeds −0.1 to 0.8 m/s and **the same reported gear** (Drive or Reverse). It excludes forwarded harness duplicates, the defining EPS status message `0x31`, and two trailing payload bytes likely to contain counters/checksums. Raw CAN bytes are used only transiently inside the private analysis job; the output contains frame counts and aggregate rate-of-change statistics, not packets or signal bitmaps.
 
 This was specifically designed to reduce the false evidence from the earlier arbitrary before/during-window comparison, which mixed speed changes and gear shifts. It is still **observational**, and does not control for steering demand, load, ECU transitions or full PAM network coverage.
 
