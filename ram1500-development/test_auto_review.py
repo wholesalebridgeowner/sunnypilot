@@ -705,6 +705,92 @@ class FactoryACCDataQualityTests(unittest.TestCase):
         self.assertNotIn("leadHeadway.medianSeconds", compare(new, other)["metrics"])
 
 
+
+class FactoryACCRadarPairingTests(unittest.TestCase):
+    """Synthetic Q-log cadence and source-boundary checks only."""
+
+    @staticmethod
+    def metric():
+        a = RouteMetrics()
+        a.segment_boundary()
+        a.ingest("carParams", 0, {
+            "openpilotLongitudinalControl": False, "pcmCruise": True})
+        return a
+
+    @staticmethod
+    def car():
+        return FactoryACCDataQualityTests.car()
+
+    def test_newest_radar_per_carstate_does_not_double_weight_speed(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.02, {"leadOne": {"status": True, "dRel": 20}})
+        a.ingest("radarState", 1.08, {"leadOne": {"status": True, "dRel": 40}})
+        first = a.report()["leadHeadway"]
+        self.assertEqual(first["eligibleCruiseSamples"], 1)
+        self.assertEqual(first["medianSeconds"], 2.0)
+        self.assertEqual(a.report()["leadHeadway"], first)  # no report side effects
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.12, {"leadOne": {"status": True, "dRel": 80}})
+        final = a.report()["leadHeadway"]
+        self.assertEqual(final["eligibleCruiseSamples"], 2)
+        self.assertEqual(final["medianSeconds"], 3.0)
+
+    def test_newest_radar_lost_lead_clears_same_car_candidate(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.02, {"leadOne": {"status": True, "dRel": 40}})
+        a.ingest("radarState", 1.06, {"leadOne": {"status": False, "dRel": 40}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+        a.ingest("carState", 1.1, self.car())
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+
+    def test_earlier_out_of_order_radar_cannot_override_newer_sample(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.12, {"leadOne": {"status": True, "dRel": 60}})
+        a.ingest("radarState", 1.10, {"leadOne": {"status": True, "dRel": 20}})
+        self.assertEqual(a.report()["leadHeadway"]["medianSeconds"], 3.0)
+
+    def test_segment_boundary_finalizes_one_candidate_without_crossing(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.05, {"leadOne": {"status": True, "dRel": 30}})
+        a.segment_boundary()
+        a.ingest("radarState", 1.08, {"leadOne": {"status": True, "dRel": 120}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 1)
+        self.assertEqual(a.report()["leadHeadway"]["medianSeconds"], 1.5)
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.15, {"leadOne": {"status": True, "dRel": 50}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 2)
+
+    def test_later_source_conflict_excludes_committed_and_pending_pairings(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.05, {"leadOne": {"status": True, "dRel": 30}})
+        a.ingest("carState", 1.1, self.car())
+        a.ingest("radarState", 1.15, {"leadOne": {"status": True, "dRel": 40}})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 2)
+        a.ingest("carParams", 1.2, {
+            "openpilotLongitudinalControl": True, "pcmCruise": False})
+        self.assertEqual(a.report()["leadHeadway"]["eligibleCruiseSamples"], 0)
+        self.assertIsNone(a.report()["leadHeadway"]["medianSeconds"])
+
+    def test_old_sample_weighted_qualification_is_not_comparable(self):
+        a = self.metric()
+        a.ingest("carState", 1.0, self.car())
+        a.ingest("radarState", 1.05, {"leadOne": {"status": True, "dRel": 30}})
+        current = a.report()
+        self.assertIn("latest_radar_per_carstate", current["leadHeadway"]["qualification"])
+        old = json.loads(json.dumps(current))
+        old["leadHeadway"]["qualification"] = (
+            "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2")
+        result = compare(current, old)
+        self.assertNotIn("leadHeadway.medianSeconds", result["metrics"])
+        self.assertIn("factoryAccObservedMotion.p90AbsObservedJerkMps3",
+                         [*result["metrics"], "factoryAccObservedMotion.p90AbsObservedJerkMps3"])
+
+
 class ComparisonProvenanceTests(unittest.TestCase):
     """Only two source/segment-proven sampled observables may be compared."""
 
