@@ -662,12 +662,16 @@ class SteeringOwnershipRateTests(unittest.TestCase):
         a.ingest("carState", 1.02, self.car(rate=11))
         self.assertEqual(a.report()["steering"]["commaLateralWheelRateQualification"],
                          "segment_boundaries_unverified_not_for_comparison")
+        self.assertEqual(a.report()["steering"]["commaLateralQualifiedWheelRateSamples"], 0)
         a.segment_boundary()
         a.ingest("carState", 1.03, self.car(rate=200))  # stale across files
+        self.assertEqual(a.report()["steering"]["commaLateralQualifiedWheelRateSamples"], 0)
+        a.ingest("carControl", 1.04, {"latActive": True})
+        a.ingest("carState", 1.05, self.car(rate=18))
         result = a.report()["steering"]
         self.assertEqual(result["commaLateralQualifiedWheelRateSamples"], 1)
-        self.assertEqual(result["allVehicleWheelRateSamples"], 2)
-        self.assertEqual(result["p90AbsCommaLateralWheelRateDegPerSecond"], 11)
+        self.assertEqual(result["allVehicleWheelRateSamples"], 3)
+        self.assertEqual(result["p90AbsCommaLateralWheelRateDegPerSecond"], 18)
 
 
 class FactoryACCDataQualityTests(unittest.TestCase):
