@@ -341,13 +341,26 @@ def compare(current, previous):
     """Conservative observational comparison, not an auto-tuner."""
     if not previous:
         return {"baselineAvailable": False, "metrics": {}}
+    # Require exact build and explicit source-verified segment provenance on
+    # BOTH sides, not just a section label. A historic or manually assembled
+    # report must not impersonate source-pinned route-comparison evidence.
+    if (current.get("schemaCommit") != SCHEMA_COMMIT
+            or previous.get("schemaCommit") != SCHEMA_COMMIT
+            or current.get("coverage", {}).get("segmentIsolatedMetrics") is not True
+            or previous.get("coverage", {}).get("segmentIsolatedMetrics") is not True):
+        return {
+            "baselineAvailable": True, "metrics": {},
+            "comparisonSuppressed": "source_or_segment_provenance_unverified",
+            "interpretation": "No numeric comparison without identical pinned source and verified segment isolation.",
+        }
+    # All-driving jerk and raw saturation-episode counts lack a matched,
+    # independently verified exposure denominator. Never publish a +/- delta
+    # that could be misread as a comfort or vehicle-safety improvement.
     specs = [
         ("laneChange", "medianStartingSeconds"),
         ("laneChange", "p90PeakSteeringRateDegPerSecond"),
         ("leadHeadway", "medianSeconds"),
         ("factoryAccObservedMotion", "p90AbsObservedJerkMps3"),
-        ("comfort", "p90AbsJerkMps3"),
-        ("steering", "steerSaturatedEventEpisodes"),
     ]
     result = {}
     for section, name in specs:
