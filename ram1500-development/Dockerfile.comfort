@@ -29,10 +29,12 @@ RUN rm -f /opt/sunnypilot/cereal/car.capnp \
 
 WORKDIR /opt/ram
 COPY . /opt/ram/
+RUN mkdir -p /opt/ram/pinned-public-acc && curl --fail --silent --show-error --location 'https://raw.githubusercontent.com/sunnypilot/sunnypilot/1f7233cb983f3c13fdbba47a86f8fbc796ad9211/opendbc_repo/opendbc/car/chrysler/carstate.py' -o /opt/ram/pinned-public-acc/carstate.py && curl --fail --silent --show-error --location 'https://raw.githubusercontent.com/sunnypilot/sunnypilot/1f7233cb983f3c13fdbba47a86f8fbc796ad9211/opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common.dbc' -o /opt/ram/pinned-public-acc/stellantis.dbc && curl --fail --silent --show-error --location 'https://raw.githubusercontent.com/sunnypilot/sunnypilot/1f7233cb983f3c13fdbba47a86f8fbc796ad9211/opendbc_repo/opendbc/dbc/generator/chrysler/_stellantis_common_ram.py' -o /opt/ram/pinned-public-acc/ram_generator.py && python -m ramtools.acc_source_provenance /opt/ram/pinned-public-acc
 RUN python -c 'from pathlib import Path; from ramtools.schema import verify_schema_dir, load_log_schema; p=Path("/opt/sunnypilot/cereal"); assert all(v=="ok" for v in verify_schema_dir(p).values()); load_log_schema(p)'
 RUN python -m pytest tests/test_private_comfort_rlog_probe.py \
     tests/test_acc_motion_integrity.py tests/test_lane_phase_quality.py \
-    tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py -q
+    tests/test_comfort_episodes.py tests/test_pinned_logio_event_shape.py \
+    tests/test_full_route_cruise_audit.py tests/test_lateral_stability_observer.py tests/test_acc_source_provenance.py -q
 
 # All private credentials are runtime-only and are never build arguments.
 # No service port, public egress of data, CAN send or device connection.

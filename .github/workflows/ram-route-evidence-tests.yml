@@ -1,0 +1,31 @@
+name: Ram full-route source-pinned cruise/steering evidence tests
+on:
+  push:
+    branches:
+      - ram1500-full-route-cruise-reconcile-20261118
+    paths:
+      - 'ram1500-development/**'
+      - '.github/workflows/ram-route-evidence-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/ramtools/cruise_state_audit.py'
+      - 'ram1500-development/ramtools/lateral_stability_observer.py'
+      - 'ram1500-development/private_full_route_cruise_audit.py'
+      - 'ram1500-development/tests/test_full_route_cruise_audit.py'
+      - 'ram1500-development/tests/test_lateral_stability_observer.py tests/test_acc_source_provenance.py'
+      - '.github/workflows/ram-route-evidence-tests.yml'
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest==8.3.4
+      - name: Cruise camera source / partial route / steering stability tests
+        run: cd ram1500-development && python -m pytest -q tests/test_full_route_cruise_audit.py tests/test_lateral_stability_observer.py
+      - name: Offline tuning manifest not installable
+        run: cd ram1500-development && python -m ramtools.parameter_proposal proposed_parameters.json
