@@ -8,7 +8,7 @@ from collections import Counter
 import math
 
 SCHEMA_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
-FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_qlog_v2"
+FACTORY_ACC_QUALITY = "factory_acc_pedal_free_can_valid_source_pinned_segment_isolated_latest_radar_per_carstate_qlog_v3"
 LANE_QUALITY = "model_direction_consistent_start_to_finish_active_healthy_segment_isolated_qlog_v4"
 UNSEGMENTED_QUALITY = "segment_boundaries_unverified_not_for_comparison"
 
@@ -76,6 +76,7 @@ class RouteMetrics:
         The route ordering check remains intact: a backward segment clock
         still raises rather than being excused by this reset.
         """
+        self._flush_pending_headway()
         self.segments_seen += 1
         if self.active_lane is not None:
             self.lane_rejections["segment_boundary_incomplete"] += 1
@@ -84,6 +85,18 @@ class RouteMetrics:
         self.last_lat = None
         self.last_accel = None
         self.last_factory_accel = None
+
+    def _flush_pending_headway(self):
+        """Commit at most one past-state radar pairing per carState record.
+
+        The newest eligible radar observation supersedes older lead estimates
+        before the carState frame is finalized, avoiding high-rate radar
+        duplicating one low-rate speed sample in observed headway percentiles.
+        """
+        if self.last_car is not None:
+            candidate = self.last_car.get("headwayCandidate")
+            if number(candidate):
+                self.headway.append(candidate)
 
     def _fresh_lateral(self, t):
         return (self.last_lat is not None
@@ -119,7 +132,9 @@ class RouteMetrics:
         self.last = t if self.last is None else max(self.last, t)
         self.counts[kind] += 1
         if kind == "carState":
+            self._flush_pending_headway()
             self.last_car = {"t": t,
+                 "headwayCandidate": None, "headwayRadarTime": None,
                  "speed": get(data, "vEgo"),
                  "accel": get(data, "aEgo"),
                  "cruise": get(data, "cruiseState", "enabled"),
@@ -184,15 +199,21 @@ class RouteMetrics:
             if self.long_source_conflict:
                 self.last_factory_accel = None
         elif kind == "radarState":
-            lead = get(data, "leadOne")
             car = self.last_car
-            d = get(lead, "dRel")
-            if (get(lead, "status") is True and self._factory_acc_eligible()
+            # A carState speed sample may be reused by multiple higher-rate
+            # radar frames. Keep only the newest eligible, past-only paired
+            # radar estimate for that carState; a newer lost lead clears it.
+            if (car is not None and self._factory_acc_eligible()
                     and 0 <= t - car["t"] <= .35
-                    and number(d) and d > 0):
-                gap = d / car["speed"]
-                if number(gap) and 0 <= gap <= 20:
-                    self.headway.append(gap)
+                    and (car["headwayRadarTime"] is None
+                         or t >= car["headwayRadarTime"])):
+                lead = get(data, "leadOne")
+                d = get(lead, "dRel")
+                gap = (d / car["speed"] if get(lead, "status") is True
+                       and number(d) and d > 0 else None)
+                car["headwayRadarTime"] = t
+                car["headwayCandidate"] = (
+                    gap if number(gap) and 0 <= gap <= 20 else None)
         elif kind == "drivingModelData":
             state = str(get(data, "meta", "laneChangeState"))
             direction = str(get(data, "meta", "laneChangeDirection"))
@@ -265,7 +286,11 @@ class RouteMetrics:
                      and self.car_params.get("openpilotLongitudinalControl") is False
                      and self.car_params.get("pcmCruise") is True)
         # Later contradictory CarParams invalidates even earlier observations.
-        qualified_headway = self.headway if source_ok else []
+        pending_headway = (self.last_car.get("headwayCandidate")
+                           if self.last_car is not None else None)
+        qualified_headway = (
+            self.headway + ([pending_headway] if number(pending_headway) else [])
+            if source_ok else [])
         qualified_acc_jerk = self.factory_acc_jerk if source_ok else []
         lane_rates = [a["peakSteeringRate"] for a in self.lanes]
         return {
@@ -303,7 +328,7 @@ class RouteMetrics:
                 "medianSeconds": percentile(qualified_headway, .5),
                 "p10Seconds": percentile(qualified_headway, .1),
                 "p90Seconds": percentile(qualified_headway, .9),
-                "caution": "Sampled observed headway to model-flagged lead during factory ACC; not OEM selected gap or confirmed radar authority",
+                "caution": "One latest, past-carState-paired model lead per carState sample under factory ACC; Q-log sampled observed headway, not OEM selected gap or confirmed radar authority",
             },
             "factoryAccObservedMotion": {
                 "qualification": FACTORY_ACC_QUALITY if self.segments_seen else UNSEGMENTED_QUALITY,
