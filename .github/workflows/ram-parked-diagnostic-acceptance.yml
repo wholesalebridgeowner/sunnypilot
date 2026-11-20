@@ -1,0 +1,25 @@
+name: Ram parked diagnostic acceptance tests
+on:
+  push:
+    branches: [ram1500-parked-diagnostics-acceptance-20261119]
+    paths:
+      - 'ram1500-development/parked_capture_acceptance.py'
+      - 'ram1500-development/test_parked_capture_acceptance.py'
+      - '.github/workflows/ram-parked-diagnostic-acceptance.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/parked_capture_acceptance.py'
+      - 'ram1500-development/test_parked_capture_acceptance.py'
+      - '.github/workflows/ram-parked-diagnostic-acceptance.yml'
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Parked passive telemetry acceptance fixtures
+        run: python3 -m unittest discover -s ram1500-development -p 'test_parked_capture_acceptance.py' -v
