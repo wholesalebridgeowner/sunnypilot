@@ -1,0 +1,28 @@
+name: Ram private log inventory integrity fixtures
+
+on:
+  push:
+    paths:
+      - "ram1500-development/storage_presence_integrity.py"
+      - "ram1500-development/test_storage_presence_integrity.py"
+      - ".github/workflows/ram-private-inventory-tests.yml"
+      - "ram1500-development/reports/2026-11-18-private-bucket-presence-reconciliation.md"
+  pull_request:
+    paths:
+      - "ram1500-development/storage_presence_integrity.py"
+      - "ram1500-development/test_storage_presence_integrity.py"
+      - ".github/workflows/ram-private-inventory-tests.yml"
+      - "ram1500-development/reports/2026-11-18-private-bucket-presence-reconciliation.md"
+
+jobs:
+  synthetic-inventory-regressions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify private presence inference is fail-closed and identifier-free
+        run: python -m unittest discover -s ram1500-development -p 'test_storage_presence_integrity.py' -v
