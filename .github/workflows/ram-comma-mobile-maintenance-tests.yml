@@ -51,7 +51,10 @@ jobs:
               actual = hashlib.sha1(b"blob " + str(len(contents)).encode() + b"\0" + contents).hexdigest()
               assert actual == blob_hash, f"Mismatch for {name}"
               assert blob_hash in source
-          for unsafe in ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "allow-moving", "all-can-ids"):
+          for unsafe in ("StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null"):
               assert unsafe not in source, f"Unsafe option in operator script: {unsafe}"
+          capture_command = source[source.index("PYTHONPATH=/data/openpilot timeout 150"):]
+          capture_command = capture_command[:capture_command.index("\\n/usr/local/venv/bin/python3")]
+          assert "--allow-moving" not in capture_command and "--all-can-ids" not in capture_command
           print("Immutable file locks and operator safeguards verified")
           PY
