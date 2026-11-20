@@ -47,6 +47,7 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
         "privateRssStartMiB": None, "privateRssEndMiB": None,
         "privateRssGrowthMiBPerMinute": None,
         "sharedRssEndMiB": None, "readersAddedWithoutEviction": False,
+        "decodeErrorFree": False, "telemetryStreamProgressConfirmed": False,
         "reasons": [],
         "separateGatesNotEvaluated": [
             "vehicle_parked_attestation", "driver_alerts_and_can_validity",
@@ -134,6 +135,52 @@ def assess(rows, *, expected_seconds=120, cpu_limit=15.0, private_memory_limit_m
                 result["privateRssGrowthMiBPerMinute"] = round((private[-1] - private[0]) * 60 / 1024 / span, 3)
             if max(private) > 1024 * private_memory_limit_mb:
                 problems.append("private_memory_limit_exceeded")
+        # A low CPU reading is meaningless if the logger is not actually
+        # decoding its expected parked CAN and carState streams. The pinned
+        # device_telemetry.py uses Counter and records a cumulative snapshot
+        # in every timed and terminal health row. Validate those snapshots
+        # without reading or exporting a single CAN payload.
+        count_keys = {
+            "can", "sendcan", "carState", "carControl", "carOutput",
+            "controlsState", "selfdriveState", "onroadEvents",
+            "longitudinalPlan", "radarState", "drivingModelData",
+            "decode_errors",
+        }
+        samples = [h.get("rows") for h in health]
+        if any(
+            not isinstance(row, dict) or any(
+                key not in count_keys or type(val) is not int or val < 0
+                for key, val in row.items()
+            )
+            for row in samples
+        ):
+            problems.append("missing_or_invalid_telemetry_counters")
+        else:
+            if any(
+                curr.get(key, 0) < prev.get(key, 0)
+                for prev, curr in zip(samples, samples[1:])
+                for key in count_keys
+            ):
+                problems.append("telemetry_counter_regression")
+            if any(row.get("decode_errors", 0) for row in samples):
+                problems.append("telemetry_decode_errors_observed")
+            else:
+                result["decodeErrorFree"] = True
+            # Terminal health may share a rounded clock and identical counters
+            # with the final periodic row. Require progress between PERIODIC
+            # observations, not between periodic and terminal.
+            timed = samples[:-1]
+            critical = ("can", "carState")
+            if (not all(timed[0].get(k, 0) > 0 for k in critical)
+                    or any(
+                        curr.get(k, 0) <= prev.get(k, 0)
+                        for prev, curr in zip(timed, timed[1:])
+                        for k in critical
+                    )):
+                problems.append("parked_capture_stream_progress_missing")
+            else:
+                result["telemetryStreamProgressConfirmed"] = True
+
         result["metricGate"] = "passed" if not problems else "failed_or_incomplete"
         result["status"] = "metrics_pass_other_gates_pending" if not problems else "not_validated"
         return result
