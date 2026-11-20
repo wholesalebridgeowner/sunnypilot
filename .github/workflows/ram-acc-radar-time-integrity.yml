@@ -1,0 +1,32 @@
+name: Ram ACC following equal-time radar integrity
+on:
+  push:
+    branches:
+      - ram1500-following-duplicate-radar-gate-20261119
+    paths:
+      - 'ram1500-development/ramtools/comfort_episodes.py'
+      - 'ram1500-development/tests/test_comfort_episodes.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_private_comfort_rlog_probe.py'
+      - '.github/workflows/ram-acc-radar-time-integrity.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/ramtools/comfort_episodes.py'
+      - 'ram1500-development/tests/test_comfort_episodes.py'
+      - 'ram1500-development/private_comfort_rlog_probe.py'
+      - 'ram1500-development/tests/test_private_comfort_rlog_probe.py'
+      - '.github/workflows/ram-acc-radar-time-integrity.yml'
+jobs:
+  offline-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned offline testing dependency
+        run: python -m pip install pytest==8.3.4
+      - name: Run privacy-safe ACC following and private summary fixtures
+        run: cd ram1500-development && python -m pytest -q tests/test_comfort_episodes.py tests/test_private_comfort_rlog_probe.py

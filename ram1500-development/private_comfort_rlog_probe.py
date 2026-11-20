@@ -189,7 +189,8 @@ def summarize(records: list[dict], read_results) -> dict:
             # event text, segment identifiers or per-observation data.
             "validityRejections": {
                 k: int(following.get("leadFilteringRejections", {}).get(k, 0))
-                for k in ("invalidCarStateOrCan", "invalidRadarMessage")
+                for k in ("invalidCarStateOrCan", "invalidRadarMessage",
+                          "ambiguousRadarTimestamp")
             },
         },
         "laneModelPhases": public_lane_summary(lanes),

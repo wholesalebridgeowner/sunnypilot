@@ -7,6 +7,7 @@ lead distances as validated OEM radar measurements or as safe TTC targets.
 from __future__ import annotations
 
 from collections import Counter
+from itertools import groupby
 from math import isfinite
 
 from .timeline import Index
@@ -43,6 +44,37 @@ def _segments(rows,predicate,max_gap_s=.35):
   if cur:groups.append(cur)
   return groups
 
+
+# A same-segment, same-clock radar duplicate is one observation, not two.
+# Conflicting lead validity, distance, closing speed or source flags cannot
+# resolve by incidental input order or inflate episode sample-weighting.
+# This operates exclusively on already decoded, private, in-memory records.
+_RADAR_FIELDS = ("valid", "leadOne.status", "leadOne.dRel",
+                 "leadOne.vRel", "leadOne.radar")
+
+
+def _radar_scope_key(rec):
+  seg = rec.get("segment")
+  return rec["t"], seg if type(seg) is int and seg >= 0 else -1
+
+
+def _unique_radar_observations(records):
+  source = sorted((r for r in records if r.get("service") == "radarState"
+                   and type(r.get("t")) is int and r["t"] >= 0),
+                  key=_radar_scope_key)
+  unique = []
+  for (t, segment), repeated in groupby(source, key=_radar_scope_key):
+    group = list(repeated)
+    baseline = tuple(group[0].get(name) for name in _RADAR_FIELDS)
+    if any(tuple(r.get(name) for name in _RADAR_FIELDS) != baseline
+           for r in group[1:]):
+      # Synthetic barrier without any raw sensor values or identifiers.
+      unique.append({"service": "radarState", "t": t, "segment": segment,
+                     "_ambiguousRadarSameTimestamp": True})
+    else:
+      unique.append(group[0])
+  return unique
+
 def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   """Measure following episodes and lane-change entry/exit behavior.
 
@@ -63,9 +95,12 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   # Rejected or invalid radar messages must break following episodes, even
   # when the remaining valid samples happen to be <0.55s apart.
   continuity=0
-  radars=sorted((r for r in records if r.get("service")=="radarState"
-                 and isinstance(r.get("t"),int)), key=lambda r:r["t"])
+  radars=_unique_radar_observations(records)
   for rec in radars:
+    if rec.get("_ambiguousRadarSameTimestamp") is True:
+      drop["ambiguousRadarTimestamp"]+=1
+      continuity+=1
+      continue
     # Radar and state must have the same verified segment provenance.
     # Numbers repeat across routes; the CLI additionally enforces one route.
     if type(rec.get("segment")) is not int or rec["segment"] < 0:

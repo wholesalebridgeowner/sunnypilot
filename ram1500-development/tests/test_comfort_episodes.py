@@ -181,3 +181,55 @@ def test_unknown_radar_message_validity_cannot_extend_following():
   assert following["validCruiseLeadObservations"] == 33
   assert following["leadFilteringRejections"]["invalidRadarMessage"] == 1
   assert following["qualifyingEpisodeCount"] == 0
+
+
+def _uninterrupted_factory_cruise_fixture():
+  rows=[]
+  for i in range(34):
+    t=i*.1
+    rows.append(row("carState",t,vEgo=20.,gasPressed=False,
+                    brakePressed=False,**{"cruiseState.enabled":True}))
+    rows.append(row("radarState",t+.02,**{"leadOne.status":True,
+                    "leadOne.dRel":40.,"leadOne.vRel":-1.,"leadOne.radar":True}))
+  return rows
+
+
+def test_identical_equal_time_radar_frames_count_as_one_observation():
+  baseline=_uninterrupted_factory_cruise_fixture()
+  expected=evaluate(baseline)["following"]
+  duplicate=next(r.copy() for r in baseline if
+                 r["service"]=="radarState" and r["t"]==round(1.72*NS))
+  observed=evaluate([*baseline,duplicate])["following"]
+  assert expected["validCruiseLeadObservations"]==34
+  assert expected["qualifyingEpisodeCount"]==1
+  assert observed==expected
+
+
+def test_conflicting_equal_time_radar_cannot_extend_following_episode():
+  baseline=_uninterrupted_factory_cruise_fixture()
+  original=next(r for r in baseline if r["service"]=="radarState"
+                and r["t"]==round(1.72*NS))
+  # Ambiguous at one timestamp even though either individual lead would
+  # otherwise be valid. Both original and reverse order must censor it.
+  conflicting=original.copy()
+  conflicting["leadOne.dRel"]=70.
+  for rows in ([*baseline,conflicting],
+               [conflicting,*baseline]):
+    following=evaluate(rows)["following"]
+    assert following["validCruiseLeadObservations"]==33
+    assert following["leadFilteringRejections"]["ambiguousRadarTimestamp"]==1
+    assert following["qualifyingEpisodeCount"]==0
+    assert following["qualifyingEpisodeTotalSeconds"]==0.
+
+
+def test_equal_time_disagreement_in_lead_source_or_validity_censors():
+  for field,value in (("leadOne.radar",False),("leadOne.status",False),
+                      ("valid",False),("leadOne.vRel",-3.)):
+    baseline=_uninterrupted_factory_cruise_fixture()
+    original=next(r for r in baseline if r["service"]=="radarState"
+                  and r["t"]==round(1.72*NS))
+    conflicting=original.copy()
+    conflicting[field]=value
+    following=evaluate([*baseline,conflicting])["following"]
+    assert following["leadFilteringRejections"]["ambiguousRadarTimestamp"]==1
+    assert following["qualifyingEpisodeCount"]==0
