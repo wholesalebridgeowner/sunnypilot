@@ -37,6 +37,18 @@ class TestSshAuthProbe(unittest.TestCase):
         with self.assertRaises(Exception):
             auth.auth_probe("192.168.1.30",runner)
 
+    def test_detects_advertised_ssh_keys_without_showing_them(self):
+        import json
+        sample={"Peer":{"private-peer":{
+            "TailscaleIPs":["100.93.4.64"],
+            "SSHHostKeys":["PRIVATE_HOST_KEY_DO_NOT_LOG"]}}}
+        def runner(*args, **kwargs):
+            return SimpleNamespace(returncode=0,stdout=json.dumps(sample),stderr="")
+        self.assertIs(auth.ssh_advertised("100.93.4.64",runner),True)
+        sample["Peer"]["private-peer"]["SSHHostKeys"]=[]
+        self.assertIs(auth.ssh_advertised("100.93.4.64",runner),False)
+        self.assertNotIn("PRIVATE_HOST_KEY",str(auth.ssh_advertised("100.93.4.64",runner)))
+
     def test_timeout_fails_closed(self):
         def runner(*args,**kwargs):
             raise subprocess.TimeoutExpired("ssh",12)
