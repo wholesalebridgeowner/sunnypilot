@@ -37,7 +37,7 @@ class RouteMetrics:
         self.counts = Counter()
         self.events = Counter()
         self.event_episodes = Counter()
-        self.last_event = {}
+        self.last_onroad_events = set()
         self.long = Counter()
         self.lat = Counter()
         self.car_params = {}
@@ -122,15 +122,19 @@ class RouteMetrics:
             events = get(data, "onroadEvents") or data
             if isinstance(events, (str, bytes)):
                 events = [events]
+            observed = set()
             for e in events:
                 name = str(e if isinstance(e, str) else get(e, "name"))
                 if name == "None":
                     continue
+                observed.add(name)
+            for name in observed:
                 self.events[name] += 1
-                prev = self.last_event.get(name)
-                if prev is None or t - prev > 1:
+                if name not in self.last_onroad_events:
                     self.event_episodes[name] += 1
-                self.last_event[name] = t
+            # A published empty event set is necessary to establish clearance.
+            # An approximately 1 Hz heartbeat is not a new alert episode.
+            self.last_onroad_events = observed
         elif kind == "controlsState":
             lateral = get(data, "lateralControlState")
             try:
@@ -191,6 +195,8 @@ class RouteMetrics:
                 "Counts of samples are not independent failure episodes",
                 "Drive routes, speed, weather and traffic must be matched before causal conclusions",
                 "A trend report is not controller-release evidence",
+                "Q-logs are sampled and do not resolve R-log lane timing, peak steering rates or actuator ownership",
+                "Alert episode counts are observed absent-to-present transitions; missing event messages leave continuity unverified",
             ],
         }
 
@@ -208,19 +214,18 @@ def compare(current, previous):
     if not previous:
         return {"baselineAvailable": False, "metrics": {}}
     specs = [
-        ("laneChange", "medianStartingSeconds", 2),
-        ("laneChange", "p90PeakSteeringRateDegPerSecond", 2),
-        ("leadHeadway", "medianSeconds", 20),
-        ("comfort", "p90AbsJerkMps3", 100),
-        ("steering", "steerSaturatedEventEpisodes", 1),
+        ("laneChange", "medianStartingSeconds"),
+        ("laneChange", "p90PeakSteeringRateDegPerSecond"),
+        ("leadHeadway", "medianSeconds"),
+        ("comfort", "p90AbsJerkMps3"),
+        ("steering", "steerSaturatedEventEpisodes"),
     ]
     result = {}
-    for section, name, max_rel_change in specs:
+    for section, name in specs:
         a, b = current.get(section, {}).get(name), previous.get(section, {}).get(name)
         if number(a) and number(b):
             result[f"{section}.{name}"] = {
                 "previous": b, "current": a, "delta": round(a - b, 4),
-                "largeDifference": bool(b and abs((a-b)/b) > max_rel_change),
             }
     return {"baselineAvailable": True, "metrics": result,
             "interpretation": "Observational route-to-route comparison; do not infer improvement without matched conditions and validation."}
