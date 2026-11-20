@@ -56,5 +56,34 @@ class TestSshAuthProbe(unittest.TestCase):
         self.assertFalse(result["sshAuthenticated"])
 
 
+    def test_failure_reason_is_anonymous_and_specific(self):
+        for stderr, expected in (
+            ("Permission denied (publickey).","no_authorized_client_identity"),
+            ("Host key verification failed.","host_key_unverified"),
+            ("tailscale ssh is not enabled","tailscale_ssh_server_not_enabled"),
+            ("access denied by tailnet policy","tailnet_ssh_policy_or_identity"),
+        ):
+            self.assertEqual(auth.classify_ssh_failure(stderr), expected)
+        secret="private_pi_identifier"
+        self.assertNotIn(secret,auth.classify_ssh_failure(secret))
+
+    def test_banner_check_never_authenticates_or_logs(self):
+        calls=[]
+        def runner(args,**kwargs):
+            calls.append((args,kwargs))
+            return SimpleNamespace(returncode=0,stdout="SSH-2.0-OpenSSH_9.2\\r\\n",stderr="")
+        result=auth.ssh_banner_probe("100.93.4.64",runner)
+        self.assertTrue(result["sshProtocolBannerObserved"])
+        self.assertEqual(calls[0][0],["tailscale","nc","100.93.4.64","22"])
+        self.assertEqual(calls[0][1]["input"],"")
+        self.assertNotIn("OpenSSH",str(result))
+
+    def test_banner_probe_unavailable_reports_unknown(self):
+        def runner(*a,**k):
+            raise subprocess.TimeoutExpired("tailscale",6)
+        result=auth.ssh_banner_probe("100.93.4.64",runner)
+        self.assertIsNone(result["sshProtocolBannerObserved"])
+
+
 if __name__=="__main__":
     unittest.main()
