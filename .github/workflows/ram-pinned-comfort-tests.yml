@@ -1,7 +1,7 @@
 name: Ram pinned comfort fixture tests
 on:
   push:
-    branches: [ram1500-pinned-comfort-20261117]
+    branches: [ram1500-pinned-comfort-20261117, ram1500-lane-postgap-entry-gates-20261118]
     paths:
       - 'ram1500-development/**'
       - '.github/workflows/ram-pinned-comfort-tests.yml'

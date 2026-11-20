@@ -58,6 +58,10 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
   # Never use a future car sample to fill a missing past one.
   open_phase = None
   suppressed_state = None  # ambiguous direction: reject the whole model phase
+  # Following a stream interruption, even a *different* active phase may have
+  # begun inside the gap. Require a valid neutral/preparation observation first.
+  needs_state_anchor = False
+  unverified_active_state = None
   previous_t = None
   previous_segment = None
   car_index = 0
@@ -138,6 +142,8 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
         phase_counts[open_phase["state"]][reason] += 1
       open_phase = None
       suppressed_state = interrupted_state
+      needs_state_anchor = True
+      unverified_active_state = None
       previous_t = None
       previous_segment = None
       if rec.get("valid") is not True or invalid_segment:
@@ -146,6 +152,20 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
     previous_segment = segment
     state = str(rec.get("meta.laneChangeState") or "")
     direction = str(rec.get("meta.laneChangeDirection") or "unknown")
+    if needs_state_anchor:
+      # An active state first observed after missing/invalid model chronology
+      # cannot prove its entry, even if different from the interrupted phase.
+      # Do not mistake unknown states for a known non-maneuver anchor.
+      if state not in ("off", "preLaneChange"):
+        if (state in PHASES and state != suppressed_state and
+            state != unverified_active_state):
+          phase_counts[state]["censoredByUnverifiedEntry"] += 1
+        if state in PHASES:
+          unverified_active_state = state
+        continue
+      needs_state_anchor = False
+      unverified_active_state = None
+      suppressed_state = None
     if suppressed_state == state:
       continue
     suppressed_state = None
@@ -192,6 +212,7 @@ def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
       "Only complete, same-segment continuously sampled driver-not-steering windows enter comfort percentiles.",
       "Unverified model segments, segment transitions, or mixed-segment carState samples censor a window.",
       "Unknown validity and direction changes within one model phase censor the entire phase until exit.",
+      "After model gaps, invalid records or segment changes, a valid off/preLaneChange observation must anchor new phase entries.",
       "This is offline observation only; do not tune or deploy a controller from these metrics alone.",
     ],
   }
