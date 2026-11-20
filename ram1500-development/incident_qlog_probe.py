@@ -134,9 +134,9 @@ def observe(paths, reader, target=TARGET):
                 if m.carControl.latActive:summary["latActiveTrueSamples"]+=1
                 else:summary["latActiveFalseSamples"]+=1
                 telemetry.append((offset,"carControl",{"latActive":bool(m.carControl.latActive),
-                    "requestedTorque":num(m.carControl.actuators,"torque")}))
+                    "requestedTorque":num(getattr(m.carControl,"actuators",None),"torque")}))
             elif kind=="carOutput":
-                telemetry.append((offset,"carOutput",{"nativeOutputTorque":num(m.carOutput.actuatorsOutput,"torque")}))
+                telemetry.append((offset,"carOutput",{"nativeOutputTorque":num(getattr(m.carOutput,"actuatorsOutput",None),"torque")}))
             elif kind=="controlsState":
                 state=m.controlsState.lateralControlState
                 try:
