@@ -189,7 +189,7 @@ class FactoryAccObservedKinematicsTests(unittest.TestCase):
         a = self.stock()
         samples = [self.state(10, 0), self.state(10.6, 1),
                    self.state(10.6, 9), self.state(10.55, -9),
-                   self.state(10.7, 1)]
+                   self.state(10.56, 8, cruise=False), self.state(10.7, 1)]
         for t, d in samples:
             a.ingest("carState", t, d)
         v = a.report()["factoryAccObservedMotion"]
