@@ -11,13 +11,15 @@ A reachable SSH port does NOT establish login to the Comma; no Comma SSH
 authentication or installation is attempted by this stage.
 """
 from __future__ import annotations
+import errno
 import ipaddress
 import json
 import os
+import pty
 import re
 import selectors
 import shlex
-import subprocess
+import signal
 import time
 
 TARGET_NETWORK = ipaddress.ip_network("100.64.0.0/10")
@@ -87,74 +89,93 @@ def run():
     try:
         ip = validated_pi_ip(os.getenv("TAILNET_PI_IP", ""))
     except ValueError:
-        print('RAM_SESSION {"status":"invalid_or_missing_pi_ip","deviceWrites":false}',flush=True)
+        print('RAM_SESSION {"status":"invalid_or_missing_pi_ip","deviceWrites":false}', flush=True)
         return 2
     command = read_only_command(ip)
-    try:
-        proc = subprocess.Popen(
-            command, stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            bufsize=0, env={**os.environ, "SSH_ASKPASS_REQUIRE": "never","TERM":"dumb"},
-        )
-    except OSError:
-        print('RAM_SESSION {"status":"tailscale_ssh_client_unavailable","deviceWrites":false}',flush=True)
-        return 2
 
-    sel=selectors.DefaultSelector()
-    for stream in (proc.stdout,proc.stderr):
-        if stream is not None:
-            sel.register(stream, selectors.EVENT_READ)
+    # Tailscale check can require /dev/tty to show the browser approval URL.
+    # pty.fork gives it a real controlling terminal, unlike subprocess.PIPE.
+    try:
+        child, master = pty.fork()
+    except (OSError, AttributeError):
+        print('RAM_SESSION {"status":"pty_unavailable","deviceWrites":false}', flush=True)
+        return 2
+    if child == 0:
+        env = dict(os.environ)
+        env.update({"SSH_ASKPASS_REQUIRE": "never", "TERM": "xterm"})
+        try:
+            os.execvpe(command[0], command, env)
+        except OSError:
+            os._exit(127)
+
+    selector = selectors.DefaultSelector()
+    selector.register(master, selectors.EVENT_READ)
     tail = ""
     all_text = ""
     printed_link = False
     start = time.monotonic()
-    completed = False
+    child_reaped = False
     try:
         while time.monotonic() - start < MAX_SESSION_SECONDS:
-            for key,_ in sel.select(timeout=1.0):
-                chunk=os.read(key.fileobj.fileno(),4096)
+            for _, _ in selector.select(timeout=1.0):
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        chunk = b""
+                    else:
+                        raise
                 if not chunk:
-                    sel.unregister(key.fileobj)
-                    continue
-                data=chunk.decode("utf-8",errors="replace")
-                tail=(tail+data)[-4096:]
-                all_text=(all_text+data)[-16384:]
+                    selector.unregister(master)
+                    break
+                data = chunk.decode("utf-8", errors="replace")
+                tail = (tail + data)[-4096:]
+                all_text = (all_text + data)[-16384:]
                 if not printed_link:
-                    link=authorization_link(tail)
+                    link = authorization_link(tail)
                     if link:
-                        print("RAM_SESSION "+json.dumps({
-                            "status":"awaiting_approval",
-                            "approvalUrl":link,
-                            "maxWaitMinutes":15,
-                            "deviceWrites":False,
-                        },separators=(",",":")),flush=True)
-                        printed_link=True
-                result=results_from_output(all_text)
+                        print("RAM_SESSION " + json.dumps({
+                            "status": "awaiting_approval",
+                            "approvalUrl": link,
+                            "maxWaitMinutes": 15,
+                            "deviceWrites": False,
+                        }, separators=(",", ":")), flush=True)
+                        printed_link = True
+                result = results_from_output(all_text)
                 if result:
-                    print("RAM_SESSION "+json.dumps({
-                        "status":"pi_readonly_diagnostics_completed",
+                    print("RAM_SESSION " + json.dumps({
+                        "status": "pi_readonly_diagnostics_completed",
                         **result,
-                    },separators=(",",":")),flush=True)
-                    completed=True
+                    }, separators=(",", ":")), flush=True)
                     return 0
-            if proc.poll() is not None and not sel.get_map():
-                break
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            done_pid, _ = os.waitpid(child, os.WNOHANG)
+            if done_pid == child:
+                child_reaped = True
+                if not selector.get_map():
+                    break
         reason = ("approval_window_expired" if printed_link
                   else "ssh_not_authenticated_or_check_url_unavailable")
-        print("RAM_SESSION "+json.dumps({
-            "status":reason,"piShellAuthenticated":False,"deviceWrites":False,
-        },separators=(",",":")),flush=True)
+        print("RAM_SESSION " + json.dumps({
+            "status": reason, "piShellAuthenticated": False,
+            "deviceWrites": False,
+        }, separators=(",", ":")), flush=True)
         return 2
     finally:
-        if proc.poll() is None:
-            proc.kill()
-        sel.close()
+        selector.close()
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        if not child_reaped:
+            try:
+                os.killpg(child, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                os.waitpid(child, 0)
+            except ChildProcessError:
+                pass
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     raise SystemExit(run())
