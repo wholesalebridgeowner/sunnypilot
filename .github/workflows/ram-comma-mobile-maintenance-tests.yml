@@ -4,6 +4,8 @@ on:
     branches: [ram1500-parked-diagnostics-acceptance-20261119]
     paths:
       - 'ram1500-development/comma_parked_remote.sh'
+      - 'ram1500-development/test_comma_device_parked.py'
+      - 'ram1500-development/comma_device_parked.py'
       - '.github/workflows/ram-comma-mobile-maintenance-tests.yml'
   pull_request:
     paths:
@@ -58,3 +60,5 @@ jobs:
           assert "--allow-moving" not in capture_command and "--all-can-ids" not in capture_command
           print("Immutable file locks and operator safeguards verified")
           PY
+      - name: Run Termius-on-device bootstrap fixture tests
+        run: python3 -m unittest discover -s ram1500-development -p 'test_comma_device_parked.py' -v
