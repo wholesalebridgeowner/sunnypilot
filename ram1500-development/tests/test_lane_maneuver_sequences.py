@@ -225,3 +225,81 @@ def test_kinematic_outputs_not_derived_from_invalid_clock_or_future_states():
             pass
         else:
             raise AssertionError(kw)
+
+
+def complete_with_post_exit():
+    """Anonymous synthetic continuous, laterally-active neutral model interval."""
+    rows = joined_with_car()
+    rows += [model(round(.6 + i * .1, 2), "off", "none")
+             for i in range(10)]  # neutral through 1.5s
+    rows += [cc(round(.55 + i * .05, 2)) for i in range(20)]
+    rows += [car(round(.5 + i * .1, 2),
+                 2.0 if i < 8 else .2) for i in range(10)]
+    return rows
+
+
+def test_post_exit_wheel_rate_requires_continuous_owned_neutral_model():
+    result = analyze(complete_with_post_exit())
+    assert result["qualifiedOwnedSequences"] == 1
+    assert result["qualifiedHealthyKinematicSequences"] == 1
+    assert result["qualifiedPostExitWheelObservations"] == 1
+    assert result["postExitWindowSeconds"] == 1.0
+    assert result["p90PeakPostExitAbsSteeringRateDegPerSecond"] == 2.0
+    assert result["medianPostExitTailAbsSteeringRateDegPerSecond"] == .2
+    assert result["physicalLaneCenterMeasured"] is False
+    assert result["physicalLaneCrossingVerified"] is False
+    assert "segment" not in result
+
+
+def test_post_exit_missing_future_model_or_car_does_not_mean_settled():
+    base = joined_with_car()
+    assert analyze(base)["qualifiedPostExitWheelObservations"] == 0
+    assert analyze(base)["p90PeakPostExitAbsSteeringRateDegPerSecond"] is None
+    rows = complete_with_post_exit()
+    rows = [r for r in rows if r["service"] != "carState" or r["t"] < .9 * NS]
+    result = analyze(rows)
+    assert result["qualifiedOwnedSequences"] == 1
+    assert result["qualifiedPostExitWheelObservations"] == 0
+    assert result["exclusions"]["postExitCarCoverageUnverified"] == 1
+
+
+def test_post_exit_model_reentry_and_unverified_control_fail_closed():
+    rows = complete_with_post_exit()
+    rows.append(model(1.0, "laneChangeStarting"))
+    for order in (rows, list(reversed(rows))):
+        res = analyze(order)
+        assert res["qualifiedPostExitWheelObservations"] == 0
+        assert res["exclusions"]["postExitModelNotNeutral"] == 1
+    rows = complete_with_post_exit()
+    rows.append(cc(.85, False))
+    result = analyze(rows)
+    assert result["qualifiedPostExitWheelObservations"] == 0
+    assert result["exclusions"]["postExitLateralOwnershipUnverified"] == 1
+
+
+def test_post_exit_vehicle_intervention_and_wrong_segment_are_rejected():
+    rows = complete_with_post_exit()
+    for r in rows:
+        if r["service"] == "carState" and r["t"] == 1 * NS:
+            r["steeringPressed"] = True
+    assert analyze(rows)["exclusions"]["postExitVehicleInvalidOrIntervention"] == 1
+    rows = complete_with_post_exit()
+    for r in rows:
+        if r["service"] == "carState" and r["t"] == 1 * NS:
+            r["segment"] = 31
+    assert analyze(rows)["qualifiedPostExitWheelObservations"] == 0
+
+
+def test_post_exit_validation_and_privacy():
+    import json
+    rows = complete_with_post_exit()
+    rows[0]["location"] = "PRIVATE_LOCATION_DO_NOT_EXPORT"
+    rows[0]["vin"] = "PRIVATE_VIN_DO_NOT_EXPORT"
+    assert "PRIVATE_" not in json.dumps(analyze(rows))
+    for val in (0, -1, True, float("nan"), float("inf"), 4):
+        try:
+            analyze(rows, post_exit_seconds=val)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(val)
