@@ -289,7 +289,12 @@ def verified_prior_observational_metrics(latest, current_hash):
     A different source-pinned route permits only an unmatched trend comparison.
     Even a valid return must never qualify a calibration or release candidate.
     """
-    if not isinstance(latest, dict) or latest.get("routeHash") == current_hash:
+    if not isinstance(latest, dict):
+        return None
+    prior_hash = latest.get("routeHash")
+    if (type(prior_hash) is not str or
+            re.fullmatch(r"[0-9a-f]{20}", prior_hash) is None or
+            prior_hash == current_hash):
         return None
     if latest.get("schemaCommit") != SCHEMA_COMMIT:
         return None
@@ -306,7 +311,9 @@ def verified_prior_observational_metrics(latest, current_hash):
     metrics = latest.get("metrics")
     if not isinstance(metrics, dict):
         return None
-    active = metrics.get("cruiseOwnership", {}).get("latActiveSamples", {}).get("True", 0)
+    ownership = metrics.get("cruiseOwnership")
+    states = ownership.get("latActiveSamples") if isinstance(ownership, dict) else None
+    active = states.get("True") if isinstance(states, dict) else None
     if type(active) is not int or active <= 0:
         return None
     return metrics
