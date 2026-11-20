@@ -3,7 +3,7 @@
 **Status: observational analysis only; not an installation or control-change approval.**
 
 ## Provenance and privacy
-- Private Railway read-only probe, container build/deployment: Railway service `ram-private-rlog-probe`, deployment `55caf448-1760-4237-a1d7-27d0dda2cf8e`.
+- Private Railway read-only probe, container build/deployment: Railway service `ram-private-rlog-probe`, deployment `private-railway-id`.
 - Analysis code commit: `71d6dbefbfb1efe9679f08722c6d6d2430699cb0`.
 - The Dockerfile pins the installed-device cereal commit `1f7233cb983f3c13fdbba47a86f8fbc796ad9211`, with pinned source-hash verification for its vendored car schema.
 - Source data: existing November 17, 2026 driving R-logs, four privately selected segments; raw logs, route key, absolute times, GPS, VIN, and CAN frames are not published.
