@@ -20,6 +20,8 @@ MAX_STRAIGHT_CURVATURE=0.00065
 MAX_NATIVE_OUTPUT=300.0
 RATE_SIGN_THRESHOLD_DEG_S=1.5
 MIN_SIGN_DWELL_NS=250_000_000
+MIN_NEUTRAL_RESET_NS=250_000_000
+REVERSAL_QUALIFICATION="straight_wheel_rate_reversal_neutral_gap_source_conflict_v2"
 
 
 def _num(x):
@@ -33,13 +35,28 @@ def analyze_segment(state,controls,curvature,outputs):
     """
     sources={}
     for name,rows in (("controls",controls),("curvature",curvature),("outputs",outputs)):
-        sorted_rows=sorted(rows,key=lambda r:r[0])
-        sources[name]=(sorted_rows,[r[0] for r in sorted_rows])
+        # Equal-clock conflicting state must not be selected by input order.
+        # Keep the timestamp quarantined until a genuinely newer message.
+        values={}
+        for row in rows:
+            if (not isinstance(row,(tuple,list)) or len(row)!=2
+                    or type(row[0]) is not int or row[0]<0):
+                raise ValueError("invalid source observation")
+            timestamp,value=row
+            if timestamp in values:
+                previous=values[timestamp]
+                if (previous is None or type(previous) is not type(value)
+                        or previous != value):
+                    values[timestamp]=None
+            else:
+                values[timestamp]=value
+        times=sorted(values)
+        sources[name]=([values[ts] for ts in times],times)
     def asof(name,t):
         rows,times=sources[name]
         idx=bisect_right(times,t)-1
         if idx<0 or not 0<=t-times[idx]<=SOURCE_AGE_NS:return None
-        return rows[idx][1]
+        return rows[idx]
     counts=Counter()
     times=[]
     rates=[]
@@ -47,6 +64,7 @@ def analyze_segment(state,controls,curvature,outputs):
     streak_sign=0
     streak_start=None
     strong_last_sign=0
+    neutral_started=None
     reversals=0
     elapsed_ns=0
     for row in sorted(state,key=lambda r:r[0]):
@@ -80,6 +98,7 @@ def analyze_segment(state,controls,curvature,outputs):
             streak_sign=0
             streak_start=None
             strong_last_sign=0
+            neutral_started=None
             continue
         counts["eligibleSamples"]+=1
         rates.append(abs(rate))
@@ -91,15 +110,25 @@ def analyze_segment(state,controls,curvature,outputs):
                 streak_sign=0
                 streak_start=None
                 strong_last_sign=0
+                neutral_started=None
         else:
             streak_sign=0
             streak_start=None
             strong_last_sign=0
+            neutral_started=None
         last=t
         sign=1 if rate>=RATE_SIGN_THRESHOLD_DEG_S else -1 if rate<=-RATE_SIGN_THRESHOLD_DEG_S else 0
         if sign==0:
-            # A short neutral interval does not itself make a new oscillation.
+            # A short neutral interval preserves continuity, but an extended
+            # neutral dwell cannot bridge two unrelated steering maneuvers.
+            if neutral_started is None:
+                neutral_started=t
+            elif t-neutral_started>=MIN_NEUTRAL_RESET_NS:
+                streak_sign=0
+                streak_start=None
+                strong_last_sign=0
             continue
+        neutral_started=None
         if sign!=streak_sign:
             streak_sign=sign
             streak_start=t
@@ -110,6 +139,7 @@ def analyze_segment(state,controls,curvature,outputs):
     ordered=sorted(rates)
     idx=int((len(ordered)-1)*0.95) if ordered else 0
     return {
+      "measurementQualification":REVERSAL_QUALIFICATION,
       "eligibleSamples":counts["eligibleSamples"],
       "eligibleContinuousSeconds":round(elapsed_ns/1e9,3),
       "stableSignReversals":reversals,
@@ -118,6 +148,7 @@ def analyze_segment(state,controls,curvature,outputs):
       "rejections":{k:v for k,v in counts.items() if k!="eligibleSamples"},
       "limitations":[
         "Steering-wheel direction changes are NOT proven lane-center ping-pong or road safety performance.",
+        "Long neutral steering-rate windows break reversal continuity; v1 results are not directly comparable.",
         "Curvature is the controller desired estimate; actual lane boundary tracking is unobserved.",
         "Driver torque and EPS limiting filters may exclude valid behavior; report coverage.",
         "No tuning value, physical actuator latency estimate or on-device control change is implied.",
@@ -129,12 +160,15 @@ def combine(summaries):
     result=Counter()
     rejects=Counter()
     for r in summaries:
+        if r.get("measurementQualification")!=REVERSAL_QUALIFICATION:
+            raise ValueError("incompatible steering reversal measurement qualification")
         result["eligibleSamples"]+=r["eligibleSamples"]
         result["eligibleContinuousMillis"]+=round(r["eligibleContinuousSeconds"]*1000)
         result["stableSignReversals"]+=r["stableSignReversals"]
         rejects.update(r["rejections"])
     seconds=result["eligibleContinuousMillis"]/1000
     return {"status":"steering_reversal_proxy_observational_only",
+            "measurementQualification":REVERSAL_QUALIFICATION,
             "segments":len(summaries),
             "eligibleSamples":result["eligibleSamples"],
             "eligibleContinuousSeconds":round(seconds,3),
