@@ -62,6 +62,12 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
   radars=sorted((r for r in records if r.get("service")=="radarState"
                  and isinstance(r.get("t"),int)), key=lambda r:r["t"])
   for rec in radars:
+    # Radar and state must have the same verified segment provenance.
+    # Numbers repeat across routes; the CLI additionally enforces one route.
+    if type(rec.get("segment")) is not int or rec["segment"] < 0:
+      drop["radarSegmentUnknown"]+=1
+      continuity+=1
+      continue
     if rec.get("valid") is False:
       drop["invalidRadarMessage"]+=1
       continuity+=1
@@ -71,6 +77,9 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
     vehicle,age=ix.asof("carState",rec["t"],.15)
     if vehicle is None:
       drop["staleCarState"]+=1;continuity+=1;continue
+    if (type(vehicle.get("segment")) is not int or
+        vehicle["segment"] != rec["segment"]):
+      drop["carStateSegmentMismatch"]+=1;continuity+=1;continue
     speed=_num(vehicle.get("vEgo"))
     dist=_num(rec.get("leadOne.dRel"))
     rel=_num(rec.get("leadOne.vRel"))
@@ -82,13 +91,15 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
       drop["driverPedalOrUnknown"]+=1;continuity+=1;continue
     lead.append({"t":rec["t"],"gap":dist/speed,"dRel":dist,"vRel":rel,
                  "modelSource":rec.get("leadOne.radar") is not True,"speed":speed,
-                 "ageMs":age*1000,"continuity":continuity})
+                 "ageMs":age*1000,"continuity":continuity,
+                 "segment":rec["segment"]})
   # Do not join across an excluded observation (pedal use, invalid lead,
   # stale state, missing radar data). Temporal adjacency alone is not proof
   # that factory ACC continuously followed one valid lead.
   groups=[]
   for observation in lead:
     if (not groups or observation["continuity"]!=groups[-1][-1]["continuity"] or
+        observation["segment"] != groups[-1][-1]["segment"] or
         (observation["t"]-groups[-1][-1]["t"])/NS>.55):
       groups.append([])
     groups[-1].append(observation)
@@ -157,6 +168,7 @@ def evaluate(records, *, minimum_follow_s=2.0, min_lane_samples=3):
                   "p90RateDerivativeDegPerSec2":_pct([x["p90SteeringRateChangeDegPerSec2"] for x in lane],.9),
                   "derivedRatePairs":sum(x["steeringRateDerivativePairs"] for x in lane)},
     "caveats":["No individual event timestamps, route positions, device IDs or raw CAN frames are exported.",
+      "Following measurements require same-segment radar/carState observations within a single selected route.",
       "Following measurements depend on lead-source validity and are not the factory ACC programmed gap.",
       "TTC is distance/closing-speed only; it does not account for acceleration or predict actual collision risk.",
       "An incomplete or short lane-change model phase is excluded from quality percentiles.",

@@ -4,7 +4,7 @@ from ramtools.comfort_episodes import evaluate
 NS=1000000000
 
 def row(s,ts,**attrs):
-  return {"service":s,"t":round(ts*NS),"valid":True,**attrs}
+  return {"service":s,"t":round(ts*NS),"valid":True,"segment":30,**attrs}
 
 def test_follow_requires_cruise_no_pedal_and_fresh_state():
   rows=[]
@@ -94,3 +94,50 @@ def test_excluded_lead_cannot_bridge_following_episodes():
     reject=following["leadFilteringRejections"]
     assert reject[{"unconfirmed":"leadNotValid","invalid_message":"invalidRadarMessage",
                    "driver_pedal":"driverPedalOrUnknown"}[reason]]==1
+
+
+def test_following_episode_cannot_span_two_contiguous_segments():
+  records=[]
+  # Valid 1.1-second bursts on either side of the boundary must remain
+  # two short episodes, even when the 100 ms clock intervals are continuous.
+  for seg,start in ((30,0.),(31,1.2)):
+    for i in range(12):
+      t=start+i*.1
+      records.append(row("carState",t,segment=seg,vEgo=20.,
+                         gasPressed=False,brakePressed=False,
+                         **{"cruiseState.enabled":True}))
+      records.append(row("radarState",t+.02,segment=seg,
+                         **{"leadOne.status":True,"leadOne.dRel":30.,
+                            "leadOne.vRel":-1.,"leadOne.radar":True}))
+  result=evaluate(records)["following"]
+  assert result["validCruiseLeadObservations"]==24
+  assert result["qualifyingEpisodeCount"]==0
+
+
+def test_following_rejects_fresh_but_wrong_segment_state():
+  records=[]
+  for i in range(30):
+    t=i*.1
+    records.append(row("carState",t,segment=31,vEgo=20.,
+                       gasPressed=False,brakePressed=False,
+                       **{"cruiseState.enabled":True}))
+    records.append(row("radarState",t+.02,segment=30,
+                       **{"leadOne.status":True,"leadOne.dRel":30.,"leadOne.vRel":-1.}))
+  result=evaluate(records)["following"]
+  assert result["validCruiseLeadObservations"]==0
+  assert result["leadFilteringRejections"]["carStateSegmentMismatch"]==30
+  assert result["qualifyingEpisodeCount"]==0
+
+
+def test_following_missing_radar_segment_is_not_observational_evidence():
+  records=[]
+  for i in range(30):
+    t=i*.1
+    records.append(row("carState",t,vEgo=20.,
+                       gasPressed=False,brakePressed=False,
+                       **{"cruiseState.enabled":True}))
+    records.append(row("radarState",t+.02,segment=None,
+                       **{"leadOne.status":True,"leadOne.dRel":30.,"leadOne.vRel":-1.}))
+  result=evaluate(records)["following"]
+  assert result["validCruiseLeadObservations"]==0
+  assert result["leadFilteringRejections"]["radarSegmentUnknown"]==30

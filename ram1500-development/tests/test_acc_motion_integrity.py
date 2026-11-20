@@ -1,5 +1,6 @@
 """Synthetic read-only tests: no device, log, VIN, payload or route identifiers."""
 from ramtools.acc_motion_integrity import analyze
+from ramtools.input_scope import require_one_route
 
 N = 1_000_000_000
 
@@ -11,8 +12,9 @@ def state(t, **changes):
     row.update(changes)
     return row
 
-def radar(t, status=True, flag=True, d=40., valid=True):
+def radar(t, status=True, flag=True, d=40., valid=True, segment=30):
     return {"service": "radarState", "t": round(t*N), "valid": valid,
+            "segment": segment,
             "leadOne.status": status, "leadOne.radar": flag, "leadOne.dRel": d}
 
 def drive(t0=0, count=31, step=.1):
@@ -95,3 +97,51 @@ def test_short_episodes_excluded_and_no_identifying_detail():
     assert out["quality"]["qualifiedEpisodes"] == 0
     assert out["byObservedLeadContext"]["lead_unavailable"]["durationSeconds"] == 0.
     # A privacy caveat may literally mention "VIN" or "GPS": inspect structured\n    # exported keys, not warning prose, to avoid false-positive leak tests.\n    for section in (out, out["quality"], *out["byObservedLeadContext"].values()):\n        assert not {"vin", "gpsLocation", "rawpayload", "route", "segment", "t"}.intersection(section)
+
+def test_radar_does_not_cross_segment_even_if_recent():
+    # Reused segment 30 radar timestamps must not label segment 31 states.
+    states = [{**r, "segment": 31} for r in drive()]
+    other_segment = [radar(i*.1, segment=30) for i in range(31)]
+    out = analyze(states + other_segment)
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+    assert out["byObservedLeadContext"]["lead_unavailable"]["episodeCount"] == 1
+    assert out["quality"]["qualifiedEpisodes"] == 1
+
+
+def test_same_timestamp_wrong_segment_cannot_shadow_matching_radar():
+    # Deliberately place wrong-segment rows AFTER matching rows at equal t.
+    states = [{**r, "segment": 31} for r in drive()]
+    radar_rows = []
+    for i in range(31):
+        radar_rows += [radar(i*.1, flag=False, segment=31),
+                       radar(i*.1, flag=True, segment=30)]
+    out = analyze(states + radar_rows)
+    assert out["byObservedLeadContext"]["model_flagged_lead"]["episodeCount"] == 1
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+
+
+def test_radar_without_segment_is_unavailable_not_joinable():
+    unknown = [radar(i*.1, segment=None) for i in range(31)]
+    out = analyze(drive() + unknown)
+    assert out["quality"]["unscopedRadarRows"] == 31
+    assert out["byObservedLeadContext"]["lead_unavailable"]["episodeCount"] == 1
+    assert out["byObservedLeadContext"]["radar_flagged_lead"]["episodeCount"] == 0
+
+def test_one_route_gate_accepts_multiple_segments_of_same_route():
+    first = "00000000--aaaaaaaaaa--29/rlog.zst"
+    second = "00000000--aaaaaaaaaa--30/rlog.zst"
+    assert len(require_one_route([first, second])) == 2
+
+
+def test_one_route_gate_rejects_other_routes_or_missing_provenance():
+    good = "00000000--aaaaaaaaaa--29/rlog.zst"
+    wrong_route = "00000000--bbbbbbbbbb--30/rlog.zst"
+    for paths in ([good, wrong_route], [good, "unknown.rlog.zst"], []):
+        try:
+            require_one_route(paths)
+        except ValueError as exc:
+            # Privacy gate messages should never include route tokens.
+            assert "aaaaaaaaaa" not in str(exc)
+            assert "bbbbbbbbbb" not in str(exc)
+        else:
+            raise AssertionError("Mixed or unidentified route accepted")

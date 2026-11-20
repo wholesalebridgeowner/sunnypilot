@@ -20,6 +20,7 @@ from ramtools.comfort_episodes import evaluate
 from ramtools.acc_motion_integrity import analyze as analyze_acc_motion
 from ramtools.lane_phase_quality import analyze as analyze_lane_phases
 from ramtools.logio import load_records
+from ramtools.input_scope import require_one_route
 from ramtools.schema import verify_schema_dir, load_log_schema
 
 def main():
@@ -32,7 +33,10 @@ def main():
     p.error("Private-derived output must be outside git repository")
   if any(v!="ok" for v in verify_schema_dir(args.schema_dir.expanduser()).values()):
     p.error("Schema not pinned to the recorded 1f7233cb drive build")
-  paths=expand(args.logs)
+  try:
+    paths=require_one_route(expand(args.logs))
+  except ValueError as exc:
+    p.error(str(exc))
   records,read_results=load_records(paths,load_log_schema(args.schema_dir.expanduser()))
   result=metrics(records)
   result["comfortEpisodes"]=evaluate(records)
