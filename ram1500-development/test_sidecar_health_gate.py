@@ -13,11 +13,11 @@ def fixture():
         events.append({"service": "sidecar_health", "wallElapsedS": i*10.0,
                        "windowCpuPercentOneCore": 8.0, "rssAnonKiB": 30000+i*10,
                        "rssShmemKiB": 25000+i*1000,
-                       "rows": {"carState": 100*i, "can": 1000*i}})
+                       "rows": {"carState": 20*i, "can": 1000*i}})
     events.append({"service": "sidecar_health", "wallElapsedS": 120.01,
                    "windowCpuPercentOneCore": None, "rssAnonKiB": 30125,
                    "rssShmemKiB": 37100,
-                   "rows": {"carState": 1200, "can": 12000}})
+                   "rows": {"carState": 240, "can": 12000}})
     events.append({"service": "sidecar_stop", "readerCountsAfter": after,
                    "reason": "duration reached"})
     return events
@@ -118,6 +118,51 @@ class AuditTests(unittest.TestCase):
     def test_no_boolean_masquerade_as_numbers(self):
         s = fixture(); s[2]["rssAnonKiB"] = True
         self.assertIn("split_memory_metrics_missing_or_invalid", assess(s)["reasons"])
+
+    def test_nominal_2hz_traffic_is_representative(self):
+        s = fixture()
+        r = assess(s)
+        self.assertEqual(r["metricGate"], "passed")
+        self.assertTrue(r["requestedRateEvidenceConfirmed"])
+
+    def test_low_volume_counters_must_not_pass_as_nominal_load(self):
+        s = fixture()
+        # Every CPU window progresses, but only one carState/10s at 2 Hz.
+        for i, h in enumerate(s[1:-2], start=1):
+            h["rows"]["carState"] = i
+        s[-2]["rows"]["carState"] = 12
+        r = assess(s)
+        self.assertTrue(r["telemetryStreamProgressConfirmed"])
+        self.assertFalse(r["requestedRateEvidenceConfirmed"])
+        self.assertIn("carstate_rate_not_representative", r["reasons"])
+
+    def test_one_underloaded_window_fails_even_if_overall_volume_high(self):
+        s = fixture()
+        s[6]["rows"]["carState"] = s[5]["rows"]["carState"] + 1
+        r = assess(s)
+        self.assertIn("carstate_rate_not_representative", r["reasons"])
+        self.assertNotIn("parked_capture_stream_progress_missing", r["reasons"])
+
+    def test_catchup_burst_does_not_count_as_a_full_cpu_window(self):
+        s = fixture()
+        # Window at 11s after one at 10s, later windows still cover 120s.
+        s[2]["wallElapsedS"] = 11.0
+        r = assess(s)
+        self.assertIn("cpu_window_duration_too_short", r["reasons"])
+        self.assertNotEqual(r["metricGate"], "passed")
+
+    def test_boolean_sample_rate_rejected(self):
+        s = fixture()
+        s[0]["sampleHz"] = True
+        self.assertIn("unreviewed_sample_rate", assess(s)["reasons"])
+
+    def test_legitimate_1hz_carstate_traffic_passes_sampling_gate(self):
+        s = fixture()
+        s[0]["sampleHz"] = 1
+        for i, h in enumerate(s[1:-2], start=1):
+            h["rows"]["carState"] = i * 10
+        s[-2]["rows"]["carState"] = 120
+        self.assertEqual(assess(s)["metricGate"], "passed")
 
     def test_idle_sidecar_cannot_pass_resource_evidence(self):
         s = fixture()
