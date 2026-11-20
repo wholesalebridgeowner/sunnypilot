@@ -349,3 +349,57 @@ def test_phase_transition_collision_or_fault_has_no_good_score_and_no_private_ex
         assert result["qualifiedHealthyKinematicSequences"] == 0
         assert result["p90PeakPhaseTransitionWheelRateDerivativeDegPerSecondSquared"] is None
         assert "SECRET_VIN" not in json.dumps(result)
+
+
+def test_post_exit_requires_healthy_full_maneuver_not_just_a_good_tail():
+    # A healthy later wheel-rate trace does not make an earlier interrupted
+    # maneuver a qualified Comma comfort observation. No private data export.
+    import json
+    for edit in ("driver", "can", "eps", "missing"):
+        rows = complete_with_post_exit()
+        pivot = next(r for r in rows if r["service"] == "carState"
+                     and r["t"] == round(.3 * NS))
+        if edit == "driver":
+            pivot["steeringPressed"] = True
+        elif edit == "can":
+            pivot["canValid"] = False
+        elif edit == "eps":
+            pivot["steerFaultTemporary"] = True
+        else:
+            rows.remove(pivot)
+        rows[0]["vin"] = "PRIVATE_TEST_VIN"
+        for order in (rows, list(reversed(rows))):
+            result = analyze(order)
+            assert result["qualifiedOwnedSequences"] == 1
+            assert result["qualifiedHealthyKinematicSequences"] == 0
+            assert result["qualifiedPostExitWheelObservations"] == 0
+            assert result["exclusions"]["postExitManeuverKinematicsUnqualified"] == 1
+            assert result["p90PeakPostExitAbsSteeringRateDegPerSecond"] is None
+            assert result["medianPostExitTailAbsSteeringRateDegPerSecond"] is None
+            assert "PRIVATE_TEST_VIN" not in json.dumps(result)
+
+
+def test_post_exit_prechange_reentry_censors_settling_proxy():
+    # The model may start preparing another maneuver without entering its
+    # starting phase. preLaneChange is an anchor, NOT a settled off-only tail.
+    rows = complete_with_post_exit()
+    pre = next(r for r in rows if r["service"] == "drivingModelData"
+               and r["t"] == round(.9 * NS))
+    pre["meta.laneChangeState"] = "preLaneChange"
+    pre["meta.laneChangeDirection"] = "left"
+    for order in (rows, list(reversed(rows))):
+        result = analyze(order)
+        assert result["qualifiedOwnedSequences"] == 1
+        assert result["qualifiedHealthyKinematicSequences"] == 1
+        assert result["qualifiedPostExitWheelObservations"] == 0
+        assert result["exclusions"]["postExitModelNotNeutral"] == 1
+        assert result["p90PeakPostExitAbsSteeringRateDegPerSecond"] is None
+        assert result["postExitObservationDefinition"] == "healthy_maneuver_off_only_v2"
+
+
+def test_post_exit_unmodified_healthy_maneuver_remains_qualified():
+    result = analyze(complete_with_post_exit())
+    assert result["qualifiedHealthyKinematicSequences"] == 1
+    assert result["qualifiedPostExitWheelObservations"] == 1
+    assert result["p90PeakPostExitAbsSteeringRateDegPerSecond"] == 2.0
+    assert result["postExitObservationDefinition"] == "healthy_maneuver_off_only_v2"
