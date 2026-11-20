@@ -26,6 +26,8 @@ def scalar(value):
 def public_metric_summary(body):
     if not isinstance(body, dict) or body.get("status") != "experimental_intersegment_metrics":
         return None
+    if type(body.get("segments")) is not int or body["segments"] < 1:
+        return None
     m = body.get("metrics")
     if not isinstance(m, dict):
         return None
