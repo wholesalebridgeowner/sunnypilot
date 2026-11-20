@@ -32,36 +32,36 @@ def test_entry_and_recenter_are_separate_complete_phases_without_crossing_claim(
   assert "startSeconds" not in str(report)
 
 def test_model_gap_censors_and_no_false_recenter_completion():
-  inputs=[model(.0,"laneChangeStarting"),model(.1,"laneChangeStarting"),
+  inputs=[model(-0.10,"off"), model(.0,"laneChangeStarting"),model(.1,"laneChangeStarting"),
           model(2,"laneChangeFinishing"),model(2.1,"laneChangeFinishing")]
   report=analyze(inputs)
   assert report["phaseWindows"]["laneChangeStarting"]["counts"]=={"censoredByGapOrInvalidModel":1}
   assert report["phaseWindows"]["laneChangeFinishing"]["counts"]=={"censoredByUnverifiedEntry":1}
 
 def test_invalid_model_breaks_interval_and_invalid_vehicle_or_driver_is_rejected():
-  inputs=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
+  inputs=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
           model(.3,"laneChangeStarting"),model(.4,"laneChangeStarting"),model(.5,"off")]
   inputs += [cs(.3,1),cs(.4,3),cs(.45,4)]
   assert analyze(inputs)["phaseWindows"]["laneChangeStarting"]["counts"]["censoredByGapOrInvalidModel"]==1
-  inputs=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),model(.3,"laneChangeFinishing"),model(.4,"off")]
+  inputs=[model(0.00,"off"), model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),model(.3,"laneChangeFinishing"),model(.4,"off")]
   inputs += [cs(.1,1),cs(.2,2,pressed=True),cs(.3,3)]
   assert analyze(inputs)["phaseWindows"]["laneChangeFinishing"]["counts"]["driverOverrideOrUnknown"]==1
   inputs[-2]["steeringPressed"]=None
   assert analyze(inputs)["phaseWindows"]["laneChangeFinishing"]["counts"]["driverOverrideOrUnknown"]==1
 
 def test_no_future_kinematics_filling_and_no_cross_segment_bridge():
-  inputs=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),model(.4,"off"),
+  inputs=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),model(.4,"off"),
           cs(.4,2),cs(.5,3),cs(.6,4)]
   a=analyze(inputs)["phaseWindows"]["laneChangeStarting"]
   assert a["counts"]["insufficientCarState"]==1
-  inputs=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),model(.4,"off"),
+  inputs=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),model(.4,"off"),
           cs(.1,1),cs(.2,2),cs(.3,3)]
   inputs[5]["t"] += 1_000_000_000
   a=analyze(inputs)["phaseWindows"]["laneChangeStarting"]
   assert a["counts"]["insufficientCarState"]==1
 
 def test_unknown_speed_missing_rates_and_gaps_fail_closed():
-  base=[model(0,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),model(.4,"laneChangeFinishing"),model(.6,"off")]
+  base=[model(-0.10,"off"), model(0,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),model(.4,"laneChangeFinishing"),model(.6,"off")]
   low=base+[cs(.1,1,speed=2),cs(.3,2,speed=2),cs(.5,3,speed=2)]
   assert analyze(low)["phaseWindows"]["laneChangeFinishing"]["counts"]["lowSpeedExcluded"]==1
   missing=base+[cs(.1,1),cs(.3,2),cs(.5,3)]
@@ -82,7 +82,7 @@ def test_invalid_parameters_and_empty():
 def test_model_phase_is_censored_at_recording_segment_boundary():
   # Two unrelated model phases on consecutive R-log segments must never be
   # interpreted as a single completed lane-change entry.
-  models=[model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
+  models=[model(0.00,"off"), model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
           model(.3,"laneChangeFinishing",segment=31),
           model(.4,"laneChangeFinishing",segment=31), model(.5,"off",segment=31)]
   cars=[cs(.1,1),cs(.2,2),cs(.25,3),
@@ -94,7 +94,7 @@ def test_model_phase_is_censored_at_recording_segment_boundary():
 
 
 def test_unknown_model_segment_censors_prior_phase():
-  rows=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",segment=None),
+  rows=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",segment=None),
         model(.3,"laneChangeFinishing"),model(.4,"off")]
   rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
   report=analyze(rows)["phaseWindows"]["laneChangeStarting"]
@@ -103,7 +103,7 @@ def test_unknown_model_segment_censors_prior_phase():
 
 
 def test_mixed_segment_car_states_cannot_qualify_model_phase():
-  rows=[model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeStarting"), model(.2,"laneChangeStarting"),
         model(.3,"laneChangeStarting"), model(.4,"off")]
   rows += [cs(.1,1),cs(.2,2,segment=31),cs(.3,3)]
   phase=analyze(rows)["phaseWindows"]["laneChangeStarting"]
@@ -113,7 +113,7 @@ def test_mixed_segment_car_states_cannot_qualify_model_phase():
 
 def test_independent_same_segment_model_phases_remain_qualified():
   # A legitimate completed phase in each segment is still counted.
-  rows=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
         model(.4,"off"), model(.45,"off",segment=31),
         model(.5,"laneChangeStarting",segment=31),
         model(.6,"laneChangeStarting",segment=31),model(.8,"off",segment=31)]
@@ -125,7 +125,7 @@ def test_independent_same_segment_model_phases_remain_qualified():
 
 
 def test_unknown_model_validity_censors_without_completion():
-  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
+  models=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
           model(.3,"laneChangeStarting",valid=None),model(.4,"off")]
   cars=[cs(.1,1),cs(.2,2),cs(.3,3)]
   phase=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]
@@ -134,7 +134,7 @@ def test_unknown_model_validity_censors_without_completion():
 
 
 def test_unknown_car_validity_rejects_entire_phase():
-  rows=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
         model(.3,"laneChangeFinishing"),model(.4,"off")]
   rows += [cs(.1,1),cs(.2,2),cs(.3,3)]
   rows[5]["valid"]=None
@@ -144,7 +144,7 @@ def test_unknown_car_validity_rejects_entire_phase():
 
 
 def test_model_direction_flip_censors_whole_phase_not_two_maneuvers():
-  rows=[model(.1,"laneChangeStarting",direction="left"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeStarting",direction="left"),
         model(.2,"laneChangeStarting",direction="left"),
         model(.3,"laneChangeStarting",direction="right"),
         model(.4,"laneChangeStarting",direction="right"),
@@ -156,7 +156,7 @@ def test_model_direction_flip_censors_whole_phase_not_two_maneuvers():
 
 
 def test_unknown_start_direction_blocks_phase_until_exit():
-  rows=[model(.1,"laneChangeStarting",direction="none"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeStarting",direction="none"),
         model(.2,"laneChangeStarting",direction="left"),
         model(.3,"laneChangeStarting",direction="left"),
         model(.4,"off",direction="none")]
@@ -167,7 +167,7 @@ def test_unknown_start_direction_blocks_phase_until_exit():
 
 
 def test_direction_on_exit_does_not_invalidate_stable_right_phase():
-  rows=[model(.1,"laneChangeFinishing",direction="right"),
+  rows=[model(0.00,"off"), model(.1,"laneChangeFinishing",direction="right"),
         model(.2,"laneChangeFinishing",direction="right"),
         model(.3,"laneChangeFinishing",direction="right"),
         model(.4,"off",direction="none")]
@@ -180,7 +180,7 @@ def test_direction_on_exit_does_not_invalidate_stable_right_phase():
 def test_model_gap_midphase_cannot_manufacture_new_entry_from_resumed_fragment():
   # The gap censors the original phase. Fresh kinematic observations after
   # the gap cannot make the truncated tail a second completed maneuver.
-  models=[model(.0,"laneChangeStarting"),model(.1,"laneChangeStarting"),
+  models=[model(-0.10,"off"), model(.0,"laneChangeStarting"),model(.1,"laneChangeStarting"),
           model(1.0,"laneChangeStarting"),model(1.1,"laneChangeStarting"),
           model(1.2,"laneChangeStarting"),model(1.4,"off",direction="none")]
   cars=[cs(1.0,1),cs(1.1,3),cs(1.2,5),cs(1.3,2)]
@@ -190,7 +190,7 @@ def test_model_gap_midphase_cannot_manufacture_new_entry_from_resumed_fragment()
 
 
 def test_invalid_model_inside_phase_does_not_requalify_continuation():
-  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=None),
+  models=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=None),
           model(.3,"laneChangeStarting"),model(.4,"laneChangeStarting"),
           model(.5,"off",direction="none")]
   cars=[cs(.3,1),cs(.4,3),cs(.45,5)]
@@ -200,7 +200,7 @@ def test_invalid_model_inside_phase_does_not_requalify_continuation():
 
 
 def test_boundary_continuation_does_not_become_new_completed_phase():
-  models=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+  models=[model(0.00,"off"), model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
           model(.3,"laneChangeFinishing",segment=31),
           model(.4,"laneChangeFinishing",segment=31),
           model(.5,"off",direction="none",segment=31)]
@@ -212,7 +212,7 @@ def test_boundary_continuation_does_not_become_new_completed_phase():
 
 
 def test_verified_exit_allows_subsequent_independent_lane_phase():
-  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
+  models=[model(0.00,"off"), model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting",valid=False),
           model(.3,"laneChangeStarting"),model(.4,"off",direction="none"),
           model(.5,"laneChangeStarting"),model(.6,"laneChangeStarting"),
           model(.7,"off",direction="none")]
@@ -272,3 +272,45 @@ def test_unknown_model_state_is_not_postgap_anchor():
   cars=[cs(1.1,1),cs(1.2,3),cs(1.3,5)]
   counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
   assert counts=={"censoredByUnverifiedEntry":1}
+
+
+def test_initial_active_phase_is_left_censored_not_a_completed_maneuver():
+  # No model observation confirms the initial entry; this could be a tail
+  # carried into the first available R-log segment.
+  models=[model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+          model(.3,"laneChangeFinishing"),model(.4,"off",direction="none")]
+  cars=[cs(.1,1),cs(.2,3),cs(.3,5)]
+  report=analyze(models+cars)
+  counts=report["phaseWindows"]["laneChangeFinishing"]["counts"]
+  assert counts=={"censoredAtStreamStart":1}
+  assert report["phaseWindows"]["laneChangeFinishing"]["medianDurationSeconds"] is None
+
+
+def test_first_unknown_state_cannot_anchor_a_later_active_phase():
+  models=[model(0,"unexpected"),model(.1,"laneChangeStarting"),
+          model(.2,"laneChangeStarting"),model(.3,"laneChangeStarting"),
+          model(.4,"off",direction="none")]
+  cars=[cs(.1,1),cs(.2,3),cs(.3,5)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]["counts"]
+  assert counts=={"censoredByUnverifiedEntry":1}
+
+
+def test_observed_neutral_after_initial_censor_enables_new_independent_phase():
+  models=[model(.1,"laneChangeStarting"),model(.2,"laneChangeStarting"),
+          model(.3,"off",direction="none"),model(.4,"laneChangeStarting"),
+          model(.5,"laneChangeStarting"),model(.6,"laneChangeStarting"),
+          model(.7,"off",direction="none")]
+  cars=[cs(.4,1),cs(.5,3),cs(.6,5)]
+  phase=analyze(models+cars)["phaseWindows"]["laneChangeStarting"]
+  assert phase["counts"]["censoredAtStreamStart"]==1
+  assert phase["counts"]["completedTransitions"]==1
+  assert phase["counts"]["qualifiedWindows"]==1
+
+
+def test_first_valid_after_invalid_start_stays_left_censored():
+  models=[model(0,"laneChangeStarting",valid=None),
+          model(.1,"laneChangeFinishing"),model(.2,"laneChangeFinishing"),
+          model(.3,"laneChangeFinishing"),model(.4,"off",direction="none")]
+  cars=[cs(.1,1),cs(.2,3),cs(.3,5)]
+  counts=analyze(models+cars)["phaseWindows"]["laneChangeFinishing"]["counts"]
+  assert counts=={"censoredAtStreamStart":1}
