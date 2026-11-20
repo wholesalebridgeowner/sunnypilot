@@ -414,8 +414,9 @@ def compare(current, previous):
     result = {}
     for section, name in specs:
         if section in ("laneChange", "leadHeadway", "factoryAccObservedMotion"):
-            marker = (LANE_QUALITY
-                      if section == "laneChange" else FACTORY_ACC_QUALITY)
+            marker = (LANE_QUALITY if section == "laneChange" else
+                      HEADWAY_QUALITY if section == "leadHeadway" else
+                      FACTORY_ACC_QUALITY)
             if (current.get(section, {}).get("qualification") != marker
                     or previous.get(section, {}).get("qualification") != marker):
                 continue  # Never compare old unqualified or differently gated values
