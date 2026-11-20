@@ -34,9 +34,41 @@ def auth_probe(ip, runner=subprocess.run):
             "deviceWrites": False}
 
 
+def ssh_advertised(ip, runner=subprocess.run):
+    """Only a boolean; never log peer IDs, host keys or private tailnet state."""
+    validated_pi_address(ip)
+    try:
+        response = runner(
+            ["tailscale", "status", "--json"], timeout=8,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        if response.returncode:
+            return None
+        state = json.loads(response.stdout)
+        peers = state.get("Peer", {}) if isinstance(state, dict) else {}
+        if not isinstance(peers, dict):
+            return None
+        for peer in peers.values():
+            if not isinstance(peer, dict):
+                continue
+            addresses = peer.get("TailscaleIPs", [])
+            if isinstance(addresses, list) and ip in addresses:
+                keys = peer.get("SSHHostKeys", peer.get("SSH_HostKeys", None))
+                if isinstance(keys, list):
+                    return bool(keys)
+                return None
+    except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def main():
     try:
-        result = auth_probe(os.getenv("TAILNET_PI_IP", ""))
+        ip = os.getenv("TAILNET_PI_IP", "")
+        advertised = ssh_advertised(ip)
+        result = auth_probe(ip)
+        result["peerAdvertisesTailscaleSSH"] = advertised
     except (ProbeError, ValueError):
         result = {"status": "pi_ssh_auth_skipped_bad_target",
                   "sshAuthenticated": False, "deviceWrites": False}
