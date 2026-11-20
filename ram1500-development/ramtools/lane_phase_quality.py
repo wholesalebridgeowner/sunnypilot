@@ -1,0 +1,157 @@
+"""Privacy-preserving, pinned-log lane-change *model-phase* comfort diagnostics.
+
+This is an offline observational companion to comfort_episodes.py. The logged
+lane-change state does NOT identify a physical lane boundary crossing; do not
+turn this into an actuator/controller decision or a road-use safety claim.
+Only aggregate statistics are returned (no event times, locations, CAN or VIN).
+"""
+from __future__ import annotations
+
+from collections import Counter
+from math import isfinite
+
+NS = 1_000_000_000
+PHASES = ("laneChangeStarting", "laneChangeFinishing")
+
+
+def _number(value):
+  if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+    return float(value)
+  return None
+
+
+def _percentile(values, q):
+  data = sorted(x for value in values if (x := _number(value)) is not None)
+  if not data:
+    return None
+  at = (len(data) - 1) * q
+  lo = int(at)
+  hi = min(lo + 1, len(data) - 1)
+  return round(data[lo] + (data[hi] - data[lo]) * (at - lo), 3)
+
+
+def analyze(records, *, max_model_gap_s=0.75, max_car_gap_s=0.3,
+            min_steering_samples=3, min_speed_mps=5.0):
+  """Summarize completed model starting/finishing intervals with explicit gates.
+
+  A phase is complete only if a later valid model observation exits the state.
+  A model gap/invalid observation censors the phase instead of inventing its
+  end. Car-state samples must be valid, fresh throughout the phase, with known
+  driver steering status; we reject driver-overridden periods. No interpolation.
+  """
+  if (not 0 < max_model_gap_s <= 5 or not 0 < max_car_gap_s <= 2 or
+      isinstance(min_steering_samples, bool) or not isinstance(min_steering_samples, int) or
+      min_steering_samples < 2 or not 0 <= min_speed_mps <= 50):
+    raise ValueError("invalid offline quality gates")
+
+  models = sorted((r for r in records if r.get("service") == "drivingModelData"
+                   and isinstance(r.get("t"), int)), key=lambda r: r["t"])
+  car = sorted((r for r in records if r.get("service") == "carState"
+                and isinstance(r.get("t"), int)), key=lambda r: r["t"])
+  phase_counts = {phase: Counter() for phase in PHASES}
+  peak_rates = {phase: [] for phase in PHASES}
+  rate_derivatives = {phase: [] for phase in PHASES}
+  median_speeds = {phase: [] for phase in PHASES}
+  durations = {phase: [] for phase in PHASES}
+  direction_counts = {phase: Counter() for phase in PHASES}
+  # Model state and carState data have independent logging intervals.
+  # Never use a future car sample to fill a missing past one.
+  open_phase = None
+  previous_t = None
+  car_index = 0
+
+  def complete(phase, end_t):
+    nonlocal car_index
+    name, start = phase["state"], phase["start"]
+    phase_counts[name]["completedTransitions"] += 1
+    duration = (end_t - start) / NS
+    if not 0 < duration <= 15:
+      phase_counts[name]["invalidDuration"] += 1
+      return
+    while car_index < len(car) and car[car_index]["t"] < start:
+      car_index += 1
+    selected = []
+    i = car_index
+    while i < len(car) and car[i]["t"] < end_t:
+      selected.append(car[i])
+      i += 1
+    if len(selected) < min_steering_samples:
+      phase_counts[name]["insufficientCarState"] += 1
+      return
+    if any(r.get("valid") is False for r in selected):
+      phase_counts[name]["invalidCarState"] += 1
+      return
+    if any(r.get("steeringPressed") is not False for r in selected):
+      phase_counts[name]["driverOverrideOrUnknown"] += 1
+      return
+    if (selected[0]["t"] - start) / NS > max_car_gap_s or (
+        end_t - selected[-1]["t"]) / NS > max_car_gap_s:
+      phase_counts[name]["incompleteCarCoverage"] += 1
+      return
+    if any(not 0 < (b["t"] - a["t"]) / NS <= max_car_gap_s
+           for a, b in zip(selected, selected[1:])):
+      phase_counts[name]["carStateGap"] += 1
+      return
+    rates = [_number(r.get("steeringRateDeg")) for r in selected]
+    speeds = [_number(r.get("vEgo")) for r in selected]
+    if any(v is None for v in rates + speeds):
+      phase_counts[name]["missingKinematics"] += 1
+      return
+    if min(speeds) < min_speed_mps:
+      phase_counts[name]["lowSpeedExcluded"] += 1
+      return
+    deriv = [abs((b-a) / ((right["t"] - left["t"]) / NS))
+             for a, b, left, right in zip(rates, rates[1:], selected, selected[1:])]
+    phase_counts[name]["qualifiedWindows"] += 1
+    peak_rates[name].append(max(abs(v) for v in rates))
+    rate_derivatives[name].append(_percentile(deriv, .9))
+    median_speeds[name].append(_percentile(speeds, .5))
+    durations[name].append(duration)
+    direction_counts[name][phase["direction"]] += 1
+
+  for rec in models:
+    t = rec["t"]
+    interrupted = (rec.get("valid") is False or previous_t is not None and
+                   not 0 < (t - previous_t) / NS <= max_model_gap_s)
+    if interrupted:
+      if open_phase:
+        phase_counts[open_phase["state"]]["censoredByGapOrInvalidModel"] += 1
+      open_phase = None
+      previous_t = None
+      if rec.get("valid") is False:
+        continue
+    previous_t = t
+    state = str(rec.get("meta.laneChangeState") or "")
+    if open_phase and state != open_phase["state"]:
+      complete(open_phase, t)
+      open_phase = None
+    if state in PHASES and open_phase is None:
+      open_phase = {"state": state, "start": t,
+                    "direction": str(rec.get("meta.laneChangeDirection") or "unknown")}
+
+  if open_phase:
+    phase_counts[open_phase["state"]]["censoredAtEnd"] += 1
+
+  groups = {}
+  for phase in PHASES:
+    groups[phase] = {
+      "counts": dict(phase_counts[phase]),
+      "qualifiedByDirection": dict(direction_counts[phase]),
+      "medianDurationSeconds": _percentile(durations[phase], .5),
+      "p90PeakAbsSteeringRateDegPerSecond": _percentile(peak_rates[phase], .9),
+      "p90SteeringRateDerivativeDegPerSecondSquared": _percentile(rate_derivatives[phase], .9),
+      "medianQualifiedSpeedMps": _percentile(median_speeds[phase], .5),
+    }
+  return {
+    "status": "ok" if models else "no_model_data",
+    "modelSamples": len(models),
+    "phaseWindows": groups,
+    "physicalLaneBoundaryCrossing": "not_observable_from_logged_model_state",
+    "interpretation": [
+      "laneChangeStarting is a model entry/crossing-phase proxy, not evidence of an actual lane boundary crossing.",
+      "laneChangeFinishing is a model recenter-phase proxy, not proof of settled vehicle position.",
+      "Steering-rate derivative is steering-wheel angular acceleration, NOT chassis lateral jerk.",
+      "Only complete, continuously sampled, driver-not-steering windows enter comfort percentiles.",
+      "This is offline observation only; do not tune or deploy a controller from these metrics alone.",
+    ],
+  }

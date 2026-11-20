@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "profileId": "ram1500-eps-68466110AB-offline-candidates-v1",
+  "status": "OFFLINE_PROPOSAL_NOT_INSTALLABLE",
+  "source": {
+    "installedSunnypilotCommit": "1f7233cb983f3c13fdbba47a86f8fbc796ad9211",
+    "epsFirmware": "68466110AB",
+    "sourceProvenance": "Verified Nov 17 device CarParams and Nov 18 private parked/drive R-log reviews",
+    "vehicleSoftwareModified": false
+  },
+  "observedBaseline": {
+    "latAccelFactor": 2.0,
+    "friction": 0.05,
+    "steerActuatorDelaySeconds": 0.2,
+    "observedLearnedLateralDelaySeconds": 0.32,
+    "minEnableSpeedMps": 14.5,
+    "minSteerSpeedMps": 0.5,
+    "openpilotLongitudinalControl": false,
+    "pcmCruise": true,
+    "liveTorqueParametersEnabled": false
+  },
+  "candidateParameters": [
+    {
+      "id": "latAccelFactor",
+      "value": null,
+      "baseline": 2.0,
+      "unit": "controller-calibration-factor",
+      "mode": "OBSERVE_AND_FIT_ONLY",
+      "evidenceNeeded": "Matched onroad steering request, lateral acceleration, EPS motor feedback, curvature and speed across independent clean curves; parameter identified with independent held-out routes",
+      "guard": "No change to live controller or Panda limits before independent offline error and robustness validation"
+    },
+    {
+      "id": "friction",
+      "value": null,
+      "baseline": 0.05,
+      "unit": "controller-calibration-factor",
+      "mode": "OBSERVE_AND_FIT_ONLY",
+      "evidenceNeeded": "Independent route segments with left/right small-curvature steering, corrected road bank and driver torque intervention, separated from EPS rate/torque limiting",
+      "guard": "Do not increase commanded steering torque or reduce override protection"
+    },
+    {
+      "id": "steerActuatorDelaySeconds",
+      "value": null,
+      "baseline": 0.2,
+      "observedLearnedSeconds": 0.32,
+      "unit": "seconds",
+      "mode": "OBSERVE_AND_FIT_ONLY",
+      "evidenceNeeded": "Causal, actual installed controller timestamp reconstruction excluding ambiguous control phase, torque clipping and driver intervention; multiple independent routes",
+      "guard": "Learned 0.32 seconds is NOT a validated replacement parameter"
+    },
+    {
+      "id": "laneChangeComfortTuning",
+      "value": null,
+      "baseline": null,
+      "unit": "model-specific",
+      "mode": "ANALYZE_ONLY",
+      "evidenceNeeded": "Complete model laneChangeStarting, laneChangeFinishing and recenter episodes, verified physical lateral clearance and driver intervention, held-out replay",
+      "guard": "Do not infer lateral acceleration or jerk from steering wheel rate alone"
+    },
+    {
+      "id": "followingGapSeconds",
+      "value": null,
+      "baseline": null,
+      "unit": "seconds",
+      "mode": "MEASURE_FACTORY_ACC_ONLY",
+      "evidenceNeeded": "Sustained validated lead observations with known no driver pedals and no stale model source across multiple speed bands and independent runs",
+      "guard": "Factory ACC is longitudinal authority; never write an assumed distance or tighter follow target"
+    },
+    {
+      "id": "steeringTorqueAndRateLimits",
+      "value": null,
+      "baseline": null,
+      "unit": "native ECU command units",
+      "mode": "LOCKED_SAFETY_LIMITS",
+      "evidenceNeeded": "Exact installed controller source/firmware, independently validated Panda safety checks and complete control-phase replay",
+      "guard": "No changes to torque ceiling, EPS-relative clipping, rate limits, safety configuration or override"
+    },
+    {
+      "id": "lowSpeedLkasEnable",
+      "value": null,
+      "baseline": {
+        "minEnableSpeedMps": 14.5,
+        "minSteerSpeedMps": 0.5
+      },
+      "unit": "m/s",
+      "mode": "LOCKED_OEM_AUTHORIZATION",
+      "evidenceNeeded": "OEM-approved Comma LKAS low-speed authorization on exact EPS firmware; factory auto-park is a distinct OEM mode",
+      "guard": "No firmware spoofing, Parking Assist CAN replay, ECU bypass or enabling an unsupported zero-speed LKAS mode"
+    }
+  ],
+  "releaseGates": {
+    "offlinePinnedSourceChecks": "REQUIRED",
+    "multiRouteIndependentValidation": "REQUIRED",
+    "comparativeReplayAndSafetyRegression": "REQUIRED",
+    "independentPeerReview": "REQUIRED",
+    "driverApprovedParkedDeviceReview": "REQUIRED",
+    "controlledVehicleSafetyValidation": "REQUIRED",
+    "currentlyReadyForVehicleWrite": false
+  }
+}

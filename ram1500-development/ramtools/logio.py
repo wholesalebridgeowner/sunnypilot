@@ -93,8 +93,8 @@ FIELDS: dict[str, list[str]] = {
   "carState": ["vEgo", "vEgoRaw", "aEgo", "standstill", "steeringAngleDeg", "steeringRateDeg", "steeringTorque",
                "steeringTorqueEps", "steeringPressed", "steerFaultTemporary", "steerFaultPermanent", "gearShifter",
                "canValid", "canTimeout", "canErrorCounter", "leftBlinker", "rightBlinker", "gasPressed", "brakePressed",
-               "cruiseState.enabled", "cruiseState.available"],
-  "carControl": ["enabled", "latActive", "longActive", "actuators.torque", "actuators.curvature",
+               "cruiseState.enabled", "cruiseState.available", "cruiseState.standstill", "cruiseState.speed"],
+  "carControl": ["enabled", "latActive", "longActive", "actuators.accel", "actuators.torque", "actuators.curvature",
                  "actuators.steeringAngleDeg", "currentCurvature"],
   "carOutput": ["actuatorsOutput.torque", "actuatorsOutput.torqueOutputCan"],
   "controlsState": ["curvature", "desiredCurvature"],
@@ -104,8 +104,10 @@ FIELDS: dict[str, list[str]] = {
                            "totalBucketPoints", "calPerc", "decay", "maxResets", "version"],
   "liveParameters": ["valid", "roll", "angleOffsetDeg", "angleOffsetAverageDeg", "steerRatio", "stiffnessFactor"],
   "liveDelay": ["lateralDelay", "lateralDelayEstimate", "validBlocks", "status"],
-  "radarState": ["radarErrors.canError", "radarErrors.radarFault", "radarErrors.wrongConfig",
+  "radarState": ["leadOne.status", "leadOne.dRel", "leadOne.vRel", "leadOne.vLead", "leadOne.modelProb", "leadOne.radar", "radarErrors.canError", "radarErrors.radarFault", "radarErrors.wrongConfig",
                  "radarErrors.radarUnavailableTemporary"],
+  "longitudinalPlan": ["hasLead", "aTarget", "shouldStop", "allowThrottle", "allowBrake", "longitudinalPlanSource"],
+  "drivingModelData": ["meta.laneChangeState", "meta.laneChangeDirection", "laneLineMeta.leftProb", "laneLineMeta.rightProb"],
 }
 TORQUE_STATE_FIELDS = ["active", "error", "p", "i", "d", "f", "output", "saturated", "actualLateralAccel",
                        "desiredLateralAccel"]
