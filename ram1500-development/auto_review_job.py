@@ -17,6 +17,7 @@ import tempfile
 from auto_review import SCHEMA_COMMIT, compare, summarize_log_messages
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
+from auto_review_crosssegment_order import source_pinned_route_messages, RouteOrderingError
 
 PATH = re.compile(r"^logs/(.+)/([0-9]+)/qlog\.zst$")
 MAX_SEGMENTS = 96
@@ -317,20 +318,20 @@ def run(s3, bucket, now, reader):
                     and old_trial.get("reason") == "event_clock_regression"
                     and read_json_or_none(s3, bucket, regression_origin_key(candidate)) is None):
                 candidate_for_regression_origin = candidate
-    # Test one previously diagnosed quarantine against a bounded-observation
-    # trial, without changing original results or writing latest.json.
-    if candidate_for_trial is not None:
-        return run_quarantine_bounded_trial(s3, bucket, candidate_for_trial, reader)
-    if candidate_for_regression_origin is not None:
-        return run_quarantine_regression_origin_audit(
-            s3, bucket, candidate_for_regression_origin, reader)
-    # Otherwise investigate one prior failure before ingesting another route.
-    if quarantined_for_diagnostic is not None:
-        result = run_quarantine_clock_audit(s3, bucket, quarantined_for_diagnostic, reader)
-        if previous_anonymous_counts is not None:
-            result["priorAnonymousClockCounts"] = previous_anonymous_counts
-        return result
+    # Prioritize fresh uploads over backlog diagnostics; every new route
+    # gets at most one immutable report per input fingerprint. Old quarantines
+    # remain untouched and can be audited when no new upload is ready.
     if selected is None:
+        if candidate_for_trial is not None:
+            return run_quarantine_bounded_trial(s3, bucket, candidate_for_trial, reader)
+        if candidate_for_regression_origin is not None:
+            return run_quarantine_regression_origin_audit(
+                s3, bucket, candidate_for_regression_origin, reader)
+        if quarantined_for_diagnostic is not None:
+            result = run_quarantine_clock_audit(s3, bucket, quarantined_for_diagnostic, reader)
+            if previous_anonymous_counts is not None:
+                result["priorAnonymousClockCounts"] = previous_anonymous_counts
+            return result
         return {"status": "no_new_eligible_routes", "eligible": len(candidates)}
     with tempfile.TemporaryDirectory(prefix="ram-auto-review-") as folder:
         paths = []
@@ -342,7 +343,11 @@ def run(s3, bucket, now, reader):
                 raise ValueError("Invalid compressed input size")
             paths.append(output)
         try:
-            metrics = summarize_log_messages(pinned_qlog_messages(paths, reader))
+            ordering = {}
+            metrics = summarize_log_messages(
+                source_pinned_route_messages(paths, reader, ordering))
+            if ordering["verifiedSegments"] != len(paths):
+                raise RouteOrderingError("missing-source-header")
         except Exception as exc:
             # Persist a private, source-scoped tombstone so one invalid historical
             # route cannot fail every five-minute cron and starve older routes.
@@ -363,8 +368,15 @@ def run(s3, bucket, now, reader):
     latest = read_json_or_none(s3, bucket, latest_key)
     # A later upload can change a route's fingerprint; never use that
     # same route's older partial report as an independent comparator.
-    prior = (latest["metrics"] if latest and latest.get("metrics")
-             and latest.get("routeHash") != selected["hash"] else None)
+    current_active = metrics.get("cruiseOwnership", {}).get("latActiveSamples", {}).get("True", 0)
+    if type(current_active) is not int or current_active < 0:
+        current_active = 0
+    # Do not compare a manual/non-engaged run with an assisted-steering run.
+    valid_prior = bool(
+        latest and isinstance(latest.get("metrics"), dict)
+        and latest.get("routeHash") != selected["hash"]
+        and latest["metrics"].get("cruiseOwnership", {}).get("latActiveSamples", {}).get("True", 0) > 0)
+    prior = latest["metrics"] if valid_prior and current_active > 0 else None
     is_newest = not latest or selected["updated"].isoformat() >= latest.get("routeUpdatedAt", "")
     delta = compare(metrics, prior if is_newest else None)
     report = {
@@ -375,18 +387,30 @@ def run(s3, bucket, now, reader):
         "routeUpdatedAt": selected["updated"].isoformat(),
         "segments": len(selected["items"]),
         "sourceVerifiedSegments": len(paths),
+        "eventTimeOrdering": {
+            "version": ordering["orderingVersion"],
+            "windowSeconds": ordering["reorderingWindowSeconds"],
+            "maxBufferedEvents": ordering["maxBufferedEvents"],
+            "intraSegmentInversions": ordering["intraSegmentInversions"],
+            "crossSegmentInversions": ordering["crossSegmentInversions"],
+        },
+        "lateralActiveSamples": current_active,
+        "assistedSteeringReviewEligible": bool(current_active > 0),
         "completeness": "contiguous-from-zero-after-30-minutes-quiet; final-route-count-unverified",
         "metrics": metrics, "comparison": delta,
         "recommendation": "Observational review only. No automatic steering or braking code deployment.",
     }
     put_private_json(s3, bucket, route_key(selected), report)
-    if is_newest:
+    if is_newest and current_active > 0:
         put_private_json(s3, bucket, latest_key, report)
     # No location, route names, identifiers or telemetry in console output.
     return {"status": "review_saved", "segments": len(selected["items"]),
+            "lateralActiveSamples": current_active,
+            "assistedSteeringReviewEligible": current_active > 0,
             "laneChanges": metrics["laneChange"]["completeStartingWindows"],
             "steeringEventEpisodes": metrics["steering"]["steerSaturatedEventEpisodes"],
-            "comparisonBaseline": delta["baselineAvailable"], "becameLatest": is_newest}
+            "comparisonBaseline": delta["baselineAvailable"],
+            "becameLatest": is_newest and current_active > 0}
 
 def main():
     import boto3
