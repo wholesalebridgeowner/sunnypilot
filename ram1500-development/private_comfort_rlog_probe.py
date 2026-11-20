@@ -24,7 +24,9 @@ PINNED_COMMIT = "1f7233cb983f3c13fdbba47a86f8fbc796ad9211"
 KEY_PATTERN = re.compile(r"^logs/([^/]+)/([0-9]+)/rlog\.zst$")
 ROUTE_PATTERN = re.compile(r"^[0-9a-f]{8}--[0-9a-f]{10}$")
 MAX_COMPRESSED_BYTES = 30_000_000
-MAX_SEGMENTS = 4
+# A bounded retained morning window (27..46) can be audited as 20 partial-route
+# R-logs; this does not imply the missing early segments have been recovered.
+MAX_SEGMENTS = 20
 # Only these fixed, non-identifying stage labels can appear in a failure log.
 CURRENT_STAGE = "startup"
 
@@ -37,7 +39,8 @@ def stage(name: str) -> None:
 
 
 def parse_segments(value: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"[0-9]+(?:,[0-9]+){0,3}", value):
+    # At most twenty 0..1000 selectors, no unbounded input or silent truncation.
+    if type(value) is not str or len(value) > 99 or not re.fullmatch(r"[0-9]+(?:,[0-9]+)*", value):
         raise ValueError("invalid segment selection")
     numbers = tuple(int(s) for s in value.split(","))
     if not numbers or len(numbers) > MAX_SEGMENTS or len(set(numbers)) != len(numbers):
