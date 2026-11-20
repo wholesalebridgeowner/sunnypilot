@@ -10,7 +10,9 @@ def valid():
         "sourceVerificationComplete":True,
         "routeHash":"DO_NOT_LOG_ROUTE_HASH",
         "metrics":{
-           "coverage":{"carStateSamples":32290},
+           "coverage":{"carStateSamples":32290,"controlsStateSamples":32000,"laneModelSamples":0,"radarStateSamples":102},
+           "messageCounts":{"carControl":32000},
+           "cruiseOwnership":{"latActiveSamples":{"True":1234,"False":30766},"longActiveSamples":{"False":32000}},
            "laneChange":{"completeStartingWindows":0},
            "steering":{"steerSaturatedEventEpisodes":0, "lateralActiveSamples":10000,
                        "p90AbsSteeringRateDegPerSecond":8.21},
@@ -25,6 +27,8 @@ class SummaryTests(unittest.TestCase):
         summary = public_metric_summary(valid())
         self.assertEqual(summary["carStateSamples"], 32290)
         self.assertEqual(summary["qualifiedHeadwaySamples"], 31)
+        self.assertEqual(summary["carControlLatActiveTrueSamples"], 1234)
+        self.assertEqual(summary["laneModelSamples"], 0)
         self.assertNotIn("DO_NOT_LOG", json.dumps(summary))
         self.assertNotIn("routeHash", summary)
         self.assertNotIn("privateLocation", summary)
