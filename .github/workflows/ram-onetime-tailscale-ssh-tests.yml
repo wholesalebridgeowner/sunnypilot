@@ -1,0 +1,32 @@
+name: Ram one-time Tailscale SSH approval session tests
+on:
+  push:
+    branches: [ram1500-one-time-pi-to-comma-session]
+    paths:
+      - 'ram1500-development/tailnet_bridge/**'
+      - '.github/workflows/ram-onetime-tailscale-ssh-tests.yml'
+  pull_request:
+    paths:
+      - 'ram1500-development/tailnet_bridge/**'
+      - '.github/workflows/ram-onetime-tailscale-ssh-tests.yml'
+jobs:
+  safety-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Session approval and network-target fixtures
+        run: |
+          python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_one_time_session.py' -v
+          python3 -m unittest discover -s ram1500-development/tailnet_bridge -p 'test_mint_authkey.py' -v
+      - name: Verify one-time launcher and no persistent polling
+        run: |
+          set -eu
+          grep -Fq 'exec python3 -u /opt/ram/one_time_session.py' ram1500-development/tailnet_bridge/start.sh
+          grep -Fq 'COPY one_time_session.py /opt/ram/one_time_session.py' ram1500-development/tailnet_bridge/Dockerfile
+          ! grep -Fq 'exec python3 -u /opt/ram/probe.py' ram1500-development/tailnet_bridge/start.sh
+          ! grep -qE '/dev/net/tun|--privileged|StrictHostKeyChecking=no' ram1500-development/tailnet_bridge/start.sh
