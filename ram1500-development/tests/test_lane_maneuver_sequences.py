@@ -133,3 +133,95 @@ def test_invalid_timestamps_and_timing_parameters_fail_closed():
             pass
         else:
             raise AssertionError(kw)
+
+
+def car(t, rate, *, segment=30, speed=18.0):
+    return {"service": "carState", "t": round(t * NS), "valid": True,
+            "segment": segment, "vEgo": speed, "steeringRateDeg": rate,
+            "steeringPressed": False, "canValid": True,
+            "steerFaultTemporary": False, "steerFaultPermanent": False}
+
+
+def joined_with_car():
+    return route() + [car(.1, 1), car(.2, 3), car(.3, 5), car(.4, 2)]
+
+
+def test_paired_observed_steering_envelope_requires_both_phases():
+    res = analyze(joined_with_car())
+    assert res["qualifiedOwnedSequences"] == 1
+    assert res["qualifiedHealthyKinematicSequences"] == 1
+    assert res["p90PeakAbsSteeringRateDegPerSecond"] == 5
+    assert res["p90PeakWheelRateDerivativeDegPerSecondSquared"] == 30
+    assert res["physicalLaneCrossingVerified"] is False
+    assert res["physicalLaneCenterMeasured"] is False
+
+
+def test_no_vehicle_samples_never_implies_good_lane_kinematics():
+    res = analyze(route())
+    assert res["qualifiedOwnedSequences"] == 1
+    assert res["qualifiedHealthyKinematicSequences"] == 0
+    assert res["exclusions"]["kinematicInsufficientTwoPhaseSamples"] == 1
+    assert res["p90PeakAbsSteeringRateDegPerSecond"] is None
+
+
+def test_intervention_eps_and_can_health_censor_entire_sequence():
+    for key, value, reason in (
+        ("steeringPressed", True, "kinematicInterventionOrEpsFault"),
+        ("steeringPressed", None, "kinematicInterventionOrEpsFault"),
+        ("steerFaultTemporary", True, "kinematicInterventionOrEpsFault"),
+        ("steerFaultPermanent", None, "kinematicInterventionOrEpsFault"),
+        ("canValid", False, "kinematicSegmentOrCanInvalid"),
+        ("valid", 1, "kinematicSegmentOrCanInvalid"),
+        ("segment", 31, "kinematicSegmentOrCanInvalid"),
+    ):
+        rows = joined_with_car()
+        next(r for r in rows if r["service"] == "carState" and
+             r["t"] == round(.3 * NS))[key] = value
+        result = analyze(rows)
+        assert result["qualifiedOwnedSequences"] == 1
+        assert result["qualifiedHealthyKinematicSequences"] == 0
+        assert result["exclusions"][reason] == 1
+
+
+def test_sparse_low_speed_and_nonfinite_car_cannot_qualify():
+    rows = [r for r in joined_with_car() if not
+            (r["service"] == "carState" and r["t"] == round(.3 * NS))]
+    assert analyze(rows)["exclusions"]["kinematicInsufficientTwoPhaseSamples"] == 1
+    rows = joined_with_car()
+    next(r for r in rows if r["service"] == "carState")["vEgo"] = 1.0
+    assert analyze(rows)["exclusions"]["kinematicLowSpeed"] == 1
+    rows = joined_with_car()
+    next(r for r in rows if r["service"] == "carState")["steeringRateDeg"] = float("nan")
+    assert analyze(rows)["exclusions"]["kinematicMissingOrNonfinite"] == 1
+    rows = joined_with_car()
+    assert analyze(rows, max_car_gap_s=.05)["exclusions"]["kinematicUnverifiedCoverage"] == 1
+
+
+def test_equal_clock_carstate_conflict_is_order_invariant_and_private():
+    import json
+    base = joined_with_car()
+    expected = analyze(base)
+    assert analyze(list(reversed(base)) + [dict(next(r for r in base if r["service"] == "carState"))]) == expected
+    collision = dict(next(r for r in base if r["service"] == "carState"),
+                     steeringRateDeg=100, vin="TEST_PRIVATE_VIN", location="TEST_PRIVATE_GPS")
+    for rows in (base + [collision], list(reversed(base + [collision]))):
+        result = analyze(rows)
+        assert result["qualifiedHealthyKinematicSequences"] == 0
+        assert result["exclusions"]["kinematicSegmentOrCanInvalid"] == 1
+        assert "TEST_PRIVATE_" not in json.dumps(result)
+
+
+def test_kinematic_outputs_not_derived_from_invalid_clock_or_future_states():
+    rows = joined_with_car()
+    rows.append(dict(next(r for r in rows if r["service"] == "carState"), t=True))
+    assert analyze(rows)["status"] == "invalid_recording_clock"
+    rows = route() + [car(.6, 5), car(.7, 6), car(.8, 7), car(.9, 8)]
+    assert analyze(rows)["qualifiedHealthyKinematicSequences"] == 0
+    for kw in ({"max_car_gap_s": 0}, {"max_car_gap_s": float("nan")},
+               {"min_speed_mps": True}, {"min_speed_mps": float("inf")}):
+        try:
+            analyze(joined_with_car(), **kw)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(kw)
