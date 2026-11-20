@@ -283,6 +283,42 @@ def run_quarantine_regression_origin_audit(s3, bucket, selected, reader):
             "segments": len(paths), "releaseAuthorized": False}
 
 
+def verified_prior_observational_metrics(latest, current_hash):
+    """Conservative provenance of the PREVIOUS active route, not held-out tuning.
+
+    A different source-pinned route permits only an unmatched trend comparison.
+    Even a valid return must never qualify a calibration or release candidate.
+    """
+    if not isinstance(latest, dict):
+        return None
+    prior_hash = latest.get("routeHash")
+    if (type(prior_hash) is not str or
+            re.fullmatch(r"[0-9a-f]{20}", prior_hash) is None or
+            prior_hash == current_hash):
+        return None
+    if latest.get("schemaCommit") != SCHEMA_COMMIT:
+        return None
+    fingerprint = latest.get("inputFingerprint")
+    if type(fingerprint) is not str or re.fullmatch(r"[0-9a-f]{24}", fingerprint) is None:
+        return None
+    segments = latest.get("segments")
+    if type(segments) is not int or not 1 <= segments <= MAX_SEGMENTS:
+        return None
+    if type(latest.get("sourceVerifiedSegments")) is not int or latest["sourceVerifiedSegments"] != segments:
+        return None
+    if latest.get("assistedSteeringReviewEligible") is not True:
+        return None
+    metrics = latest.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    ownership = metrics.get("cruiseOwnership")
+    states = ownership.get("latActiveSamples") if isinstance(ownership, dict) else None
+    active = states.get("True") if isinstance(states, dict) else None
+    if type(active) is not int or active <= 0:
+        return None
+    return metrics
+
+
 def run(s3, bucket, now, reader):
     pages = s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="logs/")
     objects = (obj for page in pages for obj in page.get("Contents", ()))
@@ -366,21 +402,19 @@ def run(s3, bucket, now, reader):
                     "segments": len(paths)}
     latest_key = PREFIX + "latest.json"
     latest = read_json_or_none(s3, bucket, latest_key)
-    # A later upload can change a route's fingerprint; never use that
-    # same route's older partial report as an independent comparator.
+    # A prior route is an UNMATCHED observational comparator only, never
+    # a paired baseline/candidate replay. Reject unpinned or partial 'latest'
+    # artifacts rather than silently treating them as valid source evidence.
     current_active = metrics.get("cruiseOwnership", {}).get("latActiveSamples", {}).get("True", 0)
     if type(current_active) is not int or current_active < 0:
         current_active = 0
-    # Do not compare a manual/non-engaged run with an assisted-steering run.
-    valid_prior = bool(
-        latest and isinstance(latest.get("metrics"), dict)
-        and latest.get("routeHash") != selected["hash"]
-        and latest["metrics"].get("cruiseOwnership", {}).get("latActiveSamples", {}).get("True", 0) > 0)
-    prior = latest["metrics"] if valid_prior and current_active > 0 else None
+    prior_metrics = verified_prior_observational_metrics(latest, selected["hash"])
     is_newest = not latest or selected["updated"].isoformat() >= latest.get("routeUpdatedAt", "")
-    delta = compare(metrics, prior if is_newest else None)
+    prior = prior_metrics if current_active > 0 and is_newest else None
+    delta = compare(metrics, prior)
+    comparison_kind = ("unmatched_prior_active_route" if delta["baselineAvailable"] else "none")
     report = {
-        "reportVersion": 1, "routeHash": selected["hash"],
+        "reportVersion": 2, "routeHash": selected["hash"],
         "inputFingerprint": selected["fingerprint"],
         "schemaCommit": SCHEMA_COMMIT,
         "analyzedAt": now.isoformat(),
@@ -398,7 +432,16 @@ def run(s3, bucket, now, reader):
         "assistedSteeringReviewEligible": bool(current_active > 0),
         "completeness": "contiguous-from-zero-after-30-minutes-quiet; final-route-count-unverified",
         "metrics": metrics, "comparison": delta,
-        "recommendation": "Observational review only. No automatic steering or braking code deployment.",
+        "comparisonEvidence": {
+            "version": 2,
+            "kind": comparison_kind,
+            "priorActiveRouteSourceVerified": bool(prior is not None),
+            "matchedConditionsVerified": False,
+            "pairedBaselineCandidateReplayVerified": False,
+            "independentLaneTrackingVerified": False,
+            "calibrationEligible": False,
+        },
+        "recommendation": "Unmatched observational route comparison only. No automatic steering or braking code deployment.",
     }
     put_private_json(s3, bucket, route_key(selected), report)
     if is_newest and current_active > 0:
@@ -410,6 +453,8 @@ def run(s3, bucket, now, reader):
             "laneChanges": metrics["laneChange"]["completeStartingWindows"],
             "steeringEventEpisodes": metrics["steering"]["steerSaturatedEventEpisodes"],
             "comparisonBaseline": delta["baselineAvailable"],
+            "comparisonKind": comparison_kind,
+            "calibrationEligible": False,
             "becameLatest": is_newest and current_active > 0}
 
 def main():

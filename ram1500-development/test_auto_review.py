@@ -8,7 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_review import RouteMetrics, compare, summarize_log_messages, SCHEMA_COMMIT
 from auto_review_job import (group_routes, route_key, clock_audit_key, bounded_trial_key,
-                             regression_origin_key, anonymous_clock_counts, MAX_COMPRESSED, pinned_qlog_messages,
+                             regression_origin_key, anonymous_clock_counts, verified_prior_observational_metrics, MAX_COMPRESSED, pinned_qlog_messages,
                              SourcePinError, run, PREFIX, safe_trial_rejection_reason)
 from auto_review_clock_audit import audit_clock_order, ClockAuditSourceError
 from auto_review_bounded_order import source_pinned_bounded_messages, OrderingTrialError
@@ -221,6 +221,93 @@ class ContinuityTests(unittest.TestCase):
         self.assertNotIn("largeDifference", str(compare(
             {"steering": {"steerSaturatedEventEpisodes": 1}},
             {"steering": {"steerSaturatedEventEpisodes": 0}})))
+
+
+class ComparisonProvenanceTests(unittest.TestCase):
+    """Unmatched route comparison can never certify a calibration candidate."""
+
+    @staticmethod
+    def prior():
+        return {
+            "routeHash": "a" * 20,
+            "inputFingerprint": "b" * 24,
+            "schemaCommit": SCHEMA_COMMIT,
+            "segments": 2,
+            "sourceVerifiedSegments": 2,
+            "assistedSteeringReviewEligible": True,
+            "routeUpdatedAt": (T - timedelta(days=1)).isoformat(),
+            "metrics": {
+                "cruiseOwnership": {"latActiveSamples": {"True": 8}},
+                "laneChange": {"medianStartingSeconds": 2.5},
+            },
+        }
+
+    def test_only_provenanced_disjoint_active_route_qualifies_as_observational_prior(self):
+        self.assertIsNotNone(verified_prior_observational_metrics(self.prior(), "c" * 20))
+        for key, value in (
+            ("routeHash", "c" * 20),  # same route's revised upload is not independent
+            ("routeHash", None),
+            ("inputFingerprint", None),
+            ("inputFingerprint", "unverified"),
+            ("schemaCommit", "different-build"),
+            ("segments", 0),
+            ("sourceVerifiedSegments", 1),
+            ("assistedSteeringReviewEligible", False),
+        ):
+            prior = self.prior()
+            prior[key] = value
+            with self.subTest(field=key, value=value):
+                self.assertIsNone(verified_prior_observational_metrics(prior, "c" * 20))
+        for malformed in (None, [], "unknown", {"True": True},
+                          {"True": 0}, {"True": "8"}):
+            prior = self.prior()
+            prior["metrics"]["cruiseOwnership"]["latActiveSamples"] = malformed
+            with self.subTest(malformed=malformed):
+                self.assertIsNone(verified_prior_observational_metrics(prior, "c" * 20))
+
+    def test_a_new_active_route_reports_only_unmatched_comparison_not_held_out_replay(self):
+        name = "PRIVATE_DEVICE_PRIVATE_ROUTE"
+        s3 = FixtureS3([obj(name, 0)])
+        selected = group_routes(s3.objects, T)[0]
+        prior = self.prior()
+        prior["routeHash"] = "a" * 20 if selected["hash"] != "a" * 20 else "c" * 20
+        s3.reports[PREFIX + "latest.json"] = prior
+        def read(_):
+            yield source_header()
+            yield car_state(10)
+            yield FakeMessage("carControl", 10.1, {"latActive": True, "longActive": False})
+            yield car_state(11)
+        result = run(s3, "private-fixture", T, read)
+        self.assertEqual(result["status"], "review_saved")
+        self.assertTrue(result["comparisonBaseline"])  # backward-compatible legacy flag
+        self.assertEqual(result["comparisonKind"], "unmatched_prior_active_route")
+        self.assertFalse(result["calibrationEligible"])
+        saved = s3.reports[route_key(selected)]
+        self.assertEqual(saved["reportVersion"], 2)
+        self.assertTrue(saved["comparison"]["baselineAvailable"])
+        evidence = saved["comparisonEvidence"]
+        self.assertEqual(evidence["kind"], "unmatched_prior_active_route")
+        self.assertTrue(evidence["priorActiveRouteSourceVerified"])
+        for key in ("matchedConditionsVerified", "pairedBaselineCandidateReplayVerified",
+                    "independentLaneTrackingVerified", "calibrationEligible"):
+            self.assertFalse(evidence[key])
+        self.assertNotIn(name, json.dumps(result))
+        self.assertNotIn(name, json.dumps(saved))
+
+    def test_unpinned_prior_cannot_masquerade_as_baseline(self):
+        s3 = FixtureS3([obj("PRIVATE_DEVICE", 0)])
+        selected = group_routes(s3.objects, T)[0]
+        prior = self.prior()
+        prior["schemaCommit"] = "another-source"
+        s3.reports[PREFIX + "latest.json"] = prior
+        def read(_):
+            yield source_header()
+            yield car_state(10)
+            yield FakeMessage("carControl", 10.1, {"latActive": True, "longActive": False})
+        result = run(s3, "private-fixture", T, read)
+        self.assertFalse(result["comparisonBaseline"])
+        self.assertEqual(result["comparisonKind"], "none")
+        self.assertFalse(s3.reports[route_key(selected)]["comparisonEvidence"]["calibrationEligible"])
 
 
 class AnonymousClockAuditTests(unittest.TestCase):
