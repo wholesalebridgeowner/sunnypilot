@@ -1,9 +1,12 @@
 """Steering warnings and command-at-limit time, with one record per limit event."""
+import math
 import unittest
 
 import measure_set
 import synth
+from measure_api import Measure
 from measure_limit import SteeringLimit
+from measure_steering import SteeringTime
 from pipeline import Pipeline, PipelineConfig
 from synth import MS, SEC
 
@@ -225,6 +228,14 @@ class LimitEventTests(unittest.TestCase):
                 if sent:
                     self.assertEqual(records[0]["limitS"], round(0.1 * samples, 1))
 
+    def test_float_rounding_does_not_drop_an_event_of_0_4_seconds(self):
+        added = 0.0
+        for _ in range(8):
+            added += 0.05
+        self.assertLess(added, 0.4)                                    # eight Samples of 0.05 s add up just short
+        _, records, _ = run(lambda i, t: at_limit() if 200 <= i < 208 else None, n=500, period_ms=50)
+        self.assertEqual([r["limitS"] for r in records], [0.4])
+
     def test_record_of_a_steady_event(self):
         def change(i, t_ns):
             if 100 <= i < 120:
@@ -255,6 +266,14 @@ class LimitEventTests(unittest.TestCase):
                 self.assertEqual(records[0]["demandMax"], 1.6)
                 self.assertEqual(records[0]["achievedAtMax"], achieved)
                 self.assertEqual(records[0]["achievedMean"], achieved)
+
+    def test_a_zero_is_never_sent_as_minus_zero(self):
+        _, records, _ = run(lambda i, t: at_limit(v=20.0, desired=-0.004, actual=0.0, cmd=-350.0, ask=-1.0)
+                            if 100 <= i < 110 else None)
+        for key in ("achievedAtMax", "achievedMean", "epsOverCmd"):
+            with self.subTest(key=key):
+                self.assertEqual(records[0][key], 0.0)
+                self.assertEqual(math.copysign(1.0, records[0][key]), 1.0)
 
     def test_speed_and_delivery_at_the_largest_demand_come_from_that_sample(self):
         def change(i, t_ns):
@@ -364,6 +383,16 @@ class LabelTests(unittest.TestCase):
         out, records, _ = run(change)
         self.assertEqual((records[0]["demandMax"], records[0]["label"]), (1.5, "sharp"))
         self.assertEqual(out[0]["limitUnexpectedS"], 0.0)
+
+    def test_slow_goes_by_the_mean_speed_not_by_the_speed_at_the_largest_demand(self):
+        def change(i, t_ns):
+            if 100 <= i < 110:
+                return at_limit(v=10.0, desired=0.005)                 # demand 0.5
+            if 110 <= i < 112:
+                return at_limit(v=16.0, desired=0.005)                 # demand 1.28, at a speed above the line
+        _, records, _ = run(change)
+        self.assertEqual((records[0]["vMeanMs"], records[0]["vAtMaxMs"]), (11.0, 16.0))
+        self.assertEqual(records[0]["label"], "slow")
 
     def test_a_sharp_event_at_low_speed_is_sharp(self):
         _, records, _ = run(lambda i, t: at_limit(v=10.0, desired=0.02) if 100 <= i < 120 else None)
@@ -514,6 +543,50 @@ class RegistrationTests(unittest.TestCase):
                                                         lambda i, t: at_limit() if 100 <= i < 120 else None)))
         self.assertEqual((out[0]["steeringS"], out[0]["limitS"], out[0]["limitNoneS"]), (30.0, 2.0, 2.0))
         self.assertEqual(p.drive_end_fields()["failed"], [])
+        own = set(out[0]) - {"w", "tMonoS", "n", "windowS", "unobservedS", "tickMaxS", "health"}
+        self.assertEqual(len(own), 11 + len(FIELDS))                   # no field is sent by both
+
+
+class Faulty(Measure):
+    """A log-only block that breaks on its 100th Sample."""
+    name = "lane"
+
+    def __init__(self):
+        self.n = 0
+
+    def on_sample(self, ctx, g):
+        self.n += 1
+        if self.n >= 100:
+            raise RuntimeError("broken measure")
+
+    def window_fields(self):
+        return {"lane": {"n": self.n}}
+
+
+class IsolationTests(unittest.TestCase):
+    def drive(self, *measures):
+        def change(i, t_ns):
+            if 80 <= i < 120 or 590 <= i < 620:
+                return at_limit(v=20.0, desired=0.004, onroadEvents=WARNING if i in (90, 600) else [])
+            return {"carControl": dict(lat=not 800 <= i < 900)}
+        p = Pipeline(PipelineConfig(measures=measures))
+        messages = synth.run(p, synth.drive(synth.ticks(1500, 100, T0), change))
+        return messages, p.drive_end_fields()
+
+    def test_a_failing_log_only_measure_leaves_the_owner_facing_numbers_alone(self):
+        clean, clean_end = self.drive(SteeringTime, SteeringLimit)
+        faulty, faulty_end = self.drive(Faulty, SteeringTime, SteeringLimit)
+        strip = lambda data: {key: value for key, value in data.items() if key not in ("lane", "health")}
+        self.assertEqual([(kind, strip(data)) for kind, data in faulty], [(kind, strip(data)) for kind, data in clean])
+        self.assertEqual([kind for kind, _ in clean], ["limit_event", "summary", "limit_event", "summary", "summary"])
+        self.assertEqual(clean_end["failed"], [])
+        self.assertEqual(faulty_end["failed"], ["lane"])
+        self.assertEqual(faulty_end["totals"], clean_end["totals"])
+        for s in synth.summaries(faulty):
+            self.assertNotIn("lane", s)                                # it broke in the first window
+            self.assertEqual(s["health"]["failed"], ["lane"])
+        for s in synth.summaries(clean):
+            self.assertNotIn("failed", s["health"])
 
 
 if __name__ == "__main__":
