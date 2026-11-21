@@ -17,6 +17,7 @@ import secrets
 import time
 
 from approval import APPROVAL_TTL_S, sign_approval
+from report_body import report_lines
 from wire import WireError, verify_request
 
 NIGHTLY_DELAY_S = 3600
@@ -214,15 +215,15 @@ class AdvisorService:
     def run_nightly(self) -> bool:
         """Send the report when it is due. It carries no button and no advice.
 
-        The body is a placeholder of two lines until the report module is built on the stored drives:
-        how many drives were recorded, and the closing line.
+        The body comes from report_body.report_lines over every drive since the last report: time, blind-spot
+        availability, steering-limit warnings, steering turned off while moving and why, lane changes, hard
+        braking, recording completeness, and the closing line.
         """
         state = self._state()
         due = state.get("nightlyDue")
         if due is None or self.clock() < due or not state["nightlyDrives"]:
             return False
-        drives = len(state["nightlyDrives"])
-        lines = [f"{drives} drive{'' if drives == 1 else 's'} recorded.", REPORT_CLOSING_LINE]
+        lines = report_lines([self._drive(d) for d in state["nightlyDrives"]], REPORT_CLOSING_LINE)
         # Send first. The pending report is cleared only after the notifier confirms delivery, so a failed
         # send is retried on the next run instead of being lost.
         try:
