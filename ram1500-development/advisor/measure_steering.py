@@ -23,8 +23,8 @@ steering-on time and never taken off it.
 from __future__ import annotations
 
 from measure_api import Measure
+from shared_rules import MOVING_ABOVE_MS
 
-_MOVING_ABOVE_MS = 0.5      # above this speed the truck is driving
 _SUMS = ("latOnS", "steeringS", "forcedZeroS", "fzFallbackS", "pressedS", "driverS", "laneChangeS", "movingS",
          "cruiseS")
 
@@ -63,7 +63,7 @@ class SteeringTime(Measure):
                 win["steeringS"] += dt
                 self._steering_s += dt
                 self._v_steer_sum += v * dt
-        if v > _MOVING_ABOVE_MS:
+        if v > MOVING_ABOVE_MS:
             win["movingS"] += dt
             self._moving_s += dt
             if s.cruise_enabled:

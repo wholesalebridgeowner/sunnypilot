@@ -56,8 +56,9 @@ ASK_LIMIT = 0.98              # of the full command asked for
 EVENT_MERGE_S = 10.0          # warnings or limit samples closer than this are one event
 LIMIT_EVENT_MIN_S = 0.4       # a shorter limit event is not recorded
 
-# --- service ---------------------------------------------------------------------
-MIN_DRIVE_MOVING_S = 60       # a session with less movement is not a drive
+# --- driving time ------------------------------------------------------------------
+MOVING_ABOVE_MS = 0.5         # above this speed the truck is driving; "driving" always means this
+MIN_DRIVE_MOVING_S = 60       # service: a session with less movement is not a drive
 
 # --- model stream: fast (live, full-rate logs) or slow (decimated logs) ------------
 MODEL_SPEED_SPACINGS = 20     # stream speed: median of this many spacings between new messages
