@@ -13,7 +13,7 @@ Small Python-only fixes that carry back to the comma three, each to be its own r
 | A1 | sunnypilot #1716 (7a43e2cb) | `controlsd` updates `steer_limited_by_safety` only while cruise is engaged. In steering-only mode the flag freezes at its last value, which affects the steering-limit warning and the torque integrator. The fix gates it on lateral-active. Verified: the installed build gates on `selfdriveState.active`, and newer sunnypilot gates on `get_lat_active`, which the installed build already has. Built in `rampilot-tici` (reuses the value from `state_control()`); the recorded-drive replay found no added warning on this truck. |
 | A2 | sunnypilot #1717 (538e1e8a) | The "stopped responding" sound also covers steering-only mode. Built in `rampilot-tici` with upstream's test and an offline test. |
 | A3 | opendbc #3782 (057aee25) | Faster Chrysler checksum, same result. |
-| A4 | openpilot #38573 (612d97cf) | No steer-ratio or offset learning while reversing. |
+| A4 | openpilot #38573 (612d97cf) | No steer-ratio or offset learning while reversing. Built in `rampilot-tici`; small measured effect on this truck. |
 | A5 | openpilot lagd series | Steadier learned steering delay. It changes lane-change entry too, so the old and new estimators are compared over recorded drives first. |
 | A6 | sunnypilot #1906 (53e13a7b) | Fixed steering-delay setting works when live learning is off. |
 | A7 | openpilot #39095 (fe7ccf95) | Clean catch-up after a control-loop stall. |

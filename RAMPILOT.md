@@ -38,6 +38,10 @@ RamPilot keeps listening for up to 3 s more, only on `RAM_1500_5TH_GEN` and only
 
 Replaying the logged CAN after each recorded start: the missed start would have enabled blind-spot support after 0.31 s. The 19 other logged starts were unchanged and waited 0 s. Tests: `opendbc/car/chrysler/tests/test_rampilot_bsm.py`, including the real `get_car` path with simulated CAN.
 
+## No calibration learning in reverse (openpilot #38573 backport)
+
+The steering-calibration learner (`paramsd`) no longer updates steer ratio, stiffness or offset while the truck is in reverse, as in newer openpilot (612d97cf). On the recorded drives it had learned for 14.8 s in reverse across 35 reverse maneuvers, and the estimates moved little. Tests: `selfdrive/locationd/test/test_rampilot_paramsd_reverse.py`.
+
 ## 3X and four
 
 The comma four is on order. Newer sunnypilot already includes features the comma three build lacks:
