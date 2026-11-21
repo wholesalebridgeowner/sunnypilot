@@ -42,6 +42,10 @@ Replaying the logged CAN after each recorded start: the missed start would have 
 
 The steering-calibration learner (`paramsd`) no longer updates steer ratio, stiffness or offset while the truck is in reverse, as in newer openpilot (612d97cf). On the recorded drives it had learned for 14.8 s in reverse across 35 reverse maneuvers, and the estimates moved little. Tests: `selfdrive/locationd/test/test_rampilot_paramsd_reverse.py`.
 
+## Install and rollback
+
+`rampilot/device.sh` installs RamPilot on the comma three from a git bundle and rolls back to the pinned baseline. Steps: `rampilot/INSTALL.md`. Offline tests: `rampilot/tests/test_device.sh`, plus an install and rollback of the real branch on a simulated device holding only the baseline.
+
 ## 3X and four
 
 The comma four is on order. Newer sunnypilot already includes features the comma three build lacks:
