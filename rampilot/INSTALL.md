@@ -14,7 +14,8 @@ BASE=1f7233cb983f3c13fdbba47a86f8fbc796ad9211
 SHA=$(git rev-parse rampilot-tici)
 git bundle create rampilot.bundle "$BASE..rampilot-tici"
 ssh comma@COMMA_IP 'mkdir -p /data/ram-diag/rampilot'
-scp rampilot.bundle rampilot/device.sh comma@COMMA_IP:/data/ram-diag/rampilot/
+git show rampilot-tici:rampilot/device.sh > device.sh   # the committed copy, LF line endings
+scp rampilot.bundle device.sh comma@COMMA_IP:/data/ram-diag/rampilot/
 echo "$SHA"
 ```
 
