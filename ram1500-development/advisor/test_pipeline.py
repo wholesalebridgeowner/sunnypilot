@@ -572,6 +572,20 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(out[0]["health"], {"gapN": 0, "modelGapN": 0, "staleS": {}, "staleSteerS": {}})
         self.assertEqual(set(out[0]), {"w", "tMonoS", "n", "windowS", "unobservedS", "tickMaxS", "health"})
 
+    def test_measure_cannot_replace_the_pipelines_own_fields(self):
+        class Greedy(Measure):
+            name = "swings"
+
+            def window_fields(self):
+                return {"w": 99, "tMonoS": -1.0, "n": -1, "windowS": -1.0, "unobservedS": -1.0, "tickMaxS": -1.0,
+                        "health": "x", "swings": {"n": 3}}
+
+        p = make(Greedy())
+        out = synth.summaries(synth.run(p, synth.drive(synth.ticks(50, 100, T0))))
+        self.assertEqual(out[0], {"w": 0, "tMonoS": 1000.0, "n": 50, "windowS": 5.0, "unobservedS": 0.0,
+                                  "tickMaxS": 0.1, "swings": {"n": 3},      # its own block is kept
+                                  "health": {"gapN": 0, "modelGapN": 0, "staleS": {}, "staleSteerS": {}}})
+
     def test_agent_health_values_are_merged(self):
         calls = []
 
