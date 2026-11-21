@@ -593,5 +593,31 @@ class SummaryTests(unittest.TestCase):
             "totals": {"windowS": 70.0, "unobservedS": 0.0, "steeringS": 70.0}})
 
 
+class LifecycleTests(unittest.TestCase):
+    def test_second_drive_of_a_boot_starts_from_nothing(self):
+        first = make(Probe(), LogOnly(fail_in="on_sample", fail_at=10))
+        out1 = synth.summaries(synth.run(first, synth.drive(synth.ticks(700, 100, T0))))
+        self.assertEqual(out1[0]["health"]["failed"], ["lane"])
+
+        start2 = T0 + 70 * SEC + 20 * 60 * SEC                         # 20 minutes parked in between
+        second = make(Probe(), LogOnly())
+        out2 = synth.summaries(synth.run(second, synth.drive(synth.ticks(700, 100, start2))))
+        self.assertEqual([s["w"] for s in out2], [0, 1])               # its own grid, from its own first Sample
+        self.assertEqual(out2[0]["tMonoS"], start2 / 1e9)
+        self.assertEqual(out2[0]["unobservedS"], 0.0)
+        self.assertEqual(out2[0]["health"]["gapN"], 0)
+        self.assertNotIn("failed", out2[0]["health"])                  # a measure switched off is back on
+        self.assertEqual(out2[0]["lane"], {"n": 600})
+        self.assertEqual(second.drive_end_fields()["failed"], [])
+
+    def test_restart_in_mid_drive_scores_nothing_for_five_seconds(self):
+        probe = Probe()
+        times = synth.ticks(200, 100, T0)
+        synth.run(make(probe), synth.drive(times))
+        scored = [t for t, _, _, ok in probe.evaluated if ok]
+        self.assertAlmostEqual(min(scored), times[0] / 1e9 + 5.1, places=6)
+        self.assertEqual(probe.total["forcedZeroS"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
