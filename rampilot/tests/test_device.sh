@@ -20,11 +20,13 @@ echo "x = 1" > selfdrive/a.py; printf '\x00\x01\x02' > panda/fw.bin; echo base >
 g add -A && g commit -qm baseline
 BASE="$(git rev-parse HEAD)"
 g checkout -qb rampilot-tici; echo "x = 2" > selfdrive/a.py; g commit -qam good; GOOD="$(git rev-parse HEAD)"
+g checkout -qb update; echo "x = 3" > selfdrive/a.py; g commit -qam update; UPDATED="$(git rev-parse HEAD)"
 g checkout -qb bad-panda "$BASE"; echo "y" > panda/notes.txt; g add -A && g commit -qm panda; BADP="$(git rev-parse HEAD)"
 g checkout -qb bad-binary "$BASE"; printf '\x00\xff\x00' > selfdrive/blob.dat; g add -A && g commit -qm bin; BADB="$(git rev-parse HEAD)"
 g checkout -q --orphan unrelated; g rm -rqf . ; echo z > z.py; g add -A && g commit -qm orphan; ORPH="$(git rev-parse HEAD)"
 g checkout -q staging-tici
 g bundle create -q "$W/good.bundle" "$BASE..rampilot-tici" 2>/dev/null
+g branch -f rampilot-tici "$UPDATED"; g bundle create -q "$W/update.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$BADP"; g bundle create -q "$W/badp.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$BADB"; g bundle create -q "$W/badb.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$ORPH"; g bundle create -q "$W/orph.bundle" rampilot-tici 2>/dev/null
@@ -77,7 +79,13 @@ expect_ok "install succeeds" bash "$DEV" install "$W/good.bundle" "$GOOD"
   && ok "staged update set aside" || bad "staged update set aside"
 [ ! -f "$W/rebooted" ] && ok "no reboot without --reboot" || bad "no reboot without --reboot"
 expect_ok "second install is a no-op" bash "$DEV" install "$W/good.bundle" "$GOOD"
-expect_ok "status runs" bash "$DEV" status
+expect_ok "install a second release over the first" bash "$DEV" install "$W/update.bundle" "$UPDATED"
+[ "$(head)" = "$UPDATED" ] && ok "second release checked out" || bad "second release checked out"
+if status="$(bash "$DEV" status)" && [[ "$status" == *"branch=rampilot-tici head=$UPDATED"* && "$status" == *"target=$UPDATED"* ]]; then
+  ok "status reports the second release as the installed target"
+else
+  bad "status reports the second release as the installed target"
+fi
 
 # verify: simulated driving processes (argv[0] set to the process names)
 export VERIFY_PROCS="fake.controlsd fake.card" VERIFY_WAIT_S=1 LOG_DIR="$W/log"; mkdir -p "$LOG_DIR"
@@ -87,13 +95,17 @@ printf 1 > "$PARAMS_DIR/IsOnroad"
 ( exec -a fake.card sleep 30 ) & P2=$!
 sleep 0.3
 echo '{"event": "rampilot late BSM check", "bsm_in_fingerprint": true, "waited_s": 0.0}' > "$LOG_DIR/swaglog.1"
-expect_ok "verify passes with stable processes" bash "$DEV" verify
+if verified="$(bash "$DEV" verify)" && [[ "$verified" == *"verify ok on $UPDATED"* ]]; then
+  ok "verify confirms the second release with stable processes"
+else
+  bad "verify confirms the second release with stable processes"
+fi
 ( sleep 0.5; kill $P2 2>/dev/null ) &
 expect_refused "verify catches a stopped process" "not stable" bash "$DEV" verify
 kill $P1 2>/dev/null; wait 2>/dev/null
 printf 0 > "$PARAMS_DIR/IsOnroad"
 
-expect_ok "rollback succeeds" bash "$DEV" rollback --reboot
+expect_ok "rollback after two releases succeeds" bash "$DEV" rollback --reboot
 [ "$(head)" = "$BASE" ] && ok "device is back on the baseline" || bad "device is back on the baseline"
 [ "$(git -C "$OP_DIR" rev-parse --abbrev-ref HEAD)" = staging-tici ] && ok "original branch restored" || bad "original branch restored"
 [ "$(cat "$PARAMS_DIR/DisableUpdates")" = 0 ] && ok "DisableUpdates restored" || bad "DisableUpdates restored"

@@ -46,6 +46,61 @@ git_op() { git -C "$OP_DIR" "$@"; }
 head_sha() { git_op rev-parse HEAD; }
 head_branch() { git_op rev-parse --abbrev-ref HEAD; }
 
+# Older installers kept one before/after pair per install. Follow the recorded
+# chain back to this installation's baseline, including an interrupted checkout.
+legacy_rollback_record() {
+  local last="$STATE_DIR/last/state.env" current expected file i
+  local records=("$STATE_DIR"/state-*/state.env)
+  [ -f "$last" ] || die "no recorded install state at $last" >&2
+  current="$(head_sha)"
+  if ! grep -Fxq "target=$current" "$last" && ! grep -Fxq "head=$current" "$last"; then
+    die "the recorded install does not match the current checkout" >&2
+  fi
+  for ((i=${#records[@]}-1; i>=0; --i)); do
+    [[ "${records[i]}" -ef "$last" ]] && break
+  done
+  for ((; i>=0; --i)); do
+    file="${records[i]}"
+    if [ -n "${expected:-}" ] && ! grep -Fxq "target=$expected" "$file"; then break; fi
+    expected="$(sed -n 's/^head=//p' "$file")"
+    if [ "$expected" = "$BASELINE_SHA" ]; then
+      grep -q '^branch=.' "$file" && grep -q '^disable_updates=' "$file" || break
+      printf '%s\n' "$file"; return
+    fi
+    [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || break
+  done
+  die "no continuous install history back to the recorded baseline; restore by hand" >&2
+}
+
+# This file belongs to the entire install/upgrade series. A successful rollback
+# retires it so a later first install captures the then-current branch and params.
+ensure_rollback_record() {
+  local active="$STATE_DIR/rollback.env" tmp legacy
+  if [ ! -f "$active" ]; then
+    mkdir -p "$STATE_DIR"
+    if [ "$(head_sha)" = "$BASELINE_SHA" ]; then
+      tmp="$(mktemp "$STATE_DIR/.rollback.XXXXXX")"
+      { echo "branch=$(head_branch)"; echo "head=$BASELINE_SHA"; echo "disable_updates=$(param_get DisableUpdates)";
+        echo "staged_update=$([ -f "$MARKER" ] && echo yes || echo no)"; } > "$tmp"
+    else
+      legacy="$(legacy_rollback_record)" || return 2
+      tmp="$(mktemp "$STATE_DIR/.rollback.XXXXXX")"
+      grep -E '^(branch|head|disable_updates|staged_update)=' "$legacy" > "$tmp"
+    fi
+    mv -T "$tmp" "$active"
+  fi
+  grep -Fxq "head=$BASELINE_SHA" "$active" || die "recorded rollback head does not match the pinned baseline"
+}
+
+record_installed_target() {
+  local state
+  state="$(mktemp -d "$STATE_DIR/state-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+  { cat "$STATE_DIR/rollback.env"; echo "target=$1"; } > "$state/state.env"
+  ln -s "$(basename "$state")" "$state/next-link"
+  mv -Tf "$state/next-link" "$STATE_DIR/last"
+  say "recorded state in $state"
+}
+
 preflight() {
   [ -d "$OP_DIR/.git" ] || die "$OP_DIR is not a git checkout"
   [ -d "$PARAMS_DIR" ] || die "params directory $PARAMS_DIR missing"
@@ -80,7 +135,13 @@ install() {
   [ -n "$bundle" ] && [ -n "$sha" ] || die "usage: install <bundle> <commit-sha> [--reboot]"
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "commit sha must be the full 40-character hash"
   preflight
-  if [ "$(head_sha)" = "$sha" ]; then say "already on $sha; nothing to do"; return 0; fi
+  if [ "$(head_sha)" = "$sha" ]; then
+    # Recover if checkout completed just before the process stopped.
+    if [ -f "$STATE_DIR/rollback.env" ] && ! grep -Fxq "target=$sha" "$STATE_DIR/last/state.env" 2>/dev/null; then
+      record_installed_target "$sha"
+    fi
+    say "already on $sha; nothing to do"; return 0
+  fi
   [ -f "$bundle" ] || die "bundle $bundle not found"
   git_op bundle verify "$(readlink -f "$bundle")" >/dev/null 2>&1 || die "bundle failed verification (missing baseline objects or damaged file)"
   git bundle list-heads "$(readlink -f "$bundle")" | grep -q " refs/heads/$TARGET_BRANCH$" || die "bundle has no $TARGET_BRANCH branch"
@@ -88,26 +149,28 @@ install() {
   [ "$(git_op rev-parse refs/rampilot/candidate)" = "$sha" ] || die "bundle branch is $(git_op rev-parse refs/rampilot/candidate), expected $sha"
   check_candidate "$sha"
 
-  local ts state; ts="$(date -u +%Y%m%dT%H%M%SZ)"; state="$STATE_DIR/state-$ts"
-  mkdir -p "$state"
-  { echo "branch=$(head_branch)"; echo "head=$(head_sha)"; echo "disable_updates=$(param_get DisableUpdates)";
-    echo "staged_update=$([ -f "$MARKER" ] && echo yes || echo no)"; echo "target=$sha"; } > "$state/state.env"
-  ln -sfn "$state" "$STATE_DIR/last"
-  say "recorded state in $state"
+  ensure_rollback_record
 
   param_put DisableUpdates 1
   if [ -f "$MARKER" ]; then mv -f "$MARKER" "$MARKER.rampilot-set-aside"; say "set aside staged update"; fi
   git_op checkout -q -B "$TARGET_BRANCH" "$sha"
   [ "$(head_sha)" = "$sha" ] || die "checkout did not land on $sha"
+  record_installed_target "$sha"
   say "installed $TARGET_BRANCH at $sha; DisableUpdates=1. Reboot to start it."
   [ "$reboot" = "--reboot" ] && $REBOOT_CMD
   return 0
 }
 
 rollback() {
-  local reboot="${1:-}" state="$STATE_DIR/last/state.env"
-  [ -f "$state" ] || die "no recorded install state at $state"
+  local reboot="${1:-}" state="$STATE_DIR/rollback.env"
   preflight
+  if [ ! -f "$state" ]; then
+    if [ -f "$STATE_DIR/last/rolled-back" ]; then
+      [ "$(head_sha)" = "$BASELINE_SHA" ] || die "no active install state for this checkout"
+      say "already rolled back to $BASELINE_SHA"; return 0
+    fi
+    state="$(legacy_rollback_record)" || return 2
+  fi
   # shellcheck disable=SC1090
   local branch head disable_updates; branch="$(grep '^branch=' "$state" | cut -d= -f2-)"
   head="$(grep '^head=' "$state" | cut -d= -f2-)"; disable_updates="$(grep '^disable_updates=' "$state" | cut -d= -f2-)"
@@ -116,6 +179,8 @@ rollback() {
   if [ "$branch" = "HEAD" ] || [ -z "$branch" ]; then git_op checkout -q --detach "$head"; else git_op checkout -q -B "$branch" "$head"; fi
   [ "$(head_sha)" = "$head" ] || die "rollback did not land on $head"
   if [ -n "$disable_updates" ]; then param_put DisableUpdates "$disable_updates"; else rm -f "$PARAMS_DIR/DisableUpdates"; fi
+  if [ -f "$STATE_DIR/last/state.env" ]; then touch "$STATE_DIR/last/rolled-back"; fi
+  rm -f "$STATE_DIR/rollback.env"
   say "rolled back to ${branch} at $head; DisableUpdates=${disable_updates:-unset}. Reboot to start it."
   say "a set-aside staged update stays set aside; the updater fetches a fresh one if updates are on"
   [ "$reboot" = "--reboot" ] && $REBOOT_CMD
@@ -153,6 +218,11 @@ status() {
 }
 
 cmd="${1:-}"; shift || true
+if [[ "$cmd" == install || "$cmd" == rollback ]]; then
+  [ -d "$OP_DIR/.git" ] || die "$OP_DIR is not a git checkout"
+  exec 9<"$OP_DIR/.git"
+  flock -x 9
+fi
 case "$cmd" in
   preflight) preflight ;;
   install) install "$@" ;;

@@ -35,7 +35,7 @@ Install refuses, and changes nothing, if:
 - the change touches Panda, safety, model or hardware paths
 - the change includes binary files
 
-It records the current state, turns the sunnypilot updater off and sets aside any staged update. Then it checks out `rampilot-tici` and reboots.
+The first install records the baseline branch, commit and current `DisableUpdates` value. Upgrades reuse that rollback record. The installer turns the sunnypilot updater off, sets aside any staged update and checks out `rampilot-tici`. A successful checkout records the new commit as the target for verification.
 
 ## 3. Verify (truck in Park, ignition on)
 
@@ -51,7 +51,7 @@ This checks that the comma runs the installed commit and that controlsd, card, s
 bash /data/ram-diag/rampilot/device.sh rollback --reboot
 ```
 
-This returns to the recorded branch at the baseline commit and restores the previous DisableUpdates value. `device.sh status` shows the current state at any time.
+Rollback returns to the original baseline branch and restores its `DisableUpdates` value even after several RamPilot upgrades. A new install after rollback records the current baseline settings again. For installs made with the older script, rollback uses the archived install history to find the baseline record. If the history is incomplete, the script reports that it cannot establish the original state. `device.sh status` shows the latest install record.
 
 **Neither direction touches:**
 - Panda firmware
