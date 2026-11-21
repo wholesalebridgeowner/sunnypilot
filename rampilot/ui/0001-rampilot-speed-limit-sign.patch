@@ -1,5 +1,5 @@
 diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
-index 9ead933..267975f 100644
+index 9ead933..e46ad6d 100644
 --- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 +++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 @@ -7,6 +7,8 @@
@@ -11,19 +11,21 @@ index 9ead933..267975f 100644
  #include "selfdrive/ui/qt/util.h"
  
  
-@@ -16,6 +18,11 @@ void HudRendererSP::updateState(const UIState &s) {
+@@ -16,6 +18,13 @@ void HudRendererSP::updateState(const UIState &s) {
    HudRenderer::updateState(s);
  
    const SubMaster &sm = *(s.sm);
 +  // RamPilot: speed limit the truck reports (carStateSP.speedLimit, m/s)
 +  const auto car_state_sp = sm["carStateSP"].getCarStateSP();
-+  speedLimitValid = sm.alive("carStateSP") && car_state_sp.getSpeedLimitValid() && car_state_sp.getSpeedLimit() > 0.f;
-+  speedLimit = car_state_sp.getSpeedLimit() * (is_metric ? MS_TO_KPH : MS_TO_MPH);
++  const float limit_ms = car_state_sp.getSpeedLimit();
++  speedLimitValid = sm.alive("carStateSP") && sm.valid("carStateSP") && car_state_sp.getSpeedLimitValid() &&
++                    std::isfinite(limit_ms) && limit_ms > 0.f;
++  speedLimit = limit_ms * (is_metric ? MS_TO_KPH : MS_TO_MPH);
 +
    const bool cs_alive = sm.alive("controlsState");
    const auto cs = sm["controlsState"].getControlsState();
    const auto car_state = sm["carState"].getCarState();
-@@ -80,6 +87,11 @@ void HudRendererSP::updateState(const UIState &s) {
+@@ -80,6 +89,11 @@ void HudRendererSP::updateState(const UIState &s) {
  void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    HudRenderer::draw(p, surface_rect);
    if (!reversing) {
@@ -35,7 +37,7 @@ index 9ead933..267975f 100644
      // Bottom Dev UI
      if (devUiInfo == 2) {
        QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
-@@ -97,6 +109,36 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+@@ -97,6 +111,36 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    }
  }
  
