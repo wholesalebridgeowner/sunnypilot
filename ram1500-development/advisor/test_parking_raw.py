@@ -61,9 +61,9 @@ class DecodeTests(unittest.TestCase):
 class ParkingLogTests(unittest.TestCase):
     def test_counts_with_gear_context_and_no_meaning(self):
         log = ParkingLog()
-        log.car_state("drive", 1.5)
+        log.car_state(0.00, "drive", 1.5)
         log.frame(0.00, 0, ADDR_F6, f6(a=0xF0))
-        log.car_state("reverse", 0.8)
+        log.car_state(0.04, "reverse", 0.8)
         log.frame(0.05, 0, ADDR_F6, f6(a=0xF0, b=0x31))
         log.frame(0.06, 0, ADDR_E9, e9(byte0=0x50, byte1=0x0C, byte3=1, counter=1))
         log.frame(0.10, 0, ADDR_E9, e9(counter=2))
@@ -78,17 +78,46 @@ class ParkingLogTests(unittest.TestCase):
         self.assertEqual(rec["f6"]["groupB_active_by_gear"], {"reverse": 1})
         self.assertEqual(rec["f6"]["groupA_active_vmax_ms"], 1.5)
         self.assertEqual(rec["f6"]["codes_by_byte"]["3"], {"FF": 1, "31": 1})
-        self.assertEqual(rec["e9"]["frames"], 4)
+        self.assertEqual((rec["e9"]["frames"], rec["e9"]["valid_frames"]), (4, 3))
         self.assertEqual(rec["e9"]["checksum_fail"], 1)
-        self.assertEqual((rec["e9"]["counter_pairs"], rec["e9"]["counter_skips"]), (3, 1))
+        self.assertEqual((rec["e9"]["counter_pairs"], rec["e9"]["counter_skips"]), (2, 1))   # valid frames only
         self.assertEqual((rec["e9"]["byte0_set"], rec["e9"]["byte0_min"], rec["e9"]["byte0_max"]), (1, 0x50, 0x50))
         self.assertEqual(rec["e9"]["byte0_set_in_reverse"], 1)
         self.assertEqual(rec["e9"]["byte3_one_by_gear"], {"reverse": 1})
         self.assertEqual(rec["bus2_copies_ignored"], {hex(ADDR_E9): 1})
 
+    def test_review_unknown_codes_stay_distinct(self):
+        log = ParkingLog()
+        log.frame(0.0, 0, ADDR_F6, f6(b=0x77))
+        log.frame(0.1, 0, ADDR_F6, f6(b=0x78))
+        rec = log.record()["f6"]
+        self.assertEqual(rec["codes_by_byte"]["3"], {"77": 1, "78": 1})
+        self.assertEqual(rec["unknown_code_values"], 6)           # bytes 3, 4, 6 of each frame
+
+    def test_review_a_bad_checksum_frame_never_enters_values_or_continuity(self):
+        log = ParkingLog()
+        log.frame(0.00, 0, ADDR_E9, e9(byte0=80, byte1=0x0C, byte3=1, counter=1))
+        log.frame(0.05, 0, ADDR_E9, e9(byte0=1, byte1=0x0C, byte3=1, counter=2, good=False))
+        log.frame(0.10, 0, ADDR_E9, e9(byte0=81, byte1=0x0C, byte3=1, counter=3))
+        e = log.record()["e9"]
+        self.assertEqual((e["byte0_set"], e["byte0_min"], e["byte0_max"]), (2, 80, 81))
+        self.assertEqual((e.get("counter_pairs", 0), e.get("counter_skips", 0)), (0, 0))  # continuity reset
+
+    def test_review_old_or_invalid_context_gives_unknown_gear(self):
+        log = ParkingLog()
+        log.car_state(0.0, "reverse", 1.0)
+        log.frame(600.0, 0, ADDR_E9, e9(byte0=0x40, byte1=0x0C, byte3=1))
+        log.car_state(601.0, "reverse", 1.0, valid=False)
+        log.car_state(602.0, "reverse", float("nan"))
+        log.frame(602.1, 0, ADDR_E9, e9(byte0=0x41, byte1=0x0C, byte3=1, counter=1))
+        rec = log.record()
+        self.assertEqual(rec["e9"].get("byte0_set_in_reverse", 0), 0)
+        self.assertEqual(rec["e9"]["byte0_set_in_unknown"], 2)
+        self.assertEqual(rec["invalid_context"], 2)
+
     def test_ff_is_never_reported_as_clear_or_failed(self):
         log = ParkingLog()
-        log.car_state("drive", 25.0)
+        log.car_state(0.0, "drive", 25.0)
         log.frame(0.0, 0, ADDR_F6, f6())
         text = str(log.record()).lower()
         for word in ("clear", "fail", "fault", "distance", "obstacle", "alert"):

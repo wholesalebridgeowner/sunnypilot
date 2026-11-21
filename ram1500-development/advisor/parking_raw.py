@@ -22,15 +22,17 @@ second sensor. Nothing here may drive an alert or a change in driving.
 """
 from __future__ import annotations
 
-from collections import Counter
+import math
+from collections import Counter, deque
 
 ADDR_F6 = 0x1F6
 ADDR_E9 = 0x1E9
 OBSERVED_F6_CODES = frozenset((0x31, 0x32, 0x33, 0xB4, 0xB5, 0xB6, 0xF0, 0xFF))
 GROUP_A = (1, 2, 5)
 GROUP_B = (3, 4, 6)
-COUNTER_MAX_GAP_S = 0.55       # adjacent 0x1E9 frames closer than this must advance the counter by one
-GEARS = ("drive", "reverse", "neutral", "park")
+COUNTER_MAX_GAP_S = 0.55
+CONTEXT_MAX_AGE_S = 0.5       # a frame takes its gear from a valid vehicle-state sample at most this much older       # adjacent 0x1E9 frames closer than this must advance the counter by one
+GEARS = ("drive", "reverse", "neutral", "park")  # anything else is "other"; no recent valid context is "unknown"
 
 
 def e9_checksum_ok(d: bytes) -> bool:
@@ -67,26 +69,46 @@ def decode(address: int, bus: int, payload: bytes) -> dict | None:
 
 
 class ParkingLog:
-    """Per-drive raw counts. Feed carState context and frames in time order."""
+    """Per-drive raw counts. Feed carState context (with its time) and frames in time order.
+
+    A frame is attributed to a gear only through a recent, valid vehicle-state sample: the newest context
+    at or before the frame and at most CONTEXT_MAX_AGE_S older; otherwise its gear is "unknown". 0x1E9
+    frames that fail the checksum or layout are counted as diagnostics only: they never enter the value
+    statistics, and they break counter continuity. Every histogram is bounded (one byte = 256 keys at most).
+    """
 
     def __init__(self):
-        self.gear = "other"
-        self.v = None
+        self._ctx = deque(maxlen=64)  # (t, gear, v) of recent VALID vehicle-state samples
         self.f6 = Counter()
         self.f6_codes = {i: Counter() for i in range(1, 7)}
         self.f6_a_gear = Counter()
         self.f6_b_gear = Counter()
         self.f6_a_vmax = None
         self.e9 = Counter()
-        self.e9_byte0 = []
+        self.e9_byte0 = Counter()     # valid, non-FF raw byte-0 values
         self.e9_byte1 = Counter()
         self.e9_byte3_gear = Counter()
-        self._e9_prev = None          # (t, counter)
+        self._e9_prev = None          # (t, counter) of the previous VALID frame
         self.bus2 = Counter()
+        self.invalid_context = 0
 
-    def car_state(self, gear: str, v_ego: float) -> None:
-        self.gear = gear if gear in GEARS else "other"
-        self.v = v_ego
+    def car_state(self, t: float, gear, v_ego, valid: bool = True) -> None:
+        ok = (valid and isinstance(v_ego, (int, float)) and math.isfinite(v_ego)
+              and isinstance(t, (int, float)) and math.isfinite(t))
+        if not ok:
+            self.invalid_context += 1
+            return
+        if self._ctx and t < self._ctx[-1][0]:
+            self.invalid_context += 1        # out of order: not used
+            return
+        gear = str(gear) if gear is not None else "other"
+        self._ctx.append((t, gear if gear in GEARS else "other", float(v_ego)))
+
+    def _context_at(self, t: float):
+        for ct, gear, v in reversed(self._ctx):
+            if ct <= t:
+                return (gear, v) if t - ct <= CONTEXT_MAX_AGE_S else ("unknown", None)
+        return ("unknown", None)
 
     def frame(self, t: float, bus: int, address: int, payload: bytes) -> None:
         if address not in (ADDR_F6, ADDR_E9):
@@ -97,25 +119,32 @@ class ParkingLog:
         r = decode(address, bus, payload)
         if r is None:
             return
+        gear, v = self._context_at(t)
         if address == ADDR_F6:
             self.f6["frames"] += 1
             self.f6["format_mismatch"] += not r["format_ok"]
             if r["group_a_active"] is None or r["group_b_active"] is None:
                 self.f6["inconsistent_group"] += 1
             for i, c in r["codes"].items():
-                self.f6_codes[i][f"{c:02X}" if c in OBSERVED_F6_CODES else "unknown"] += 1
+                self.f6_codes[i][f"{c:02X}"] += 1          # unknown codes stay distinct
+                if c not in OBSERVED_F6_CODES:
+                    self.f6["unknown_code_values"] += 1
             if r["group_a_active"]:
                 self.f6["group_a_active"] += 1
-                self.f6_a_gear[self.gear] += 1
-                if self.v is not None:
-                    self.f6_a_vmax = self.v if self.f6_a_vmax is None else max(self.f6_a_vmax, self.v)
+                self.f6_a_gear[gear] += 1
+                if v is not None:
+                    self.f6_a_vmax = v if self.f6_a_vmax is None else max(self.f6_a_vmax, v)
             if r["group_b_active"]:
                 self.f6["group_b_active"] += 1
-                self.f6_b_gear[self.gear] += 1
+                self.f6_b_gear[gear] += 1
         else:
             self.e9["frames"] += 1
-            self.e9["checksum_fail"] += not r["checksum_ok"]
-            self.e9["format_mismatch"] += not r["format_ok"]
+            if not (r["checksum_ok"] and r["format_ok"]):
+                self.e9["checksum_fail"] += not r["checksum_ok"]
+                self.e9["format_mismatch"] += not r["format_ok"]
+                self._e9_prev = None                          # continuity is unknown across a bad frame
+                return
+            self.e9["valid_frames"] += 1
             if self._e9_prev is not None:
                 pt, pc = self._e9_prev
                 if 0 < t - pt < COUNTER_MAX_GAP_S:
@@ -123,22 +152,23 @@ class ParkingLog:
                     self.e9["counter_skips"] += r["counter"] != (pc + 1) % 16
             self._e9_prev = (t, r["counter"])
             if r["byte0"] != 0xFF:
-                self.e9_byte0.append(r["byte0"])
-                self.e9[f"byte0_set_in_{self.gear}"] += 1
+                self.e9_byte0[r["byte0"]] += 1
+                self.e9[f"byte0_set_in_{gear}"] += 1
             self.e9_byte1[f"{r['byte1']:02X}"] += 1
             if r["byte3"] == 1:
-                self.e9_byte3_gear[self.gear] += 1
+                self.e9_byte3_gear[gear] += 1
 
     def record(self) -> dict:
         b0 = self.e9_byte0
         return {
             "experimental": True, "meaningConfirmed": False, "units": None,
+            "invalid_context": self.invalid_context,
             "f6": {**dict(self.f6), "groupA_active_by_gear": dict(self.f6_a_gear),
                    "groupB_active_by_gear": dict(self.f6_b_gear),
                    "groupA_active_vmax_ms": None if self.f6_a_vmax is None else round(self.f6_a_vmax, 3),
                    "codes_by_byte": {str(i): dict(c) for i, c in self.f6_codes.items()}},
-            "e9": {**dict(self.e9), "byte0_set": len(b0), "byte0_min": min(b0) if b0 else None,
-                   "byte0_max": max(b0) if b0 else None, "byte1_codes": dict(self.e9_byte1),
-                   "byte3_one_by_gear": dict(self.e9_byte3_gear)},
+            "e9": {**dict(self.e9), "byte0_set": sum(b0.values()), "byte0_min": min(b0) if b0 else None,
+                   "byte0_max": max(b0) if b0 else None, "byte0_hist": {f"{k:02X}": n for k, n in sorted(b0.items())},
+                   "byte1_codes": dict(self.e9_byte1), "byte3_one_by_gear": dict(self.e9_byte3_gear)},
             "bus2_copies_ignored": dict(self.bus2),
         }

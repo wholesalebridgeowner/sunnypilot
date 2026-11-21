@@ -126,6 +126,26 @@ class ServiceTests(ServiceFixture):
         self.assertEqual(self.service.approvals_for_comma(), [])
         self.assertFalse(self.service.run_nightly())                 # sent once
 
+    def test_a_failed_notification_keeps_the_report_for_the_next_run(self):
+        # Review of 3098b5f (Codex, 2026-11-21): the pending report was cleared before the send.
+        self.start()
+        self.minutes(3)
+        self.event("drive_end", data=END)
+        self.clock.t += 3700
+        failing = []
+        self.service.notifier.send = lambda *a, **k: failing.append(1) and False
+        self.assertFalse(self.service.run_nightly())
+        self.assertEqual(len(failing), 1)
+        def boom(*a, **k):
+            raise OSError("network down")
+        self.service.notifier.send = boom
+        self.assertFalse(self.service.run_nightly())
+        del self.service.notifier.send                                  # the real fake again
+        before = len(self.notifier.sent)
+        self.assertTrue(self.service.run_nightly())                     # retried and delivered
+        self.assertEqual(len(self.notifier.sent), before + 1)
+        self.assertFalse(self.service.run_nightly())                    # and only once
+
     def test_new_drive_postpones_the_report(self):
         self.start()
         self.minutes(1)
