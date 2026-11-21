@@ -3,6 +3,8 @@
 **Date:** 2026-11-20. **Status:** design approved by the owner in conversation; nothing built yet.
 **Installed build this design targets:** sunnypilot 0.10.1, `1f7233cb983f3c13fdbba47a86f8fbc796ad9211` (staging-tici).
 
+**Status, 2026-11-21: the advisor measures and reports; it suggests nothing.** After the recorded drives were analysed, the Metrics and Suggestion rules sections below no longer describe the code. No suggestion of any kind is made on this build: the suggestion and apply code is kept for a future build behind code-constant locks (`SUGGESTIONS_BUILT_IN` in `service_app.py`, `APPLY_ENABLED` and the build gate in `applier.py`), and the rule module is deleted. What a drive sends is defined by the code: `advisor/messages.py` (message format), `advisor/measure_set.py` (the measures) and `advisor/pipeline.py`. Signing and the Park rules are unchanged. Three things in the Comma agent section changed: listening is set up on every drive, not once per boot; the start script switches bytecode writing off; and the uplink is paced while the truck is onroad.
+
 ## Goal
 
 Make sunnypilot drive the owner's 2019+ Ram 1500 (5th gen) better by learning from his own drives:
