@@ -99,6 +99,13 @@ class SampleFieldsTests(unittest.TestCase):
         self.assertEqual(s.actual_curvature, 0.001)
         self.assertIsNone(s.torque_output)
 
+    def test_a_wheel_angle_that_is_not_a_finite_number_is_unknown(self):
+        # Never 0.0: that would read as a wheel moved to the middle and back.
+        for angle in (float("nan"), float("inf"), None, "1.5"):
+            with self.subTest(angle=angle):
+                self.assertIsNone(StreamJoiner().sample(T0, car_state(steeringAngleDeg=angle)).steering_angle_deg)
+        self.assertEqual(StreamJoiner().sample(T0, car_state(steeringAngleDeg=0.0)).steering_angle_deg, 0.0)
+
 
 class ValueTypeTests(unittest.TestCase):
     """Numbers and flags come as plain Python values (decoded messages) or as

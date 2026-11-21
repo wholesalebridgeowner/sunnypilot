@@ -170,6 +170,18 @@ class SwingCoreTests(unittest.TestCase):
         booked = feed(SwingCore(), wave(3.0, 0.25), accept=lambda t_s: not 30.0 <= t_s < 30.1)
         self.assertAlmostEqual(booked[0]["straightS"], 59.9, places=6)
 
+    def test_a_sample_without_a_wheel_angle_takes_no_part(self):
+        # The wheel is held 3 degrees over and one Sample has no angle. It is not in the trend and it is not
+        # scored, whatever its flag says. Read as zero it would be a move to the middle and back: a swing.
+        booked = feed(SwingCore(), lambda t_s: None if abs(t_s - 30.0) < 0.01 else 3.0)
+        self.assertEqual(booked[0]["n"], 0)
+        self.assertAlmostEqual(booked[0]["straightS"], 59.9, places=6)
+        as_zero = feed(SwingCore(), lambda t_s: 0.0 if abs(t_s - 30.0) < 0.01 else 3.0)
+        self.assertEqual(as_zero[0]["n"], 1)
+        # Like any Sample that is left out, it empties the swing state.
+        self.assertEqual(count([0.0, 1.0, 2.0, 0.9, 2.0, 0.9]), 3)
+        self.assertEqual(count([0.0, 1.0, 2.0, None, 2.0, 0.9]), 0)
+
     def test_time_and_speed_are_only_summed_over_accepted_samples(self):
         booked = feed(SwingCore(), wave(3.0, 0.25), accept=lambda t_s: t_s >= 45.0)
         self.assertAlmostEqual(booked[0]["straightS"], 15.0, places=6)
@@ -295,6 +307,13 @@ class WheelSwingsTests(unittest.TestCase):
                 out, blocks = run(wave(3.0, 0.25), n=700, **more)
                 self.assertEqual(blocks, {})
                 self.assertEqual(len(out), 2)
+
+    def test_a_wheel_angle_that_is_not_a_number_counts_no_swing(self):
+        # The wheel is held 3 degrees over; one carState carries no usable angle.
+        out, blocks = run(lambda t_s: float("nan") if abs(t_s - 30.0) < 0.01 else 3.0, n=700)
+        self.assertEqual(blocks[0]["n"], 0)
+        self.assertEqual(blocks[0]["straightS"], 48.8)                # 48.9 s less that one Sample
+        self.assertNotIn("failed", out[0]["health"])
 
     def test_a_press_on_the_wheel_stops_the_count_around_it(self):
         pressed = lambda t_s: {"carState": dict(pressed=30.0 <= t_s < 30.3)}

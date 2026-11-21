@@ -14,7 +14,8 @@ Per Sample, 6.0 s after its time stamp:
                direction. A full left-right-left cycle is two swings.
 
 Only Samples on straight road that the shared gates accept take part; any
-other Sample empties the swing state. A gap ends the run: the wheel angles
+other Sample empties the swing state. A Sample without a wheel angle is not
+in the trend and takes no part either. A gap ends the run: the wheel angles
 held and the swing state are dropped. Nothing is reset at a window boundary.
 
 The block of a window (left out when no Sample of it took part):
@@ -91,6 +92,9 @@ class SwingCore:
                                                           up to 5.05 s after them has been shown
         new_run()                                         a gap: forget the wheel angles and the swing state
         flush()                                           {key: block} booked since the last flush
+
+    An angle of None is not known: it stays out of the trend, and that Sample is not scored whatever its
+    flag says.
     """
 
     def __init__(self):
@@ -105,13 +109,14 @@ class SwingCore:
         """Wheel angles held for the trend."""
         return self._trend.held
 
-    def see(self, t_ns: int, angle: float) -> None:
-        self._trend.push(t_ns, angle)
+    def see(self, t_ns: int, angle) -> None:
+        if angle is not None:
+            self._trend.push(t_ns, angle)
 
     def add(self, t_ns: int, values, accept_flag, window_key) -> None:
         angle, v, dt = values
         trend = self._trend.at(t_ns)        # asked for every Sample: it moves the window along
-        if not accept_flag:
+        if not accept_flag or angle is None:
             self._empty = True
             return
         scale = v / SWING_REF_SPEED_MS

@@ -82,7 +82,7 @@ class Sample:
     gap: bool = False                         # the spacing was over the cap; the rest of it is unobserved
     raw_dt: float = FIRST_DT_S                # the spacing itself (nominal on the first Sample of a drive)
     v_ego: float = 0.0                        # m/s
-    steering_angle_deg: float = 0.0
+    steering_angle_deg: float | None = 0.0    # None = carState carried no finite wheel angle
     steering_torque: float = 0.0              # driver torque, native units
     steering_torque_eps: float = 0.0          # motor torque, native units
     steering_pressed: bool = False            # raw
@@ -200,7 +200,7 @@ class StreamJoiner:
             found[ALERT_STREAM] = None        # a list that cannot be read is missing, never "no alert"
         return Sample(
             t=t_ns / 1e9, dt=dt, gap=gap, raw_dt=raw_dt, v_ego=v_ego,
-            steering_angle_deg=_number(get(car_state, "steeringAngleDeg")) or 0.0,
+            steering_angle_deg=_number(get(car_state, "steeringAngleDeg")),
             steering_torque=_number(get(car_state, "steeringTorque")) or 0.0,
             steering_torque_eps=_number(get(car_state, "steeringTorqueEps")) or 0.0,
             steering_pressed=_true(get(car_state, "steeringPressed")),
