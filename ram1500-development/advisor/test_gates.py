@@ -161,6 +161,16 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(any(recent[23:]))
 
 
+    def test_recent_ends_exactly_at_its_limit(self):
+        # 10 ms apart: the press reaches its minimum span on Sample 8, the last pressed one.
+        pressed = [i <= 8 for i in range(230)]
+        flags, _ = run(stream(grid(len(pressed), period_ms=10), lambda i, t: {"steering_pressed": pressed[i]}))
+        self.assertEqual([i for i, g in enumerate(flags) if g.driver], [8])
+        recent = [g.driver_recent for g in flags]
+        self.assertTrue(all(recent[8:213]))          # up to 2.04 s after the last driver Sample
+        self.assertFalse(any(recent[213:]))          # 2.05 s after it: no longer recent
+
+
 class CleanTests(unittest.TestCase):
     """Nothing is clean from 2.0 s before a disturbed Sample to 5.0 s after it (closed, by time stamp)."""
     N = 300                                          # 30 s; disturbance in the middle, clear of both ends
