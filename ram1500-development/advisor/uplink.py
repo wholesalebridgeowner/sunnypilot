@@ -1,9 +1,17 @@
 """Background sender for the Comma agent.
 
-Events wait in a bounded queue (oldest dropped first) and go out oldest-first
-over signed HTTPS. A failed send stops the round and is retried next round.
+Events wait in a bounded queue (oldest dropped first, and counted) and go out
+oldest-first over signed HTTPS. A failed send stops the round and is retried
+next round. Nothing here blocks the agent loop.
+
+While the truck is onroad at most 2 events a second are sent. The agent's
+self-limit measures the whole process, and a backlog sent after a stretch
+without network would otherwise cost enough to stop the listening for that
+drive. A normal minute's two or three events are never held back. Offroad
+there is no limit.
+
 Approvals are fetched each round only while applying is enabled (applier.py);
-on this build no such request is made. Nothing here blocks the agent loop.
+on this build no such request is made.
 """
 from __future__ import annotations
 
@@ -14,9 +22,11 @@ import urllib.request
 from collections import deque
 
 import applier as apply_lock
+from messages import encode
 from wire import sign_request
 
 MAX_RESPONSE_BYTES = 1_000_000
+ONROAD_POST_SPACING_S = 0.5     # while onroad: at most 2 events per second
 
 
 def _http(method: str, url: str, headers: dict, body: bytes, timeout: float):
@@ -27,7 +37,7 @@ def _http(method: str, url: str, headers: dict, body: bytes, timeout: float):
 
 class Uplink:
     def __init__(self, base_url: str, key: bytes, *, opener=None, max_queue: int = 2000,
-                 interval_s: float = 5.0, timeout_s: float = 10.0):
+                 interval_s: float = 5.0, timeout_s: float = 10.0, monotonic=time.monotonic, sleep=time.sleep):
         self.base = base_url.rstrip("/")
         self.key = key
         self.opener = opener or _http
@@ -36,16 +46,39 @@ class Uplink:
         self.lock = threading.Lock()
         self.interval_s = interval_s
         self.timeout_s = timeout_s
+        self.monotonic = monotonic
+        self.sleep = sleep
+        self.onroad = False
+        self._dropped = 0               # events the full queue discarded since take_dropped was last called
+        self._last_post = None          # when the newest post began
 
+    # --- called by the agent ------------------------------------------------
     def send(self, event: dict) -> None:
         with self.lock:
+            if len(self.queue) == self.queue.maxlen:
+                self._dropped += 1      # the append below pushes the oldest event out
             self.queue.append(event)
+
+    def take_dropped(self) -> int:
+        """How many events the full queue has discarded since this was last asked."""
+        with self.lock:
+            dropped, self._dropped = self._dropped, 0
+        return dropped
+
+    def queue_len(self) -> int:
+        with self.lock:
+            return len(self.queue)
+
+    def set_onroad(self, onroad: bool) -> None:
+        """The agent says when a drive starts and ends; sending is paced in between."""
+        self.onroad = bool(onroad)
 
     def approvals(self) -> list:
         with self.lock:
             out, self.inbox = self.inbox, []
         return out
 
+    # --- the sender ---------------------------------------------------------
     def _request(self, method: str, path: str, body: bytes):
         headers = sign_request(self.key, method, path, body)
         headers["Content-Type"] = "application/json"
@@ -55,14 +88,21 @@ class Uplink:
             return None
         return payload if 200 <= status < 300 else None
 
+    def _wait_for_pace(self) -> None:
+        if self.onroad and self._last_post is not None:
+            wait = self._last_post + ONROAD_POST_SPACING_S - self.monotonic()
+            if wait > 0:
+                self.sleep(wait)
+        self._last_post = self.monotonic()
+
     def run_once(self) -> None:
         while True:
             with self.lock:
                 if not self.queue:
                     break
                 event = self.queue[0]
-            body = json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
-            if self._request("POST", "/v1/events", body) is None:
+            self._wait_for_pace()
+            if self._request("POST", "/v1/events", encode(event)) is None:
                 return   # offline: keep the queue, try again next round
             with self.lock:
                 if self.queue and self.queue[0] is event:
