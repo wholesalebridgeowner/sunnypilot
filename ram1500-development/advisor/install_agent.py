@@ -8,7 +8,12 @@ agent cannot stop sunnypilot from launching. The original file is backed up
 first and restored byte-for-byte by `uninstall`. Any continue.sh that is not the
 known original (or the known hooked version) is refused.
 
-Usage on the Comma:  python3 install_agent.py install|uninstall|status
+The start script discards the agent's output, so an agent that cannot import
+one of its modules would exit without a trace. AGENT_PAYLOAD therefore names
+every file the agent needs beside it, `install` refuses while one of them is
+missing, and `payload` prints the list for whoever copies the files.
+
+Usage on the Comma:  python3 install_agent.py install|uninstall|status|payload
 """
 from __future__ import annotations
 
@@ -23,12 +28,45 @@ EXEC_LINE = b"exec ./launch_openpilot.sh\n"
 HOOK = (b"( [ -x /data/ram-diag/advisor/start_agent.sh ] && exec /data/ram-diag/advisor/start_agent.sh )"
         b" </dev/null >/dev/null 2>&1 &\n")
 HOOKED = ORIGINAL.replace(EXEC_LINE, HOOK + EXEC_LINE)
+# The agent imports one helper of the build (the delay probe). With bytecode
+# writing switched off it leaves no file under /data/openpilot, or anywhere else.
 START_SCRIPT = b"""#!/usr/bin/bash
 # Drive Advisor agent launcher, started in the background by /data/continue.sh.
 cd /data/openpilot || exit 0
 export PYTHONPATH=/data/openpilot:/data/ram-diag/advisor
+export PYTHONDONTWRITEBYTECODE=1
 exec setsid nice -n 10 /usr/local/venv/bin/python3 /data/ram-diag/advisor/agent.py </dev/null >/dev/null 2>&1
 """
+# Every file the agent needs on the Comma, and nothing else: no test, no service, no replay tool.
+AGENT_PAYLOAD = (
+    "agent.py",
+    "applier.py",
+    "approval.py",
+    "delay_probe.py",
+    "device_params.py",
+    "gates.py",
+    "journal.py",
+    "measure_api.py",
+    "measure_brake.py",
+    "measure_curve.py",
+    "measure_delay.py",
+    "measure_lane_change.py",
+    "measure_lane_sway.py",
+    "measure_lat_rms.py",
+    "measure_limit.py",
+    "measure_set.py",
+    "measure_steering.py",
+    "measure_swings.py",
+    "messages.py",
+    "pipeline.py",
+    "samples.py",
+    "settings_guard.py",
+    "settings_snapshot.py",
+    "shared_rules.py",
+    "uplink.py",
+    "wire.py",
+)
+INSTALLER = "install_agent.py"
 
 
 class InstallError(RuntimeError):
@@ -88,18 +126,38 @@ def write_start_script(path: Path = HOME / "start_agent.sh") -> None:
     _atomic_write(Path(path), START_SCRIPT, 0o755)
 
 
+def missing_payload(home: Path = HOME) -> list:
+    """Names of the agent files that are not in `home`."""
+    return sorted(name for name in AGENT_PAYLOAD if not (Path(home) / name).is_file())
+
+
+def extra_modules(home: Path = HOME) -> list:
+    """Python files in `home` that this agent does not use: left behind by an earlier version."""
+    known = set(AGENT_PAYLOAD) | {INSTALLER}
+    return sorted(path.name for path in Path(home).glob("*.py") if path.name not in known)
+
+
 def main(argv: list) -> int:
     command = argv[1] if len(argv) > 1 else "status"
+    backup = HOME / "continue.sh.orig"
     try:
         if command == "install":
-            write_start_script()
-            print(install_hook())
+            missing = missing_payload(HOME)
+            if missing:
+                raise InstallError("missing_agent_files " + " ".join(missing))
+            write_start_script(HOME / "start_agent.sh")
+            print(install_hook(CONTINUE, backup))
+            extra = extra_modules(HOME)
+            if extra:
+                print("not_part_of_this_agent " + " ".join(extra))
         elif command == "uninstall":
-            print(uninstall_hook())
+            print(uninstall_hook(CONTINUE, backup))
         elif command == "status":
-            print(hook_status())
+            print(hook_status(CONTINUE))
+        elif command == "payload":
+            print("\n".join(AGENT_PAYLOAD))
         else:
-            print("usage: install_agent.py install|uninstall|status")
+            print("usage: install_agent.py install|uninstall|status|payload")
             return 2
     except InstallError as error:
         print(f"refused: {error}")
