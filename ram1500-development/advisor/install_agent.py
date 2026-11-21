@@ -32,6 +32,8 @@ HOOKED = ORIGINAL.replace(EXEC_LINE, HOOK + EXEC_LINE)
 # writing switched off it leaves no file under /data/openpilot, or anywhere else.
 START_SCRIPT = b"""#!/usr/bin/bash
 # Drive Advisor agent launcher, started in the background by /data/continue.sh.
+# Also starts the log keeper when it is installed (owner GO 2026-11-21), detached, lowest priority.
+[ -x /data/ram-diag/keeper/keep_logs.sh ] && ( setsid nice -n 19 /data/ram-diag/keeper/keep_logs.sh </dev/null >/dev/null 2>&1 & )
 cd /data/openpilot || exit 0
 export PYTHONPATH=/data/openpilot:/data/ram-diag/advisor
 export PYTHONDONTWRITEBYTECODE=1
@@ -148,6 +150,10 @@ def main(argv: list) -> int:
             missing = missing_payload(HOME)
             if missing:
                 raise InstallError("missing_agent_files " + " ".join(missing))
+            # Check the startup hook BEFORE writing anything: a refused install must leave the
+            # installed launcher (which also starts the log keeper) exactly as it was.
+            if hook_status(CONTINUE) not in ("original", "installed"):
+                raise InstallError("unknown_continue_script")
             write_start_script(HOME / "start_agent.sh")
             print(install_hook(CONTINUE, backup))
             extra = extra_modules(HOME)

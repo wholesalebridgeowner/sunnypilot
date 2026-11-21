@@ -217,7 +217,7 @@ class Agent:
             return
         self.socks = {stream: self.socket_factory(stream) for stream in STREAMS}
         if parking_live.PARKING_LIVE_ENABLED and self.can_decode is not None:
-            self.can_sock = self.socket_factory(parking_live.STREAM)
+            # No `can` socket yet: it is opened only while the parking gate is open (_parking_tick).
             self.parking = parking_live.ParkingLive(self.can_decode)
         self.drive_probe = self.probe = dict(self.delay_probe()) if self.delay_probe else dict(PROBE_NOT_AVAILABLE)
         name, fuzzy = self._decoded(nnlc_match, "car_sp")
@@ -228,6 +228,7 @@ class Agent:
     def _drain(self, now: float) -> None:
         """Empty every socket, decode the newest message of each stream, and hand the batch to the pipeline."""
         batch = {}
+        car_state_valid = None
         for stream, sock in self.socks.items():
             newest = None
             while (raw := sock.receive(non_blocking=True)) is not None:
@@ -235,26 +236,55 @@ class Agent:
             if newest is None:
                 continue
             try:
-                t_ns, msg = self.decode(stream, newest)
+                decoded = self.decode(stream, newest)
             except Exception:
                 continue                # this stream is missing for this tick
+            # The device decoder also returns the event's validity; test decoders may return only two values.
+            t_ns, msg = decoded[0], decoded[1]
+            valid = decoded[2] if len(decoded) > 2 else None
             batch[stream] = (t_ns, msg)
             if stream in ("carState", "carControl"):
                 self.latest_state[stream] = (now, msg)
+            if stream == "carState":
+                car_state_valid = valid
         if self.parking is not None:
-            self._drain_can(now, batch.get("carState"))
+            car_state = batch.get("carState")
+            if car_state is not None:
+                t_ns, msg = car_state
+                valid = car_state_valid if car_state_valid is not None else get(msg, "canValid")
+                self.parking.context(now, t_ns, get(msg, "vEgo"), get(msg, "gearShifter"),
+                                     None if valid is None else bool(valid))
+            self._parking_tick(now)
         if batch:
             self._send(self.pipeline.ingest_tick(batch))
 
-    def _drain_can(self, now: float, car_state) -> None:
-        """Experimental parking telemetry: empty the `can` socket every tick, decode only while the gate is open."""
-        if car_state is not None:
-            msg = car_state[1]
-            self.parking.context(now, get(msg, "vEgo"), get(msg, "gearShifter"))
-        raws = []
-        while (raw := self.can_sock.receive(non_blocking=True)) is not None:
-            raws.append(raw)
-        self.parking.consume(now, raws)
+    def _parking_tick(self, now: float) -> None:
+        """Experimental parking telemetry: the `can` socket exists only while the gate is open."""
+        want = self.parking.want_open(now)
+        if want and self.can_sock is None:
+            if self.slot_check():
+                self.can_sock = self.socket_factory(parking_live.STREAM)
+                self.parking.on_open(now)
+            else:
+                self.parking.note_slot_refusal()
+        if self.can_sock is not None and not want:
+            self._close_can_sock()
+            self.parking.on_close()
+            return
+        if self.can_sock is not None:
+            self.parking.collect(now, self.can_sock)
+            if self.parking.disabled_reason is not None:     # switched itself off: no more `can` work
+                self._close_can_sock()
+                self.parking.on_close()
+
+    def _close_can_sock(self) -> None:
+        sock, self.can_sock = self.can_sock, None
+        close = getattr(sock, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def _send_parking(self) -> None:
         if self.parking is not None:
@@ -395,7 +425,7 @@ def main() -> None:  # pragma: no cover - runs on the Comma
 
     def decode(service, raw):
         event = messaging.log_from_bytes(raw)
-        return event.logMonoTime, getattr(event, service)
+        return event.logMonoTime, getattr(event, service), bool(event.valid)
 
     streams = STREAMS + ((parking_live.STREAM,) if parking_live.PARKING_LIVE_ENABLED else ())
 

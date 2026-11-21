@@ -34,7 +34,8 @@ def drive_record(paths, schema_dir: str) -> dict:
             for e in log.Event.read_multiple_bytes(data, traversal_limit_in_words=2**62):
                 k = e.which()
                 if k == "carState":
-                    events.append((e.logMonoTime, 0, (str(e.carState.gearShifter), float(e.carState.vEgo))))
+                    events.append((e.logMonoTime, 0, (str(e.carState.gearShifter), float(e.carState.vEgo),
+                                                      bool(e.valid))))
                 elif k == "can":
                     frames = [(int(f.src), int(f.address), bytes(f.dat)) for f in e.can if f.address in _WANTED]
                     if frames:
@@ -44,7 +45,8 @@ def drive_record(paths, schema_dir: str) -> dict:
         events.sort(key=lambda x: (x[0], x[1]))
         for t_ns, kind, item in events:
             if kind == 0:
-                out.car_state(*item)
+                gear, v, valid = item
+                out.car_state(t_ns / 1e9, gear, v, valid)
             else:
                 for bus, address, payload in item:
                     out.frame(t_ns / 1e9, bus, address, payload)

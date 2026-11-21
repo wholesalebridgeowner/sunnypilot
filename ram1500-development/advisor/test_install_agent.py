@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import install_agent
-from install_agent import (AGENT_PAYLOAD, HOOK, ORIGINAL, START_SCRIPT, InstallError, extra_modules, hook_status,
+from install_agent import (AGENT_PAYLOAD, HOOK, HOOKED, ORIGINAL, START_SCRIPT, InstallError, extra_modules, hook_status,
                            install_hook, missing_payload, uninstall_hook, write_start_script)
 
 ADVISOR = Path(install_agent.__file__).resolve().parent
@@ -89,6 +89,11 @@ class StartScriptTests(unittest.TestCase):
         self.assertEqual(START_SCRIPT.replace(b"export PYTHONDONTWRITEBYTECODE=1\n", b""), (
             b"#!/usr/bin/bash\n"
             b"# Drive Advisor agent launcher, started in the background by /data/continue.sh.\n"
+            # The log keeper's launch, as in the launcher installed on the truck (owner GO 2026-11-21);
+            # review of 3098b5f: the installer must not drop it.
+            b"# Also starts the log keeper when it is installed (owner GO 2026-11-21), detached, lowest priority.\n"
+            b"[ -x /data/ram-diag/keeper/keep_logs.sh ] && ( setsid nice -n 19 /data/ram-diag/keeper/keep_logs.sh"
+            b" </dev/null >/dev/null 2>&1 & )\n"
             b"cd /data/openpilot || exit 0\n"
             b"export PYTHONPATH=/data/openpilot:/data/ram-diag/advisor\n"
             b"exec setsid nice -n 10 /usr/local/venv/bin/python3 /data/ram-diag/advisor/agent.py"
@@ -253,6 +258,25 @@ class CommandTests(unittest.TestCase):
         self.assertEqual((code, lines), (2, ["refused: missing_agent_files measure_delay.py pipeline.py"]))
         self.assertEqual(hook_status(self.cont), "original")           # nothing was touched
         self.assertFalse((self.home / "start_agent.sh").exists())
+
+    def test_a_refused_install_leaves_the_installed_launcher_untouched(self):
+        # Review of 3098b5f (Codex, 2026-11-21): the launcher was written before the hook was checked.
+        copy_payload(self.home)
+        installed = b"#!/usr/bin/bash\n# the launcher on the truck, which also starts the log keeper\n"
+        (self.home / "start_agent.sh").write_bytes(installed)
+        self.cont.write_bytes(b"#!/usr/bin/bash\necho something else\n")
+        code, lines = self.run_command("install")
+        self.assertEqual((code, lines), (2, ["refused: unknown_continue_script"]))
+        self.assertEqual((self.home / "start_agent.sh").read_bytes(), installed)
+
+    def test_the_launcher_keeps_starting_the_log_keeper(self):
+        copy_payload(self.home)
+        self.cont.write_bytes(HOOKED)                                   # already installed
+        self.assertEqual(self.run_command("install"), (0, ["already_installed"]))
+        text = (self.home / "start_agent.sh").read_text()
+        keeper = "[ -x /data/ram-diag/keeper/keep_logs.sh ] && ( setsid nice -n 19 /data/ram-diag/keeper/keep_logs.sh"
+        self.assertIn(keeper, text)
+        self.assertLess(text.index(keeper), text.index("exec setsid"))  # started before the agent replaces the shell
 
     def test_install_names_modules_left_behind_by_an_earlier_version(self):
         copy_payload(self.home)

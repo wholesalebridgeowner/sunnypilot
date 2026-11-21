@@ -1,7 +1,8 @@
 """Steering losses: every time sunnypilot's steering switches off while the truck is moving, and what was
 happening around that moment.
 
-A loss is a falling edge of the steering-on flag (carControl.latActive, via the GateTracker) at a speed of
+A loss is an OBSERVED change of carControl.latActive from True to False (missing or stale carControl is
+unknown, never "off"; after unknown an observed True is needed again) at a speed of
 at least 5 m/s on the last steering-on Sample, with no data gap between the two Samples. The evidence window runs from 0.3 s before the edge to 0.3 s
 after it. One `steering_loss` record is sent per loss:
 
@@ -82,9 +83,14 @@ class SteeringLoss(Measure):
             still_open.append(loss)
         self._pending = still_open
 
-        on = bool(g.lat_on)
+        observed = s.lat_active             # True / False as carControl reported it; None = missing or stale
+        if observed is None:
+            # Unknown is not "off": no edge now, and the next edge needs an observed True first.
+            self._prev_on, self._prev_v, self._prev_cruise = None, s.v_ego, s.cruise_enabled
+            return
+        on = bool(observed)
         # An edge across a data gap is not attributed: what happened in the unobserved stretch is unknown.
-        if self._prev_on and not on and not s.gap and self._prev_v >= LOSS_MIN_SPEED_MS:
+        if self._prev_on is True and not on and not s.gap and self._prev_v >= LOSS_MIN_SPEED_MS:
             before = set()
             for t_r, f_r in self._recent:
                 if t_r >= t - LOSS_WINDOW_S:

@@ -77,6 +77,21 @@ class TestSteeringLoss(unittest.TestCase):
         self.assertTrue(recs[0]["windowTruncated"])
         self.assertEqual(recs[0]["cause"], "brake")
 
+    def test_missing_control_is_unknown_not_a_loss(self):
+        # Review of 3098b5f (Codex, 2026-11-21): one second without carControl made a false loss.
+        recs = run(lambda t_s: {"skip": ("carControl",)} if 8.0 <= t_s < 9.0 else {"carControl": {"lat": True}})
+        self.assertEqual(recs, [])
+
+    def test_after_unknown_an_observed_true_is_needed_before_a_loss(self):
+        def extra(t_s):
+            if 8.0 <= t_s < 9.0:
+                return {"skip": ("carControl",)}
+            if 9.0 <= t_s < 12.0:
+                return {"carControl": {"lat": True}}
+            return {"carControl": {"lat": t_s < 8.0}, "carState": {"brake": t_s >= 12.0}}
+        recs = run(extra)
+        self.assertEqual([r["cause"] for r in recs], ["brake"])         # only the observed True -> False at 12 s
+
     def test_record_matches_schema(self):
         rule = DATA["steering_loss"]
         self.assertEqual(set(rule), {"cause", "evidence", "vMs", "windowTruncated"})

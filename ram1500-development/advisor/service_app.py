@@ -223,10 +223,17 @@ class AdvisorService:
             return False
         drives = len(state["nightlyDrives"])
         lines = [f"{drives} drive{'' if drives == 1 else 's'} recorded.", REPORT_CLOSING_LINE]
+        # Send first. The pending report is cleared only after the notifier confirms delivery, so a failed
+        # send is retried on the next run instead of being lost.
+        try:
+            sent = bool(self.notifier.send(TITLE_REPORT, "\n".join(lines), priority=3, actions=None))
+        except Exception:
+            sent = False
+        if not sent:
+            return False
         self.store.put_json(f"reports/{int(self.clock())}.json", {"drives": list(state["nightlyDrives"])})
         state.update({"nightlyDue": None, "nightlyDrives": [], "lastReportAt": self.clock()})
         self.store.put_json("state.json", state)
-        self.notifier.send(TITLE_REPORT, "\n".join(lines), priority=3, actions=None)
         return True
 
 
