@@ -147,6 +147,12 @@ class NnlcMatchTests(unittest.TestCase):
                          ("MOCK", False))
         self.assertEqual(seen, [b"p", b"p"])
 
+    def test_the_copy_of_this_drive_comes_before_the_persistent_one(self):
+        def decode_sp(raw):
+            return car_params_sp("RAM_1500_5TH_GEN" if raw == b"now" else "MOCK", raw != b"now")
+        got = nnlc_match(params({"CarParamsSP": b"now", "CarParamsSPPersistent": b"earlier"}), decode_sp)
+        self.assertEqual(got, ("RAM_1500_5TH_GEN", False))
+
     def test_nothing_stored(self):
         self.assertEqual(nnlc_match(params(), lambda raw: car_params_sp()), (None, None))
 

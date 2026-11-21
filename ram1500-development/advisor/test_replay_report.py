@@ -67,6 +67,18 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([m["data"]["n"] for m in out], [600, 600, 50])
         self.assertEqual([m["data"]["latOnS"] for m in out], [60.0, 60.0, 5.0])
 
+    def test_the_slow_streams_of_a_decimated_log_are_not_missing(self):
+        # Model and lead messages 0.7 s apart, as a decimated log can hold them: with the limits of a live
+        # drive (0.5 s) each would be missing for part of the time.
+        def change(i, t_ns):
+            return {"skip": ("drivingModelData", "radarState") if i % 7 else ()}
+        batches = [synth.batch(t, **change(i, t)) for i, t in enumerate(synth.ticks(700, 100, T0))]
+        out = replay_messages(events_of(batches))
+        self.assertEqual([m["data"]["health"]["staleS"] for m in out], [{}, {}])
+        self.assertEqual(out[0]["data"]["latOnS"], 60.0)
+        live = replay_messages(events_of(batches), PipelineConfig())
+        self.assertEqual(set(live[0]["data"]["health"]["staleS"]), {"dmd", "rs"})
+
     def test_a_given_configuration_is_used(self):
         events = events_of(synth.drive(synth.ticks(700, 100, T0)))
         out = replay_messages(events, PipelineConfig(t0_mono_s=1010.0))

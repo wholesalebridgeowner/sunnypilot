@@ -755,6 +755,13 @@ class SettingsWatchTests(AgentFixture):
         watched = ["LagdToggle", "LagdToggleDelay", "NeuralNetworkLateralControl", "AutoLaneChangeTimer", "GitCommit"]
         self.assertEqual(sorted(self.params.reads), sorted(watched * 2))       # two windows closed
 
+    def test_a_record_sent_in_the_middle_of_a_window_is_no_reason_to_read_them(self):
+        self.drive()
+        del self.params.reads[:]
+        self.play(eventful_drive(900, stop_at_s=20.0, lane_change_at_s=30.0, limit_at_s=50.0))
+        self.assertEqual(len(self.uplink.of("brake") + self.uplink.of("lane_change") + self.uplink.of("limit_event")), 3)
+        self.assertEqual(len(self.params.reads), 5)                    # one window closed: read once
+
     def test_a_setting_changed_and_changed_back_inside_one_window_is_not_seen(self):
         self.drive()
         batches = self.ticks(700)
