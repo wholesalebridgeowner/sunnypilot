@@ -14,6 +14,12 @@ drive and its replay can then only come from the inputs.
 A batch holds the newest message of each stream that arrived since the
 previous batch. Messages come back as (type, data); the caller adds the
 envelope. Nothing crosses drives: build a new Pipeline for every drive.
+
+A message is the decoded body of its stream, read by attribute name (or by
+key, for a dict). For onroadEvents that is the alert list: any iterable of
+events is taken as it is decoded (no need to copy it into a list), and so is
+a message that holds the list as `onroadEvents`. An alert list in a form that
+cannot be read counts as missing, never as "no alert".
 """
 from __future__ import annotations
 

@@ -100,6 +100,75 @@ class SampleFieldsTests(unittest.TestCase):
         self.assertIsNone(s.torque_output)
 
 
+class ListReader:
+    """Stands in for a decoded list as a message decoder hands it over: it can be
+    iterated and indexed, and it is neither a list nor a tuple."""
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, index):
+        return self._items[index]
+
+
+class AlertListFormTests(unittest.TestCase):
+    NAMES = frozenset({"belowSteerSpeed", "steerSaturated"})
+
+    def sample(self, body):
+        j = StreamJoiner()
+        j.offer("onroadEvents", T0, body)
+        return j.sample(T0, car_state())
+
+    def test_every_accepted_form_gives_the_names(self):
+        events = [ns(name="belowSteerSpeed"), ns(name="steerSaturated")]
+        forms = {"list": events, "tuple": tuple(events), "list reader": ListReader(events),
+                 "message holding a list": ns(onroadEvents=events),
+                 "message holding a list reader": ns(onroadEvents=ListReader(events)),
+                 "dict holding a list": {"onroadEvents": events},
+                 "list of dicts": [{"name": "belowSteerSpeed"}, {"name": "steerSaturated"}]}
+        for form, body in forms.items():
+            with self.subTest(form=form):
+                s = self.sample(body)
+                self.assertEqual(s.alerts, self.NAMES)
+                self.assertNotIn("ev", s.missing)
+
+    def test_empty_list_in_any_form_is_known_and_empty(self):
+        for body in ([], (), ListReader([]), ns(onroadEvents=[]), ns(onroadEvents=ListReader([]))):
+            with self.subTest(body=body):
+                s = self.sample(body)
+                self.assertEqual(s.alerts, frozenset())
+                self.assertNotIn("ev", s.missing)
+
+    def test_form_that_is_not_understood_is_missing_never_empty(self):
+        for body in (None, 7, "belowSteerSpeed", b"belowSteerSpeed", {"other": []}, ns(other=[]), object(),
+                     [ns(other="belowSteerSpeed")], ListReader([None]), ns(onroadEvents=7)):
+            with self.subTest(body=body):
+                s = self.sample(body)
+                self.assertIsNone(s.alerts)
+                self.assertIn("ev", s.missing)
+
+    def test_list_is_read_once_when_it_arrives(self):
+        j = StreamJoiner()
+        j.offer("onroadEvents", T0, iter([ns(name="belowSteerSpeed")]))      # can be read only once
+        first = j.sample(T0, car_state())
+        second = j.sample(T0 + 100 * MS, car_state())
+        self.assertEqual(first.alerts, frozenset({"belowSteerSpeed"}))
+        self.assertEqual(second.alerts, frozenset({"belowSteerSpeed"}))      # the held list is still known
+
+    def test_newer_list_replaces_the_names(self):
+        j = StreamJoiner()
+        j.offer("onroadEvents", T0, ListReader([ns(name="belowSteerSpeed")]))
+        j.offer("onroadEvents", T0 + 100 * MS, ListReader([]))
+        j.offer("onroadEvents", T0 + 50 * MS, ListReader([ns(name="steerSaturated")]))   # out of order: ignored
+        self.assertEqual(j.sample(T0 + 100 * MS, car_state()).alerts, frozenset())
+
+
 class TimeBaseTests(unittest.TestCase):
     def test_first_interval_then_spacing_then_gap(self):
         j = StreamJoiner()

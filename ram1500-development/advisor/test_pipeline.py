@@ -279,6 +279,31 @@ class JoinTests(unittest.TestCase):
         self.assertAlmostEqual(out[0]["fzFallbackS"], 1.0, delta=0.15)
         self.assertAlmostEqual(out[0]["forcedZeroS"], 28.0, delta=0.15)                 # the speed latch fills in
 
+    def test_alert_list_handed_over_as_decoded_counts_like_a_list(self):
+        class Reader:                                                  # iterable, and not a list or a tuple
+            def __init__(self, items):
+                self.items = items
+
+            def __iter__(self):
+                return iter(self.items)
+
+        def summary(wrap):
+            def change(i, t_ns):
+                if i < 20:
+                    return {"carState": dict(v=0.0, gear="park"), "carControl": dict(lat=False)}
+                return {"carState": dict(v=10.0), "onroadEvents": ["belowSteerSpeed"] if i < 200 else []}
+            batches = synth.drive(synth.ticks(300, 100, T0), change)
+            for b in batches:
+                t_ns, events = b["onroadEvents"]
+                b["onroadEvents"] = (t_ns, wrap(events))
+            return synth.summaries(synth.run(make(Probe()), batches))[0]
+
+        as_list = summary(list)
+        self.assertAlmostEqual(as_list["forcedZeroS"], 18.0, delta=0.15)
+        self.assertAlmostEqual(as_list["steeringS"], 10.0, delta=0.15)
+        self.assertEqual(summary(Reader), as_list)
+        self.assertEqual(as_list["health"]["staleS"], {})
+
     def test_mid_drive_start_before_the_first_alert_list(self):
         def change(i, t_ns):
             return {"skip": ("onroadEvents",)} if i < 20 else None

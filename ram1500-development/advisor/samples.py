@@ -26,6 +26,7 @@ LANE_CHANGE_STATES = {"off": 0, "preLaneChange": 1, "laneChangeStarting": 2, "la
 LANE_CHANGE_DIRECTIONS = {"none": 0, "left": 1, "right": 2}
 GEAR_DRIVE = "drive"
 MODEL_STREAM = "drivingModelData"
+ALERT_STREAM = "onroadEvents"
 
 
 def _ns(seconds: float) -> int:
@@ -116,6 +117,7 @@ class StreamJoiner:
         self._future_ns = _ns(FUTURE_TOL_S)
         self._cap_ns = _ns(DT_CAP_S)
         self._latest = {}
+        self._alerts = None                # alert names of the held alert list; None = it could not be read
         self._last_car_state_ns = None
         self._prev_sample_ns = None
         self._model_new = None             # model message that came since the last call of models_after
@@ -132,6 +134,8 @@ class StreamJoiner:
         self._latest[stream] = (t_ns, msg)
         if stream == MODEL_STREAM:
             self._model_new = (t_ns, msg)
+        elif stream == ALERT_STREAM:
+            self._alerts = _alert_names(msg)       # read once, here: the list is used for up to 5.0 s
         return True
 
     def forget_before(self, floor_ns: int) -> None:
@@ -176,7 +180,9 @@ class StreamJoiner:
         lead = get(found["radarState"], "leadOne")
         lead_present = get(lead, "status") is True
         model = found["drivingModelData"]
-        events = found["onroadEvents"]
+        alerts = None if found[ALERT_STREAM] is None else self._alerts
+        if alerts is None:
+            found[ALERT_STREAM] = None        # a list that cannot be read is missing, never "no alert"
         return Sample(
             t=t_ns / 1e9, dt=dt, gap=gap, raw_dt=raw_dt, v_ego=v_ego,
             steering_angle_deg=_number(get(car_state, "steeringAngleDeg")) or 0.0,
@@ -195,7 +201,7 @@ class StreamJoiner:
             lead_present=lead_present,
             lead_distance_m=_number(get(lead, "dRel")) if lead_present else None,
             lane_change_state=_code(get(model, "meta", "laneChangeState"), LANE_CHANGE_STATES),
-            alerts=None if events is None else _alert_names(events),
+            alerts=alerts,
             missing=tuple(short for stream, short in JOINED if found[stream] is None),
         )
 
@@ -244,10 +250,31 @@ class StreamJoiner:
         return min(max(median, MODEL_PERIOD_MIN_S), MODEL_PERIOD_MAX_S) > MODEL_SLOW_PERIOD_S
 
 
-def _alert_names(events) -> frozenset:
-    if not isinstance(events, (list, tuple)):
-        events = get(events, "onroadEvents") or []
-    return frozenset(str(get(e, "name")) for e in events if get(e, "name") is not None)
+def _alert_names(events) -> frozenset | None:
+    """The alert names of an onroadEvents message, or None when it cannot be read.
+
+    Accepted: any iterable of events (a list, a tuple, the list as a message
+    decoder hands it over), or a message that holds such a list as
+    `onroadEvents`. An event is an object or a dict with a `name`. Anything
+    else gives None, which makes the alert list missing: a list that is not
+    understood must never read as "no alert".
+    """
+    try:
+        if not isinstance(events, (list, tuple)):
+            inner = get(events, "onroadEvents")
+            if inner is not None:
+                events = inner
+        if events is None or isinstance(events, (str, bytes, bytearray, dict)):
+            return None
+        names = []
+        for event in events:
+            name = get(event, "name")
+            if name is None:
+                return None
+            names.append(str(name))
+        return frozenset(names)
+    except Exception:
+        return None
 
 
 # --- version 1 (still used by the version 1 agent and replay tool) -----------
