@@ -836,8 +836,7 @@ class RoundingTests(unittest.TestCase):
         self.assertEqual((x["startingS"], x["crossS"], x["vStartMs"]), (3.55, 3.05, 25.0))
         self.assertEqual(x["pressedShare"], 0.23)                      # 17 of the 73 Samples from 21.0 to 24.6 s
         self.assertEqual(x["peakLatAccel"], 0.78)
-        self.assertEqual((x["settleState"], x["overshootM"]), ("settled", 0.33))
-        self.assertEqual(x["settleS"], round(x["settleS"], 2))
+        self.assertEqual((x["settleState"], x["settleS"], x["overshootM"]), ("settled", 3.35, 0.33))
 
 
 class RegistrationTests(unittest.TestCase):
