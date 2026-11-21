@@ -15,7 +15,7 @@ import math
 import re
 
 MAX_NUMBER = 1e9                    # a clock time in seconds or milliseconds would exceed it
-MEASURES = {"steering", "limit", "brake", "laneChange", "delay", "lane", "swings", "ay", "curve", "lag", "unknown"}
+MEASURES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag", "unknown"}
 SETTING_KEYS = {"lagdToggle", "lagdToggleDelayS", "nnlc", "laneChangeTimer", "modelBundleId", "build"}
 
 _HEX12 = re.compile(r"[0-9a-f]{12}")
@@ -74,7 +74,8 @@ DATA = {
     "agent_start": {"restore": _shape(_RESTORE)},
     "drive_start": {"resumed": FLAG, "settings": _SETTINGS, "delay": _DELAY,
                     "agent": {"version": _shape(_VERSION), "measures": _list_of(MEASURES), "applyEnabled": FLAG}},
-    "drive_ready": {"delayProbe": _PROBE, "nnlcModel": _tokens("ram", "mock", "other"), "nnlcFuzzy": FLAG},
+    "drive_ready": {"delayProbe": _PROBE, "nnlcModel": _tokens("ram", "mock", "other"), "nnlcFuzzy": FLAG,
+                    "blindSpot": FLAG},
     "summary": _SUMMARY,
     "brake": {"peakDrop1s": NUMBER, "peakDrop2s": NUMBER, "who": _tokens("driver", "cruise", "other"),
               "tookOverFromCruise": FLAG, "speedMs": NUMBER, "leadGapS": NUMBER, "leadDistanceM": NUMBER},
@@ -86,6 +87,9 @@ DATA = {
                                            "not_measurable:next_lane_change", "not_measurable:steering_off",
                                            "not_measurable:lines"),
                     "settleS": NUMBER, "overshootM": NUMBER},
+    "steering_loss": {"cause": _tokens("brake", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none"),
+                      "evidence": _list_of({"brake", "gas", "cruise_off", "gear", "fault", "blinker", "driver"}),
+                      "vMs": NUMBER, "windowTruncated": FLAG},
     "limit_event": {"limitS": NUMBER, "vMeanMs": NUMBER, "vAtMaxMs": NUMBER, "demandMax": NUMBER,
                     "achievedAtMax": NUMBER, "achievedMean": NUMBER, "driverTorqueMean": COUNT, "epsOverCmd": NUMBER,
                     "warned": FLAG, "label": _tokens("sharp", "slow", "unexpected")},

@@ -68,6 +68,8 @@ DELAY_BAND_MAX_S = 0.38
 
 # --- driving time ------------------------------------------------------------------
 MOVING_ABOVE_MS = 0.5         # above this speed the truck is driving; "driving" always means this
+LOSS_WINDOW_S = 0.3           # steering losses: evidence looked for this long before and after the edge
+LOSS_MIN_SPEED_MS = 5.0       # steering losses: only edges at or above this speed are recorded
 MIN_DRIVE_MOVING_S = 60       # service: a session with less movement is not a drive
 
 # --- service: least data behind a stored quality value ----------------------------

@@ -114,6 +114,26 @@ def _decode_car_params(raw: bytes):
     return messaging.log_from_bytes(raw, car.CarParams)
 
 
+def blind_spot_enabled(params: DeviceParams, decode=_decode_car_params) -> bool | None:
+    """CarParams.enableBsm of THIS drive: whether the build switched blind-spot support on at start-up.
+
+    The build turns it on only if the truck's blind-spot message (720) was seen during its start-up
+    fingerprint; on 2 of 23 recorded drives it arrived too late and blind spot stayed off for the whole
+    drive (2026-11-21 audit). Only the current CarParams is read, never the persistent copy: that one can
+    be from an earlier drive. None when it cannot be read."""
+    try:
+        raw = params.get("CarParams")
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        value = decode(raw).enableBsm
+    except Exception:
+        return None
+    return value if isinstance(value, bool) else None
+
+
 def base_actuator_delay_s(params: DeviceParams, decode=_decode_car_params) -> float | None:
     """CarParams.steerActuatorDelay; CarParams is cleared at onroad transitions,
     so fall back to the persistent copy."""

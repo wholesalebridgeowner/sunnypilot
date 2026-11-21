@@ -23,6 +23,8 @@ FLAT_FIELDS = {
 }
 # The learned delay is owner-facing too. It sends one block, from the learner's first message of the drive on.
 OWNER_BLOCKS = {"delay": {"valueS", "minS", "maxS", "status", "blocks"}}
+# Owner-facing measures that send event records only, never summary fields or a block (2026-11-21, r2).
+EVENT_ONLY = ("steeringLoss",)
 # Log-only measures send one block each, named like the measure, and only when it has something to say.
 BLOCKS = {
     "lane": {"n", "sumSq", "scoredS", "validS", "eligibleS", "vMean", "widthMin", "widthMax", "probMin"},
@@ -48,9 +50,10 @@ def lane_state(t_ms, start_ms):
     return "off"
 
 
-def drive(n, stop_at_s=None, lane_change_at_s=None, limit_at_s=None):
+def drive(n, stop_at_s=None, lane_change_at_s=None, limit_at_s=None, loss_at_s=None):
     """Batches of a drive at 25 m/s with, each from its given time: a stop of 3 m/s^2 for 4 s, a lane change,
-    and 4 s with the steering command at its limit and the warning up."""
+    4 s with the steering command at its limit and the warning up, and a brake press at speed that switches
+    steering off for the rest of the drive (a steering loss)."""
     def change(i, t_ns):
         t = (t_ns - T0) // MS
         out = {"carState": dict(v=25.0)}
@@ -65,6 +68,9 @@ def drive(n, stop_at_s=None, lane_change_at_s=None, limit_at_s=None):
             out["carControl"] = dict(torque=1.0)
             out["controlsState"] = dict(desired=0.004)
             out["onroadEvents"] = ["steerSaturated"]
+        if loss_at_s is not None and t / 1000 >= loss_at_s:
+            out["carControl"] = dict(out.get("carControl") or {}, lat=False)
+            out["carState"]["brake"] = t / 1000 - loss_at_s < 0.5
         return out
     return synth.drive(synth.ticks(n, 100, T0), change)
 
@@ -97,8 +103,8 @@ def envelope(kind, data) -> str:
 class SummaryTests(unittest.TestCase):
     def test_the_measures_of_this_build_in_run_order(self):
         names = [m.name for m in measure_set.MEASURES]
-        self.assertEqual(names, list(FLAT_FIELDS) + list(OWNER_BLOCKS) + list(BLOCKS))
-        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 5 + [False] * 5)
+        self.assertEqual(names, list(FLAT_FIELDS) + list(OWNER_BLOCKS) + list(EVENT_ONLY) + list(BLOCKS))
+        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 6 + [False] * 5)
         self.assertEqual(Pipeline().measure_names, names)             # the owner-facing ones run first
         self.assertTrue(all(issubclass(m, Measure) for m in measure_set.MEASURES))
 
@@ -114,6 +120,10 @@ class SummaryTests(unittest.TestCase):
                 p = Pipeline(PipelineConfig(measures=(measure,)))
                 out = synth.summaries(synth.run(p, road(1300, live_delay=True)))
                 sent = set().union(*(set(s) for s in out)) - PIPELINE_FIELDS - {"health"}
+                if measure.name in EVENT_ONLY:
+                    self.assertTrue(measure.owner_facing)
+                    self.assertEqual(sent, set())
+                    continue
                 if measure.name in FLAT_FIELDS:
                     self.assertTrue(measure.owner_facing)
                     self.assertEqual(sent, FLAT_FIELDS[measure.name])
@@ -132,7 +142,7 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(set(out[1][name]), fields)
         self.assertNotIn("failed", out[1]["health"])
         # Blocks in the order the size cap takes them out last: lane, swings, ay, curve, lag.
-        self.assertEqual([m.name for m in measure_set.MEASURES][5:], ["lane", "swings", "ay", "curve", "lag"])
+        self.assertEqual([m.name for m in measure_set.MEASURES][6:], ["lane", "swings", "ay", "curve", "lag"])
 
     def test_without_the_delay_learner_there_is_no_delay_block(self):
         out = synth.summaries(synth.run(Pipeline(), road(1300)))

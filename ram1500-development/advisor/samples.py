@@ -89,6 +89,8 @@ class Sample:
     cruise_enabled: bool = False
     gear_drive: bool = False
     blinker: bool = False                     # left or right
+    gas_pressed: bool = False
+    steer_fault: bool = False                 # carState steerFaultTemporary or steerFaultPermanent
     lat_active: bool | None = None            # None = carControl missing
     actuators_torque: float | None = None     # -1..1
     desired_curvature: float | None = None    # 1/m; None = controlsState missing
@@ -207,6 +209,8 @@ class StreamJoiner:
             cruise_enabled=_true(get(car_state, "cruiseState", "enabled")),
             gear_drive=str(get(car_state, "gearShifter")) == GEAR_DRIVE,
             blinker=_true(get(car_state, "leftBlinker")) or _true(get(car_state, "rightBlinker")),
+            gas_pressed=_true(get(car_state, "gasPressed")),
+            steer_fault=_true(get(car_state, "steerFaultTemporary")) or _true(get(car_state, "steerFaultPermanent")),
             lat_active=None if control is None else _true(get(control, "latActive")),
             actuators_torque=number(get(control, "actuators", "torque")),
             desired_curvature=number(get(controls_state, "desiredCurvature")),

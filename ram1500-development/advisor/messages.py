@@ -68,8 +68,9 @@ def drive_start_data(*, resumed: bool, settings: dict, delay: dict, version: str
             "agent": {"version": version, "measures": list(measures), "applyEnabled": bool(apply_enabled)}}
 
 
-def drive_ready_data(*, probe: dict, nnlc_model, nnlc_fuzzy) -> dict:
-    return {"delayProbe": dict(probe), "nnlcModel": nnlc_model, "nnlcFuzzy": nnlc_fuzzy}
+def drive_ready_data(*, probe: dict, nnlc_model, nnlc_fuzzy, blind_spot=None) -> dict:
+    """`blind_spot`: CarParams.enableBsm of this drive (False = the Comma has no blind-spot data this drive)."""
+    return {"delayProbe": dict(probe), "nnlcModel": nnlc_model, "nnlcFuzzy": nnlc_fuzzy, "blindSpot": blind_spot}
 
 
 def drive_end_data(fields: dict, *, listening: bool, restore: str, settings: dict, delay: dict, probe) -> dict:

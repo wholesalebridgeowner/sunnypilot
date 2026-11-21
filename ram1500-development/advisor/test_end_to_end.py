@@ -186,8 +186,12 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(drive["start"]["delay"]["learnedS"], round(LEARNED, 4))
         self.assertEqual(drive["ready"]["delayProbe"], INERT)
         self.assertEqual((drive["end"]["windows"], drive["end"]["listening"]), (len(drive["summaries"]), True))
-        self.assertEqual(drive["events"], [])
-        self.assertEqual(set(loop.sent_types()), {"agent_start", "drive_start", "drive_ready", "summary", "drive_end"})
+        # One steering-loss record: the fixture jumps in one tick from 25 m/s to a sample parked in Park
+        # (park() above), and the classifier reports that as a loss with the gear out of Drive. No other event.
+        self.assertEqual([e for e in drive["events"] if e["type"] != "steering_loss"], [])
+        self.assertEqual([e["data"]["cause"] for e in drive["events"] if e["type"] == "steering_loss"], ["gear"])
+        self.assertEqual(set(loop.sent_types()), {"agent_start", "drive_start", "drive_ready", "summary", "drive_end",
+                                                  "steering_loss"})
         self.assertEqual(loop.with_buttons(), [])
 
     def test_what_reaches_the_service_is_schema_v2_and_nothing_else(self):

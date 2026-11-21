@@ -1,8 +1,10 @@
 """Steering warnings and command-at-limit time.
 
-Counts the times the truck told the driver to take the wheel, and measures how
-long sunnypilot's steering command sat at its limit, split by whether driver
-steering was detected. What is measured is the command that was sent. It is
+Counts the steering-limit warnings ("Take Control / Turn Exceeds Steering
+Limit": a prompt to help steer; steering stays on through it, it is not a
+disengagement), and measures how long sunnypilot's steering command sat at its
+limit, split by whether driver steering was detected. Losses of steering are
+measured separately (measure_steering_loss.py). What is measured is the command that was sent. It is
 not what the steering motor delivered, and it is not motor capacity.
 
 Per window, all seconds as sums of the time each Sample stands for:

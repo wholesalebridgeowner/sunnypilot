@@ -36,7 +36,8 @@ from pathlib import Path
 import applier as apply_lock
 from applier import Applier, VehicleState
 from delay_probe import UNKNOWN, DelayProbe
-from device_params import (DeviceParams, base_actuator_delay_s, cache_delay_s, nnlc_match, persisted_live_delay)
+from device_params import (DeviceParams, base_actuator_delay_s, blind_spot_enabled, cache_delay_s, nnlc_match,
+                           persisted_live_delay)
 from journal import Journal, NonceLedger
 from measure_delay import delay_record, trusted_delay_s
 from messages import drive_end_data, drive_ready_data, drive_start_data, envelope, fit
@@ -213,7 +214,8 @@ class Agent:
         self.drive_probe = self.probe = dict(self.delay_probe()) if self.delay_probe else dict(PROBE_NOT_AVAILABLE)
         name, fuzzy = self._decoded(nnlc_match, "car_sp")
         self._event("drive_ready", drive_ready_data(probe=self.drive_probe, nnlc_model=nnlc_model_token(name),
-                                                    nnlc_fuzzy=fuzzy))
+                                                    nnlc_fuzzy=fuzzy,
+                                                    blind_spot=self._decoded(blind_spot_enabled, "car")))
 
     def _drain(self, now: float) -> None:
         """Empty every socket, decode the newest message of each stream, and hand the batch to the pipeline."""

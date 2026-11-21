@@ -33,7 +33,9 @@ LANE_CHANGE_DIRECTIONS = {0: "none", 1: "left", 2: "right"}
 def _car_state(r):
     return ns(vEgo=r[2], steeringAngleDeg=r[4], steeringTorque=r[6], steeringTorqueEps=r[7],
               steeringPressed=r[8] > 0.5, brakePressed=r[10] > 0.5, gearShifter=GEARS.get(int(r[11]), "unknown"),
-              leftBlinker=r[12] > 0.5, rightBlinker=r[13] > 0.5, cruiseState=ns(enabled=r[14] > 0.5))
+              leftBlinker=r[12] > 0.5, rightBlinker=r[13] > 0.5, cruiseState=ns(enabled=r[14] > 0.5),
+              gasPressed=r[9] > 0.5,
+              steerFaultTemporary=len(r) > 18 and r[18] > 0.5, steerFaultPermanent=len(r) > 19 and r[19] > 0.5)
 
 
 def _car_control(r):

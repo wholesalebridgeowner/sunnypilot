@@ -56,6 +56,7 @@ AGENT_PAYLOAD = (
     "measure_limit.py",
     "measure_set.py",
     "measure_steering.py",
+    "measure_steering_loss.py",
     "measure_swings.py",
     "messages.py",
     "pipeline.py",

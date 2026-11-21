@@ -136,7 +136,7 @@ class DriveRecordTests(unittest.TestCase):
 
     def test_drive_ready(self):
         data = messages.drive_ready_data(probe=PROBE, nnlc_model="ram", nnlc_fuzzy=False)
-        self.assertEqual(data, {"delayProbe": PROBE, "nnlcModel": "ram", "nnlcFuzzy": False})
+        self.assertEqual(data, {"delayProbe": PROBE, "nnlcModel": "ram", "nnlcFuzzy": False, "blindSpot": None})
 
     def test_a_replay_says_the_probe_was_not_run(self):
         data = messages.drive_ready_data(probe=messages.PROBE_NOT_RUN, nnlc_model=None, nnlc_fuzzy=None)

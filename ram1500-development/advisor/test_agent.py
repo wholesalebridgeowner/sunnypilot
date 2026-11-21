@@ -411,7 +411,7 @@ class ListeningTests(AgentFixture):
         self.drive()
         self.assertEqual(self.uplink.types(), ["drive_start", "drive_ready"])
         self.assertEqual(self.uplink.data("drive_ready")[0],
-                         {"delayProbe": PROBE, "nnlcModel": "ram", "nnlcFuzzy": False})
+                         {"delayProbe": PROBE, "nnlcModel": "ram", "nnlcFuzzy": False, "blindSpot": None})
         self.assertEqual(self.uplink.events[1]["driveId"], self.uplink.events[0]["driveId"])
 
     def test_the_matched_model_token(self):
@@ -1069,7 +1069,7 @@ class PrivacyTests(AgentFixture):
         self.wall.t = WALL
         self.agent.start()
         self.drive()
-        batches = eventful_drive(900, stop_at_s=20.0, lane_change_at_s=30.0, limit_at_s=50.0)
+        batches = eventful_drive(900, stop_at_s=20.0, lane_change_at_s=30.0, limit_at_s=50.0, loss_at_s=70.0)
         self.play(batches[:300])
         self.params.values["AutoLaneChangeTimer"] = 2
         self.play(batches[300:])

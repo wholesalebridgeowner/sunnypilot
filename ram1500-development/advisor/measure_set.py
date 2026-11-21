@@ -23,7 +23,10 @@ from measure_lane_sway import LaneSway
 from measure_lat_rms import LateralRms
 from measure_limit import SteeringLimit
 from measure_steering import SteeringTime
+from measure_steering_loss import SteeringLoss
 from measure_swings import WheelSwings
 
-MEASURES = (SteeringTime, SteeringLimit, Braking, LaneChanges, LearnedDelay,
+# SteeringLoss (2026-11-21, r2) is owner-facing: it sends one `steering_loss` record per loss of steering
+# while moving, with its evidence; it adds no summary fields.
+MEASURES = (SteeringTime, SteeringLimit, Braking, LaneChanges, LearnedDelay, SteeringLoss,
             LaneSway, WheelSwings, LateralRms, CurveSums, CurveLag)

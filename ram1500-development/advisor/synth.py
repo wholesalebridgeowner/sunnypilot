@@ -11,10 +11,11 @@ SEC = 1_000_000_000
 
 
 def car_state(v=25.0, angle=0.0, torque=0.0, eps=0.0, pressed=False, brake=False, cruise=False,
-              gear="drive", left=False, right=False):
+              gear="drive", left=False, right=False, gas=False, fault=False):
     return ns(vEgo=v, steeringAngleDeg=angle, steeringTorque=torque, steeringTorqueEps=eps,
               steeringPressed=pressed, brakePressed=brake, cruiseState=ns(enabled=cruise),
-              gearShifter=gear, leftBlinker=left, rightBlinker=right)
+              gearShifter=gear, leftBlinker=left, rightBlinker=right, gasPressed=gas,
+              steerFaultTemporary=fault, steerFaultPermanent=False)
 
 
 def car_control(lat=True, torque=0.0):
