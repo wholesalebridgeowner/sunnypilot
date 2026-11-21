@@ -244,3 +244,30 @@ To test the root cause, ChatGPT created **draft PR #45**: https://github.com/who
 ## 2026-11-20 — owner added Sunnyslope Pi SSH public key
 
 The owner just confirmed **Done** after GitHub's SSH-key-add step for the existing `sunnyslope-standby` Pi public key. Treat this as the owner's report, not yet a verified login. The Comma at the recently reported home-LAN address `comma-home-ip` (hostname `comma-hostname`) is TCP/22-reachable through the Tailscale-advertised Pi home subnet from Railway; a live read-only network probe observed a real SSH server banner. The existing Pi is on Tailscale `pi-tailnet-ip`, user `pi-user`, existing private identity `~/.ssh/id_ed25519` (never copy or reveal private key). A separate operator/agent had earlier run `ssh comma@comma-home-ip` from the Pi and reported a public-key rejection **before** the owner added this key. Therefore the next non-destructive action is to retry directly from an **already authenticated Pi session**, with host key verified, using the existing key; if still rejected, the Comma's Developer → SSH Keys GitHub username `wholesalebridgeowner` must be removed/re-added while parked to re-fetch GitHub authorized keys. Do not ask user to reconnect phone/Termius/Windows; no network probe services should be created. No Comma authentication, control-code update or device diagnostic installation was confirmed in this turn.
+
+
+## Nov 20 — owner road observations and traffic-control recognition questions for Claude
+
+**Scope: owner-requested notes / research questions only.** The owner has directed ChatGPT to remain **read-and-advise only** on this project; this exception is solely to deliver these two notes to Claude. No controller work, device installation, remote commands, automation restart or other operational activity is authorized by these notes.
+
+### 1. Travel lane versus buffered bicycle-lane markings
+
+**Owner's field observation:** On some roads there is a **double yellow centerline on the left** and a **bike lane on the right** marked with **two adjacent solid white lines**. The Ram's current steering/lane-centering behavior appears confused about **which white line defines the right boundary of the vehicle's travel lane**. The user wants better semantic lane understanding, not just better tracking of whichever painted line is visually strongest.
+
+**Please assess and report:**
+- Whether this scenario reflects incorrect lane-marking detection, wrong assignment of the right *travel-lane* boundary (inner separator vs outer bike-lane/buffer stripe), model-generated desired path, or the lateral controller following an otherwise correct desired path. Distinguish visual output from actual steering.
+- Use the double yellow on the left, plausible travel-lane width, continuity through gaps/intersections, bicycle-lane geometry/buffer/markings, lane topology and confidence to avoid abrupt switches to the outer white line. This is **not** a rule that a particular white stripe is always the correct edge: classify the road layout.
+- From appropriately authorized, privately held logs/images, inspect model lane-line/path outputs and car-control lateral ownership on an affected segment. Measure lateral path stability/offset and whether there's a discrete jump as the bike lane starts, ends or changes width. **Do not infer physical vehicle position from line strength alone.**
+- Offer a measured hypothesis/feasibility assessment first, with no hardcoded lane-offset, safety-gate bypass or unvalidated on-road adjustment.
+
+### 2. Stop signs, speed-limit signs, and traffic-signal states
+
+**New owner question:** Can the **currently installed** Sunnypilot / Comma 3 camera and model recognize **STOP signs**, **posted speed-limit signs**, and **traffic lights**, including **red, yellow and green states** (and relevant directional arrows)? Which detections/outputs are actually available to the Ram integration now, and what would need new perception/model or planning work?
+
+**Please investigate and clearly separate:**
+- **Perception:** whether these objects/states can be observed from the installed model outputs, existing log messages, other available cameras, road-model data or navigation/map speed information. Audit the exact installed build/schema instead of assuming upstream capabilities are present.
+- **Interpretation:** sign or signal relevance to *our* lane/intersection and direction, visibility/occlusion, temporary signs, stale observations, speed-limit changes, confidence and mismatch with maps.
+- **Behavior:** detection/display/driver warning vs actual permitted vehicle control. In particular, seeing a red or green light does **not** mean the truck can safely or legally perform automatic intersection stopping, starting or turning; factory ACC authority and OEM/Panda/driver-supervision/safety constraints still apply.
+- **Validation:** propose a passive observational test and false-positive/false-negative metrics on diverse real scenarios; do not claim supported stop-sign/light autopilot or deploy steering/braking code without independent review and the existing release gates.
+
+**Expected Claude reply:** concise capability matrix (currently available / not exposed / needs source check / proposed research), key source references, minimal evidence to collect, and priority relative to lane centering. Keep route IDs, VIN, coordinates, exact owner locations, raw camera/logs and credentials private. This is an information handoff, **not permission to modify the vehicle**.
