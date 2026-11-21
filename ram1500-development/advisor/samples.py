@@ -25,6 +25,7 @@ JOINED = (("carControl", "cc"), ("controlsState", "ctl"), ("carOutput", "co"),
 LANE_CHANGE_STATES = {"off": 0, "preLaneChange": 1, "laneChangeStarting": 2, "laneChangeFinishing": 3}
 LANE_CHANGE_DIRECTIONS = {"none": 0, "left": 1, "right": 2}
 GEAR_DRIVE = "drive"
+MODEL_STREAM = "drivingModelData"
 
 
 def _ns(seconds: float) -> int:
@@ -117,7 +118,9 @@ class StreamJoiner:
         self._latest = {}
         self._last_car_state_ns = None
         self._prev_sample_ns = None
-        self._model_done_ns = None
+        self._model_new = None             # model message that came since the last call of models_after
+        self._model_held = None            # model message newer than the last Sample
+        self._model_done_ns = None         # time of the last ModelMsg handed out
         self._spacings = deque(maxlen=MODEL_SPEED_SPACINGS)
 
     # --- messages in --------------------------------------------------------
@@ -127,12 +130,18 @@ class StreamJoiner:
         if held is not None and t_ns <= held[0]:
             return False
         self._latest[stream] = (t_ns, msg)
+        if stream == MODEL_STREAM:
+            self._model_new = (t_ns, msg)
         return True
 
     def forget_before(self, floor_ns: int) -> None:
         """Drop every held message older than `floor_ns` (left over from before the drive)."""
         for stream in [s for s, held in self._latest.items() if held[0] < floor_ns]:
             del self._latest[stream]
+        if self._model_new is not None and self._model_new[0] < floor_ns:
+            self._model_new = None
+        if self._model_held is not None and self._model_held[0] < floor_ns:
+            self._model_held = None
 
     def latest(self, stream: str):
         """(t_ns, msg) of the newest message held for `stream`, or None."""
@@ -190,19 +199,26 @@ class StreamJoiner:
             missing=tuple(short for stream, short in JOINED if found[stream] is None),
         )
 
-    def model_due(self, t_ns: int) -> ModelMsg | None:
-        """The new model message to process after the Sample at `t_ns`, if there is one.
+    def models_after(self, sample_ns: int | None) -> list:
+        """The new model messages to process now, oldest first. Call once per batch:
+        with the time of the Sample the batch gave, or None when it gave none.
 
-        A message is handed out once, after the first Sample at or after its
-        own time. One that is newer than the Sample stays held for the next
-        Sample; a newer message replaces a held one.
+        A message is handed out once, right after the first Sample at or after
+        its own time. One that is newer than the Sample of its batch is held
+        and goes out after the next Sample. At most one message is held: while
+        no Sample comes, a newer message replaces it.
         """
-        held = self._latest.get("drivingModelData")
-        if held is None or held[0] > t_ns:
-            return None
-        m_ns, msg = held
-        if self._model_done_ns is not None and m_ns <= self._model_done_ns:
-            return None
+        waiting = [m for m in (self._model_held, self._model_new) if m is not None]
+        self._model_held = self._model_new = None
+        out = []
+        for m_ns, msg in waiting:
+            if sample_ns is not None and m_ns <= sample_ns:
+                out.append(self._model_msg(m_ns, msg))
+            else:
+                self._model_held = (m_ns, msg)
+        return out
+
+    def _model_msg(self, m_ns: int, msg) -> ModelMsg:
         spacing = None if self._model_done_ns is None else (m_ns - self._model_done_ns) / 1e9
         self._model_done_ns = m_ns
         slow = self._stream_is_slow(spacing)

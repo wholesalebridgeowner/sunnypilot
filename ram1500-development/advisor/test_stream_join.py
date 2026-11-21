@@ -183,39 +183,66 @@ class FreshnessTests(unittest.TestCase):
 
 
 class ModelMessageTests(unittest.TestCase):
+    """models_after is called once per batch, with the time of the batch's Sample or None."""
+
     def test_each_new_message_is_handed_out_once_after_a_sample_at_or_after_it(self):
         j = StreamJoiner()
         j.offer("drivingModelData", T0, model(state="preLaneChange", direction="right"))
         j.sample(T0 + 20 * MS, car_state())
-        m = j.model_due(T0 + 20 * MS)
+        (m,) = j.models_after(T0 + 20 * MS)
         self.assertIsInstance(m, ModelMsg)
         self.assertEqual(m.t_m, T0 / 1e9)
         self.assertEqual((m.left_y, m.right_y, m.left_prob, m.right_prob), (-1.8, 1.7, 0.95, 0.9))
         self.assertEqual((m.lane_change_state, m.lane_change_direction), (1, 2))
-        self.assertIsNone(j.model_due(T0 + 20 * MS))
+        self.assertEqual(j.models_after(T0 + 20 * MS), [])
         j.offer("drivingModelData", T0, model())               # the same message offered again
-        self.assertIsNone(j.model_due(T0 + 120 * MS))
+        self.assertEqual(j.models_after(T0 + 120 * MS), [])
 
     def test_message_newer_than_the_sample_is_held_for_the_next_one(self):
         j = StreamJoiner()
         j.offer("drivingModelData", T0 + 8 * MS, model())
-        self.assertIsNone(j.model_due(T0))
-        self.assertEqual(j.model_due(T0 + 100 * MS).t_m, (T0 + 8 * MS) / 1e9)
+        self.assertEqual(j.models_after(T0), [])
+        self.assertEqual([m.t_m for m in j.models_after(T0 + 100 * MS)], [(T0 + 8 * MS) / 1e9])
 
-    def test_a_newer_message_replaces_the_held_one(self):
+    def test_held_message_and_the_one_of_the_next_batch_both_go_out_in_order(self):
         j = StreamJoiner()
         j.offer("drivingModelData", T0 + 8 * MS, model())
-        self.assertIsNone(j.model_due(T0))
+        self.assertEqual(j.models_after(T0), [])
+        j.offer("drivingModelData", T0 + 58 * MS, model())      # next batch: older than its carState
+        got = j.models_after(T0 + 100 * MS)
+        self.assertEqual([m.t_m for m in got], [(T0 + 8 * MS) / 1e9, (T0 + 58 * MS) / 1e9])
+        self.assertEqual(got[1].spacing, 0.05)
+
+    def test_held_message_goes_out_while_the_new_one_is_held_in_turn(self):
+        j = StreamJoiner()
+        j.offer("drivingModelData", T0 + 8 * MS, model())
+        self.assertEqual(j.models_after(T0), [])
+        j.offer("drivingModelData", T0 + 108 * MS, model())     # newer than this batch's carState again
+        self.assertEqual([m.t_m for m in j.models_after(T0 + 100 * MS)], [(T0 + 8 * MS) / 1e9])
+        self.assertEqual([m.t_m for m in j.models_after(T0 + 200 * MS)], [(T0 + 108 * MS) / 1e9])
+
+    def test_a_newer_message_replaces_the_held_one_when_no_sample_came_between(self):
+        j = StreamJoiner()
+        j.offer("drivingModelData", T0 + 8 * MS, model())
+        self.assertEqual(j.models_after(T0), [])
         j.offer("drivingModelData", T0 + 58 * MS, model())
-        self.assertEqual(j.model_due(T0 + 100 * MS).t_m, (T0 + 58 * MS) / 1e9)
-        self.assertIsNone(j.model_due(T0 + 200 * MS))
+        self.assertEqual(j.models_after(None), [])              # a batch without a Sample
+        self.assertEqual([m.t_m for m in j.models_after(T0 + 100 * MS)], [(T0 + 58 * MS) / 1e9])
+        self.assertEqual(j.models_after(T0 + 200 * MS), [])
+
+    def test_message_waits_through_batches_without_a_sample(self):
+        j = StreamJoiner()
+        j.offer("drivingModelData", T0, model())
+        self.assertEqual(j.models_after(None), [])
+        self.assertEqual(j.models_after(None), [])
+        self.assertEqual(len(j.models_after(T0 + 300 * MS)), 1)
 
     def test_interval_is_time_since_the_previous_handed_out_message_capped(self):
         j = StreamJoiner()
         got = []
         for offset in (0, 500 * MS, 1_000 * MS, 3_000 * MS):
             j.offer("drivingModelData", T0 + offset, model())
-            got.append(j.model_due(T0 + offset))
+            got.extend(j.models_after(T0 + offset))
         self.assertEqual([m.dt_m for m in got], [0.0, 0.5, 0.5, 1.0])
         self.assertEqual([m.spacing for m in got], [None, 0.5, 0.5, 2.0])
 
@@ -224,7 +251,13 @@ class ModelMessageTests(unittest.TestCase):
             with self.subTest(name=name):
                 j = StreamJoiner()
                 j.offer("drivingModelData", T0, model(direction=name))
-                self.assertEqual(j.model_due(T0).lane_change_direction, code)
+                self.assertEqual(j.models_after(T0)[0].lane_change_direction, code)
+
+    def test_forget_before_also_drops_a_waiting_model_message(self):
+        j = StreamJoiner()
+        j.offer("drivingModelData", T0 - 3 * SEC, model())
+        j.forget_before(T0 - 1 * SEC)
+        self.assertEqual(j.models_after(T0), [])
 
 
 class ModelStreamSpeedTests(unittest.TestCase):
@@ -233,11 +266,11 @@ class ModelStreamSpeedTests(unittest.TestCase):
         t = T0
         out = []
         j.offer("drivingModelData", t, model())
-        out.append(j.model_due(t))
+        out.extend(j.models_after(t))
         for spacing in spacings_ms:
             t += spacing * MS
             j.offer("drivingModelData", t, model())
-            out.append(j.model_due(t))
+            out.extend(j.models_after(t))
         return out
 
     def test_single_message_counts_as_fast(self):
