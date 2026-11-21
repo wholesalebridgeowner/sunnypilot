@@ -100,6 +100,78 @@ class SampleFieldsTests(unittest.TestCase):
         self.assertIsNone(s.torque_output)
 
 
+class ValueTypeTests(unittest.TestCase):
+    """Numbers and flags come as plain Python values (decoded messages) or as
+    numpy scalars (an input adapter that hands over table rows as they are)."""
+
+    def test_numpy_scalars_read_like_plain_values(self):
+        import numpy as np
+        j = StreamJoiner()
+        j.offer("carControl", T0, ns(latActive=np.bool_(True), actuators=ns(torque=np.float32(-0.5))))
+        j.offer("controlsState", T0, ns(desiredCurvature=np.float64(0.01), curvature=np.float32(0.25)))
+        j.offer("carOutput", T0, ns(actuatorsOutput=ns(torqueOutputCan=np.int64(-345))))
+        j.offer("radarState", T0, ns(leadOne=ns(status=np.bool_(True), dRel=np.float32(31.5))))
+        j.offer("drivingModelData", T0, ns(meta=ns(laneChangeState=np.int64(2), laneChangeDirection=np.int8(1)),
+                                           laneLineMeta=ns(leftY=np.float32(-1.5), rightY=np.float64(1.75),
+                                                           leftProb=np.float32(0.5), rightProb=np.float32(0.75))))
+        s = j.sample(T0, car_state(vEgo=np.float32(20.0), steeringAngleDeg=np.float32(1.5),
+                                   steeringTorque=np.int16(12), steeringTorqueEps=np.float64(-30.0),
+                                   steeringPressed=np.bool_(True), brakePressed=np.bool_(True),
+                                   cruiseState=ns(enabled=np.bool_(True)),
+                                   leftBlinker=np.bool_(False), rightBlinker=np.bool_(True)))
+        self.assertIsNotNone(s)
+        self.assertEqual((s.v_ego, s.steering_angle_deg, s.steering_torque, s.steering_torque_eps),
+                         (20.0, 1.5, 12.0, -30.0))
+        for value in (s.v_ego, s.steering_torque, s.actuators_torque, s.torque_output, s.lead_distance_m):
+            self.assertIs(type(value), float)
+        self.assertIs(s.steering_pressed, True)
+        self.assertIs(s.brake_pressed, True)
+        self.assertIs(s.cruise_enabled, True)
+        self.assertIs(s.blinker, True)
+        self.assertIs(s.lat_active, True)
+        self.assertEqual((s.actuators_torque, s.desired_curvature, s.actual_curvature, s.torque_output),
+                         (-0.5, 0.01, 0.25, -345.0))
+        self.assertIs(s.lead_present, True)
+        self.assertEqual(s.lead_distance_m, 31.5)
+        self.assertEqual(s.lane_change_state, 2)
+        (m,) = j.models_after(T0)
+        self.assertEqual((m.left_y, m.right_y, m.left_prob, m.right_prob), (-1.5, 1.75, 0.5, 0.75))
+        self.assertEqual((m.lane_change_state, m.lane_change_direction), (2, 1))
+
+    def test_numpy_false_and_non_finite_numbers(self):
+        import numpy as np
+        j = StreamJoiner()
+        j.offer("carControl", T0, ns(latActive=np.bool_(False), actuators=ns(torque=np.float32("nan"))))
+        j.offer("radarState", T0, ns(leadOne=ns(status=np.bool_(False), dRel=np.float32(5.0))))
+        s = j.sample(T0, car_state(steeringPressed=np.bool_(False)))
+        self.assertIs(s.lat_active, False)                   # present and false, not missing
+        self.assertNotIn("cc", s.missing)
+        self.assertIsNone(s.actuators_torque)
+        self.assertIs(s.steering_pressed, False)
+        self.assertIs(s.lead_present, False)
+        self.assertIsNone(StreamJoiner().sample(T0, car_state(vEgo=np.float32("nan"))))
+        self.assertIsNone(StreamJoiner().sample(T0, car_state(vEgo=np.float64("inf"))))
+
+    def test_nothing_else_counts_as_a_number_or_a_flag(self):
+        import numpy as np
+        for speed in (True, np.bool_(True), "20.0", None, [20.0], 2 + 0j):
+            with self.subTest(speed=speed):
+                self.assertIsNone(StreamJoiner().sample(T0, car_state(vEgo=speed)))
+        for flag in (1, 1.0, "true", np.int64(1), [True], None):
+            with self.subTest(flag=flag):
+                j = StreamJoiner()
+                j.offer("carControl", T0, ns(latActive=flag))
+                s = j.sample(T0, car_state(steeringPressed=flag, leftBlinker=flag))
+                self.assertIs(s.lat_active, False)           # only a real True switches anything on
+                self.assertIs(s.steering_pressed, False)
+                self.assertIs(s.blinker, False)
+
+    def test_plain_integers_are_numbers(self):
+        s = StreamJoiner().sample(T0, car_state(vEgo=20, steeringTorque=-7))
+        self.assertEqual((s.v_ego, s.steering_torque), (20.0, -7.0))
+        self.assertIs(type(s.v_ego), float)
+
+
 class ListReader:
     """Stands in for a decoded list as a message decoder hands it over: it can be
     iterated and indexed, and it is neither a list nor a tuple."""

@@ -6,11 +6,15 @@ old (or too far ahead) is MISSING for that Sample, never "false". Model
 messages have a second path: every new one becomes a ModelMsg exactly once.
 
 Works on any objects with the cereal attribute names, so tests use
-SimpleNamespace and the Comma agent uses the real decoded messages.
+SimpleNamespace and the Comma agent uses the real decoded messages. Numbers
+and flags may be plain Python values or numpy scalars. A flag is on only for
+a real True; any other value reads as off. A value that is not a finite
+number reads as unknown.
 """
 from __future__ import annotations
 
 import math
+import numbers
 from collections import deque
 from dataclasses import dataclass
 
@@ -45,17 +49,28 @@ def get(obj, *names):
 
 
 def _number(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return None
-    return float(value)
+    """A finite number as a float, else None. Plain numbers and numpy scalars count; a bool does not."""
+    if type(value) is not float:
+        if isinstance(value, bool) or not isinstance(value, numbers.Real):
+            return None
+        value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _true(value) -> bool:
+    """True only for a real True: Python's own, or numpy's."""
+    if value is True:
+        return True
+    kind = type(value)
+    return kind.__module__ == "numpy" and kind.__name__ in ("bool", "bool_") and bool(value)
 
 
 def _code(value, table):
     """Enum value (name, or the number itself) to its code; None when unknown."""
     if value is None:
         return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value if value in table.values() else None
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        return int(value) if value in table.values() else None
     return table.get(str(value))
 
 
@@ -178,7 +193,7 @@ class StreamJoiner:
         found = {stream: self._fresh(stream, t_ns) for stream, _ in JOINED}
         control, controls_state = found["carControl"], found["controlsState"]
         lead = get(found["radarState"], "leadOne")
-        lead_present = get(lead, "status") is True
+        lead_present = _true(get(lead, "status"))
         model = found["drivingModelData"]
         alerts = None if found[ALERT_STREAM] is None else self._alerts
         if alerts is None:
@@ -188,12 +203,12 @@ class StreamJoiner:
             steering_angle_deg=_number(get(car_state, "steeringAngleDeg")) or 0.0,
             steering_torque=_number(get(car_state, "steeringTorque")) or 0.0,
             steering_torque_eps=_number(get(car_state, "steeringTorqueEps")) or 0.0,
-            steering_pressed=get(car_state, "steeringPressed") is True,
-            brake_pressed=get(car_state, "brakePressed") is True,
-            cruise_enabled=get(car_state, "cruiseState", "enabled") is True,
+            steering_pressed=_true(get(car_state, "steeringPressed")),
+            brake_pressed=_true(get(car_state, "brakePressed")),
+            cruise_enabled=_true(get(car_state, "cruiseState", "enabled")),
             gear_drive=str(get(car_state, "gearShifter")) == GEAR_DRIVE,
-            blinker=get(car_state, "leftBlinker") is True or get(car_state, "rightBlinker") is True,
-            lat_active=None if control is None else get(control, "latActive") is True,
+            blinker=_true(get(car_state, "leftBlinker")) or _true(get(car_state, "rightBlinker")),
+            lat_active=None if control is None else _true(get(control, "latActive")),
             actuators_torque=_number(get(control, "actuators", "torque")),
             desired_curvature=_number(get(controls_state, "desiredCurvature")),
             actual_curvature=_number(get(controls_state, "curvature")),
