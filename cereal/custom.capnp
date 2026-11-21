@@ -174,6 +174,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     pedalPressedAlertOnly @16;
     laneTurnLeft @17;
     laneTurnRight @18;
+    rampilotBlindSpotUnavailable @19;  # RamPilot: blind-spot support did not start this drive
   }
 }
 

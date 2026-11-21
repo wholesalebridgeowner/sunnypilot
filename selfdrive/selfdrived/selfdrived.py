@@ -45,6 +45,7 @@ ButtonType = car.CarState.ButtonEvent.Type
 SafetyModel = car.CarParams.SafetyModel
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+RAMPILOT_BSM_NOTICE_S = 15.  # RamPilot: seconds the blind-spot-off notice shows after startup
 
 
 class SelfdriveD(CruiseHelper):
@@ -60,6 +61,9 @@ class SelfdriveD(CruiseHelper):
       cloudlog.info("selfdrived got CarParams")
     else:
       self.CP = CP
+
+    # RamPilot: this drive started without blind-spot support (BSM_1 not seen at startup)
+    self.rampilot_bsm_off = self.CP.carFingerprint == "RAM_1500_5TH_GEN" and not self.CP.enableBsm
 
     if CP_SP is None:
       cloudlog.info("selfdrived is waiting for CarParamsSP")
@@ -300,6 +304,12 @@ class SelfdriveD(CruiseHelper):
     elif self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.laneChangeStarting,
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
+
+    # RamPilot: blind-spot support did not start this drive; say so at startup and whenever a lane change is pending
+    if self.rampilot_bsm_off and (self.sm.frame < int(RAMPILOT_BSM_NOTICE_S / DT_CTRL) or
+                                  self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.preLaneChange,
+                                                                               LaneChangeState.laneChangeStarting)):
+      self.events_sp.add(custom.OnroadEventSP.EventName.rampilotBlindSpotUnavailable)
 
     # Handle lane turn
     lane_turn_direction = self.sm['modelDataV2SP'].laneTurnDirection

@@ -134,6 +134,11 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.WARNING: NoEntryAlert("Pedal Pressed")
   },
 
+  # RamPilot: blind-spot support did not start for this drive (opendbc car/chrysler/rampilot_bsm.py)
+  EventNameSP.rampilotBlindSpotUnavailable: {
+    ET.PERMANENT: NormalPermanentAlert("Blind Spot Monitoring Off", "Check mirrors before changing lanes", duration=1.0),
+  },
+
   EventNameSP.laneTurnLeft: {
     ET.WARNING: Alert(
       "Turning Left",
