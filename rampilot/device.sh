@@ -2,16 +2,14 @@
 # RamPilot install and rollback on the comma three. Runs ON the device, as the comma user.
 #
 #   device.sh preflight
-#   device.sh install <bundle> <commit-sha> [--reboot]
+#   device.sh install <bundle> <commit-sha> [--ui-sha256 HASH] [--reboot]
 #   device.sh rollback [--reboot]
 #   device.sh status
 #   device.sh verify        (after the reboot: truck in Park, ignition on)
 #
 # install  fetches the RamPilot branch from a git bundle copied to the device, checks it is exactly the
-#          expected commit, sits on the pinned baseline, and changes only text files outside Panda, safety,
-#          model and hardware paths. It records the current state, turns sunnypilot's updater off
-#          (DisableUpdates) and sets aside any staged update so the launcher cannot swap it in, then checks
-#          out the branch. Nothing changes until every check passes.
+#          expected commit and sits on the pinned baseline. The optional screen executable also requires
+#          an independent SHA-256. After checkout it disables updates and sets aside any staged update.
 # rollback returns to the recorded branch and baseline commit and restores DisableUpdates.
 # Neither touches Panda firmware, /data/continue.sh or the advisor. Both refuse while onroad.
 set -euo pipefail
@@ -29,7 +27,7 @@ DENY_RE='^(panda/|opendbc_repo/opendbc/safety/|selfdrive/modeld/models/|sunnypil
 MARKER="$STAGING_ROOT/finalized/.overlay_consistent"
 # The only compiled file a RamPilot change may replace: the screen program, pinned by SHA-256 in
 # rampilot/ALLOWED_BINARIES ("<sha256>  <path>") inside the candidate commit.
-ALLOWED_BINARY_PATHS="${ALLOWED_BINARY_PATHS:-selfdrive/ui/ui}"
+UI_PATH=selfdrive/ui/ui
 VERIFY_PROCS="${VERIFY_PROCS:-selfdrive.controls.controlsd selfdrive.car.card selfdrive.selfdrived.selfdrived selfdrive.locationd.paramsd selfdrive.ui.soundd ^\./ui$}"
 VERIFY_WAIT_S="${VERIFY_WAIT_S:-30}"
 LOG_DIR="${LOG_DIR:-/data/log}"
@@ -39,8 +37,9 @@ say() { echo "$*"; }
 param_get() { [ -f "$PARAMS_DIR/$1" ] && tr -d '\0\n' < "$PARAMS_DIR/$1" || echo ""; }
 param_put() {  # atomic, the same on-disk form Params uses
   local tmp; tmp="$(mktemp "$PARAMS_DIR/.tmp_$1.XXXXXX")"
-  printf '%s' "$2" > "$tmp" && sync "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "$PARAMS_DIR/$1"
+  if ! printf '%s' "$2" > "$tmp" || ! sync "$tmp" || ! mv -Tf "$tmp" "$PARAMS_DIR/$1"; then
+    rm -f "$tmp"; return 1
+  fi
 }
 git_op() { git -C "$OP_DIR" "$@"; }
 head_sha() { git_op rev-parse HEAD; }
@@ -95,16 +94,29 @@ ensure_rollback_record() {
 record_installed_target() {
   local state
   state="$(mktemp -d "$STATE_DIR/state-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
-  { cat "$STATE_DIR/rollback.env"; echo "target=$1"; } > "$state/state.env"
-  ln -s "$(basename "$state")" "$state/next-link"
-  mv -Tf "$state/next-link" "$STATE_DIR/last"
+  if ! cat "$STATE_DIR/rollback.env" > "$state/state.env" ||
+     ! printf 'target=%s\n' "$1" >> "$state/state.env" ||
+     ! ln -s "$(basename "$state")" "$state/next-link" ||
+     ! mv -Tf "$state/next-link" "$STATE_DIR/last"; then
+    rm -f "$state/next-link" "$state/state.env"
+    rmdir "$state"
+    return 1
+  fi
   say "recorded state in $state"
+}
+
+require_offroad() {
+  local flag="$PARAMS_DIR/IsOnroad"
+  [ -f "$flag" ] && [ -r "$flag" ] || die "IsOnroad is missing or unreadable"
+  cmp -s "$flag" <(printf 0) && return 0
+  if cmp -s "$flag" <(printf 1); then die "the truck is onroad; park, turn it off and wait for offroad"; fi
+  die "IsOnroad is unreadable or malformed; require exactly 0"
 }
 
 preflight() {
   [ -d "$OP_DIR/.git" ] || die "$OP_DIR is not a git checkout"
   [ -d "$PARAMS_DIR" ] || die "params directory $PARAMS_DIR missing"
-  [ "$(param_get IsOnroad)" != "1" ] || die "the truck is onroad; park, turn it off and wait for offroad"
+  require_offroad
   local dirty; dirty="$(git_op status --porcelain --untracked-files=no)"
   [ -z "$dirty" ] || die "$OP_DIR has uncommitted changes: $(echo "$dirty" | head -5 | tr '\n' ' ')"
   local free_mb; free_mb="$(df -Pm "$OP_DIR" | awk 'NR==2 {print $4}')"
@@ -112,57 +124,126 @@ preflight() {
   say "preflight ok: branch=$(head_branch) head=$(head_sha) DisableUpdates=$(param_get DisableUpdates) free_mb=$free_mb staged_update=$([ -f "$MARKER" ] && echo yes || echo no)"
 }
 
-check_candidate() {  # $1 = sha already fetched
-  local sha="$1" bad binary
+check_candidate() {  # $1 = sha already available, $2 = externally approved UI digest, if any
+  local sha="$1" approved="$2" bad binary expected actual ui_entry
   git_op merge-base --is-ancestor "$BASELINE_SHA" "$sha" || die "$sha does not contain baseline $BASELINE_SHA"
   bad="$(git_op diff --name-only "$BASELINE_SHA" "$sha" | grep -E "$DENY_RE" || true)"
   [ -z "$bad" ] || die "candidate touches protected paths: $(echo "$bad" | tr '\n' ' ')"
-  binary="$(git_op diff --numstat "$BASELINE_SHA" "$sha" | awk '$1 == "-" || $2 == "-" {print $3}')"
-  local b expected actual
-  for b in $binary; do
-    case " $ALLOWED_BINARY_PATHS " in *" $b "*) ;; *) die "candidate changes binary files: $b" ;; esac
-    expected="$(git_op show "$sha:rampilot/ALLOWED_BINARIES" 2>/dev/null | awk -v p="$b" '$2 == p {print $1}')"
-    actual="$(git_op show "$sha:$b" | sha256sum | cut -c1-64)"
-    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "binary $b (sha256 $actual) is not pinned in rampilot/ALLOWED_BINARIES"
-    say "pinned binary ok: $b sha256 $actual"
-  done
+  binary="$(git_op diff --no-renames --numstat "$BASELINE_SHA" "$sha" -- . ":(exclude)$UI_PATH" | awk -F '\t' '$1 == "-" || $2 == "-" {print $3}')"
+  [ -z "$binary" ] || die "candidate changes binary files: $binary"
+  ui_entry="$(git_op ls-tree "$sha" -- "$UI_PATH")"
+  if [ "$ui_entry" != "$(git_op ls-tree "$BASELINE_SHA" -- "$UI_PATH")" ]; then
+    [[ "$ui_entry" == '100755 blob '* ]] || die "$UI_PATH must have Git mode 100755"
+    [ -n "$approved" ] || die "changed $UI_PATH requires --ui-sha256 from the reviewed artifact"
+    expected="$(git_op cat-file blob "$sha:rampilot/ALLOWED_BINARIES" 2>/dev/null | awk -v p="$UI_PATH" 'NF == 2 && $2 == p {print $1}')" ||
+      die "$UI_PATH is not pinned in rampilot/ALLOWED_BINARIES"
+    actual="$(git_op cat-file blob "$sha:$UI_PATH" | sha256sum | cut -c1-64)"
+    [ "$actual" = "$expected" ] || die "$UI_PATH is not pinned to its blob digest in rampilot/ALLOWED_BINARIES"
+    [ "$actual" = "$approved" ] || die "independent --ui-sha256 does not match $UI_PATH"
+    say "pinned binary ok: $UI_PATH sha256 $actual"
+  elif [ -n "$approved" ]; then
+    die "--ui-sha256 supplied but the candidate does not change $UI_PATH"
+  fi
   say "changed files from baseline:"
   git_op diff --stat "$BASELINE_SHA" "$sha" | sed 's/^/  /'
 }
 
-install() {
-  local bundle="${1:-}" sha="${2:-}" reboot="${3:-}"
-  [ -n "$bundle" ] && [ -n "$sha" ] || die "usage: install <bundle> <commit-sha> [--reboot]"
+check_installed_ui() {
+  [ -n "$1" ] || return 0
+  local path="$OP_DIR/$UI_PATH"
+  [[ -f "$path" && ! -L "$path" && -x "$path" ]] || die "checked-out $UI_PATH is not a regular executable"
+  [ "$(sha256sum "$path" | cut -c1-64)" = "$1" ] || die "checked-out $UI_PATH does not match the approved digest"
+}
+
+install() (
+  local bundle="${1:-}" sha="${2:-}" approved="" reboot=""
+  [ -n "$bundle" ] && [ -n "$sha" ] || die "usage: install <bundle> <commit-sha> [--ui-sha256 HASH] [--reboot]"
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "commit sha must be the full 40-character hash"
+  shift 2
+  while (($#)); do
+    case "$1" in
+      --reboot) [ -z "$reboot" ] || die "duplicate --reboot"; reboot=--reboot ;;
+      --ui-sha256)
+        [ -z "$approved" ] || die "duplicate --ui-sha256"
+        [[ "${2:-}" =~ ^[0-9a-fA-F]{64}$ ]] || die "--ui-sha256 needs a 64-character hex digest"
+        approved="${2,,}"; shift ;;
+      *) die "unknown install option: $1" ;;
+    esac
+    shift
+  done
   preflight
-  if [ "$(head_sha)" = "$sha" ]; then
-    # Recover if checkout completed just before the process stopped.
-    if [ -f "$STATE_DIR/rollback.env" ] && ! grep -Fxq "target=$sha" "$STATE_DIR/last/state.env" 2>/dev/null; then
-      record_installed_target "$sha"
-    fi
-    say "already on $sha; nothing to do"; return 0
+  local original_head original_branch original_target bundle_head
+  original_head="$(head_sha)"; original_branch="$(head_branch)"
+  if [ "$original_head" != "$sha" ]; then
+    [ -f "$bundle" ] || die "bundle $bundle not found"
+    bundle="$(readlink -f "$bundle")"
+    git_op bundle verify "$bundle" >/dev/null 2>&1 || die "bundle failed verification (missing baseline objects or damaged file)"
+    bundle_head="$(git bundle list-heads "$bundle" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+    [ -n "$bundle_head" ] || die "bundle has no $TARGET_BRANCH branch"
+    [ "$bundle_head" = "$sha" ] || die "bundle branch is $bundle_head, expected $sha"
+    git_op fetch -q --no-write-fetch-head "$bundle" "refs/heads/$TARGET_BRANCH" || die "could not fetch $TARGET_BRANCH from the bundle"
   fi
-  [ -f "$bundle" ] || die "bundle $bundle not found"
-  git_op bundle verify "$(readlink -f "$bundle")" >/dev/null 2>&1 || die "bundle failed verification (missing baseline objects or damaged file)"
-  git bundle list-heads "$(readlink -f "$bundle")" | grep -q " refs/heads/$TARGET_BRANCH$" || die "bundle has no $TARGET_BRANCH branch"
-  git_op fetch -q "$(readlink -f "$bundle")" "+refs/heads/$TARGET_BRANCH:refs/rampilot/candidate" || die "could not fetch $TARGET_BRANCH from the bundle"
-  [ "$(git_op rev-parse refs/rampilot/candidate)" = "$sha" ] || die "bundle branch is $(git_op rev-parse refs/rampilot/candidate), expected $sha"
-  check_candidate "$sha"
+  check_candidate "$sha" "$approved"
+  if [ "$original_head" = "$sha" ]; then
+    check_installed_ui "$approved"
+    if [ ! -f "$STATE_DIR/rollback.env" ] || { grep -Fxq "target=$sha" "$STATE_DIR/last/state.env" 2>/dev/null &&
+         cmp -s "$PARAMS_DIR/DisableUpdates" <(printf 1) && [ ! -e "$MARKER" ]; }; then
+      say "already on $sha; nothing to do"; return 0
+    fi
+  fi
+  original_target="$(git_op rev-parse --verify -q "refs/heads/$TARGET_BRANCH" || true)"
+  local new_record=0 changed_updates=0 moved_marker="" prior_updates="" had_updates=0
+  [ -f "$STATE_DIR/rollback.env" ] || new_record=1
+  if [ -e "$PARAMS_DIR/DisableUpdates" ]; then
+    [ -f "$PARAMS_DIR/DisableUpdates" ] && [ -r "$PARAMS_DIR/DisableUpdates" ] || die "cannot read DisableUpdates"
+    prior_updates="$(param_get DisableUpdates)"; had_updates=1
+  fi
 
+  # Restore the configuration of this particular attempt on an ordinary error.
+  # The original baseline record stays available if that recovery itself fails.
+  undo_failed_install() {
+    local failed=0
+    if [ -n "$moved_marker" ]; then mv -T "$moved_marker" "$MARKER" || failed=1; fi
+    if ((changed_updates)); then
+      if ((had_updates)); then param_put DisableUpdates "$prior_updates" || failed=1
+      else rm -f "$PARAMS_DIR/DisableUpdates" || failed=1; fi
+    fi
+    if [ "$(head_sha)" != "$original_head" ] || [ "$(head_branch)" != "$original_branch" ]; then
+      if [ "$original_branch" = HEAD ]; then git_op checkout -q --detach "$original_head" || failed=1
+      else git_op checkout -q -B "$original_branch" "$original_head" || failed=1; fi
+      if [ "$original_branch" != "$TARGET_BRANCH" ] && ((!failed)); then
+        if [ -n "$original_target" ]; then git_op update-ref "refs/heads/$TARGET_BRANCH" "$original_target" "$sha" || failed=1
+        else git_op update-ref -d "refs/heads/$TARGET_BRANCH" "$sha" || failed=1; fi
+      fi
+    fi
+    if ((failed)); then say "install recovery incomplete; original rollback record retained" >&2
+    elif ((new_record)); then rm -f "$STATE_DIR/rollback.env"; fi
+  }
+  require_offroad
+  trap 'if (( $? != 0 )); then undo_failed_install; fi' EXIT
   ensure_rollback_record
-
-  param_put DisableUpdates 1
-  if [ -f "$MARKER" ]; then mv -f "$MARKER" "$MARKER.rampilot-set-aside"; say "set aside staged update"; fi
-  git_op checkout -q -B "$TARGET_BRANCH" "$sha"
+  if [ "$original_head" != "$sha" ]; then
+    git_op checkout -q -B "$TARGET_BRANCH" "$sha" || die "checkout failed for $sha"
+  fi
   [ "$(head_sha)" = "$sha" ] || die "checkout did not land on $sha"
+  check_installed_ui "$approved"
+  if ! cmp -s "$PARAMS_DIR/DisableUpdates" <(printf 1); then param_put DisableUpdates 1; changed_updates=1; fi
+  if [ -f "$MARKER" ]; then
+    local aside="$MARKER.rampilot-set-aside"
+    if [ -e "$aside" ]; then aside="$(mktemp "$aside.XXXXXX")"; fi
+    mv -T "$MARKER" "$aside"; moved_marker="$aside"
+    say "set aside staged update"
+  fi
   record_installed_target "$sha"
+  trap - EXIT
   say "installed $TARGET_BRANCH at $sha; DisableUpdates=1. Reboot to start it."
   [ "$reboot" = "--reboot" ] && $REBOOT_CMD
   return 0
-}
+)
 
 rollback() {
   local reboot="${1:-}" state="$STATE_DIR/rollback.env"
+  [[ "$#" == 0 || ( "$#" == 1 && "$reboot" == --reboot ) ]] || die "usage: rollback [--reboot]"
   preflight
   if [ ! -f "$state" ]; then
     if [ -f "$STATE_DIR/last/rolled-back" ]; then
@@ -176,6 +257,7 @@ rollback() {
   head="$(grep '^head=' "$state" | cut -d= -f2-)"; disable_updates="$(grep '^disable_updates=' "$state" | cut -d= -f2-)"
   [ "$head" = "$BASELINE_SHA" ] || die "recorded pre-install head $head is not the baseline $BASELINE_SHA; restore by hand"
   git_op cat-file -e "$head^{commit}" || die "baseline commit $head is missing from the checkout"
+  require_offroad
   if [ "$branch" = "HEAD" ] || [ -z "$branch" ]; then git_op checkout -q --detach "$head"; else git_op checkout -q -B "$branch" "$head"; fi
   [ "$(head_sha)" = "$head" ] || die "rollback did not land on $head"
   if [ -n "$disable_updates" ]; then param_put DisableUpdates "$disable_updates"; else rm -f "$PARAMS_DIR/DisableUpdates"; fi
@@ -218,6 +300,9 @@ status() {
 }
 
 cmd="${1:-}"; shift || true
+if [[ "$cmd" == preflight || "$cmd" == status || "$cmd" == verify ]]; then
+  (($# == 0)) || die "$cmd takes no arguments"
+fi
 if [[ "$cmd" == install || "$cmd" == rollback ]]; then
   [ -d "$OP_DIR/.git" ] || die "$OP_DIR is not a git checkout"
   exec 9<"$OP_DIR/.git"
@@ -229,5 +314,5 @@ case "$cmd" in
   rollback) rollback "$@" ;;
   status) status ;;
   verify) verify ;;
-  *) echo "usage: $0 {preflight|install <bundle> <sha> [--reboot]|rollback [--reboot]|status|verify}" >&2; exit 64 ;;
+  *) echo "usage: $0 {preflight|install <bundle> <sha> [--ui-sha256 HASH] [--reboot]|rollback [--reboot]|status|verify}" >&2; exit 64 ;;
 esac

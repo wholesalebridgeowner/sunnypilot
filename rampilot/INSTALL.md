@@ -6,6 +6,7 @@
 - The truck is parked, in Park, and switched off, so the comma is offroad.
 - The comma is on home or cabin Wi-Fi. SSH does not work over the phone hotspot.
 - The comma's address and SSH access are known.
+- For a release that changes `selfdrive/ui/ui`, retain the SHA-256 of the independently reviewed screen executable and its approval alongside the approved commit. Use that recorded digest during installation.
 
 ## 1. Copy the bundle and script (laptop)
 
@@ -27,15 +28,15 @@ bash device.sh preflight
 bash device.sh install rampilot.bundle <SHA> --reboot
 ```
 
-Install refuses, and changes nothing, if:
-- the truck is onroad
-- the checkout has local edits
-- the bundle is not exactly `<SHA>`
-- the branch does not contain the baseline
-- the change touches Panda, safety, model or hardware paths
-- the change includes binary files
+For a release that changes the screen executable, use the full approved commit and the separately recorded 64-digit screen digest.
 
-The first install records the baseline branch, commit and current `DisableUpdates` value. Upgrades reuse that rollback record. The installer turns the sunnypilot updater off, sets aside any staged update and checks out `rampilot-tici`. A successful checkout records the new commit as the target for verification.
+```bash
+bash device.sh install rampilot.bundle <SHA> --ui-sha256 <APPROVED_UI_SHA256> --reboot
+```
+
+Installation and rollback require a readable `IsOnroad` file containing exactly `0`. The installer checks the clean tracked checkout, the bundle branch against the supplied commit, baseline ancestry and protected paths. A changed screen executable must have Git mode `100755`. Its Git blob and the entry in `rampilot/ALLOWED_BINARIES` must match the independently supplied digest. The installer also checks the executable on disk. Other binary changes are refused.
+
+The first install records the baseline branch, commit and current `DisableUpdates` value. Upgrades reuse that rollback record. The installer checks out the target before disabling the updater and setting aside a staged update. A successful install records the new target for verification. A checkout failure leaves the previous checkout, updater setting and staged marker in place. If an install is interrupted, retry the same approved commit and screen digest, if applicable, before rebooting.
 
 ## 3. Verify (truck in Park, ignition on)
 
@@ -43,7 +44,7 @@ The first install records the baseline branch, commit and current `DisableUpdate
 bash /data/ram-diag/rampilot/device.sh verify
 ```
 
-This checks that the comma runs the installed commit and that controlsd, card, selfdrived, paramsd and soundd stay up for 30 s. It also shows the blind-spot startup log line.
+This checks that the checkout matches the installed commit and that the same process IDs for controlsd, card, selfdrived, paramsd, soundd and the native UI are present at the start and end of a 30-second interval. It also shows the blind-spot startup log line.
 
 ## Going back
 
