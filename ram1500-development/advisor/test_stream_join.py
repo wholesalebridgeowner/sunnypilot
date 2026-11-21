@@ -219,7 +219,8 @@ class AlertListFormTests(unittest.TestCase):
 
     def test_form_that_is_not_understood_is_missing_never_empty(self):
         for body in (None, 7, "belowSteerSpeed", b"belowSteerSpeed", {"other": []}, ns(other=[]), object(),
-                     [ns(other="belowSteerSpeed")], ListReader([None]), ns(onroadEvents=7)):
+                     [ns(other="belowSteerSpeed")], ListReader([None]), ns(onroadEvents=7),
+                     "", b"", {}, ns(onroadEvents="")):                 # empty, but not an alert list
             with self.subTest(body=body):
                 s = self.sample(body)
                 self.assertIsNone(s.alerts)
