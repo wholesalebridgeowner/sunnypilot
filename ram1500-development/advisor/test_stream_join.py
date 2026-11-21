@@ -302,6 +302,14 @@ class FreshnessTests(unittest.TestCase):
         self.assertIsNone(late.alerts)
         self.assertIn("ev", late.missing)
 
+    def test_alert_list_slightly_newer_than_car_state_is_used(self):
+        for offset_ms, expect in ((50, frozenset({"belowSteerSpeed"})), (100, frozenset({"belowSteerSpeed"})),
+                                  (101, None)):
+            with self.subTest(offset_ms=offset_ms):
+                j = StreamJoiner()
+                j.offer("onroadEvents", T0 + offset_ms * MS, [ns(name="belowSteerSpeed")])
+                self.assertEqual(j.sample(T0, car_state()).alerts, expect)
+
     def test_model_and_lead_limits_follow_the_log_kind(self):
         for kwargs, expect_state, expect_lead in (({}, None, False),
                                                   ({"fresh_model_s": 1.25, "fresh_lead_s": 0.75}, 0, True)):
@@ -399,6 +407,15 @@ class ModelMessageTests(unittest.TestCase):
         j.offer("drivingModelData", T0 - 3 * SEC, model())
         j.forget_before(T0 - 1 * SEC)
         self.assertEqual(j.models_after(T0), [])
+
+    def test_forget_before_also_drops_a_held_model_message(self):
+        for age_ms, handed_out in ((3_000, 0), (500, 1)):
+            with self.subTest(age_ms=age_ms):
+                j = StreamJoiner()
+                j.offer("drivingModelData", T0 - age_ms * MS, model())
+                self.assertEqual(j.models_after(None), [])          # a batch without a Sample: the message is held
+                j.forget_before(T0 - 1 * SEC)
+                self.assertEqual(len(j.models_after(T0)), handed_out)
 
 
 class ModelStreamSpeedTests(unittest.TestCase):

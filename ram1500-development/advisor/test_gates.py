@@ -1,4 +1,5 @@
 """GateTracker: the shared flags of every Sample, and when each becomes known."""
+import random
 import unittest
 
 from gates import GateTracker
@@ -80,6 +81,16 @@ class SteeringOnTests(unittest.TestCase):
         self.assertFalse(any(g.forced_zero for g in flags[20:]))        # passed once: steered at every speed after
         self.assertTrue(all(g.steering for g in flags[20:]))
 
+    def test_latch_falls_back_when_the_gear_leaves_drive(self):
+        def change(i, t):
+            if i < 5 or 20 <= i < 25:
+                return {"gear_drive": False, "v_ego": 0.0, "lat_active": False}       # Park
+            return {"v_ego": 20.0 if i < 15 else 10.0}                                # Drive
+        flags, _ = run(stream(grid(35), change, alerts=None))
+        self.assertFalse(any(g.forced_zero for g in flags[5:20]))       # at speed once: steered at 10 m/s too
+        self.assertTrue(all(g.forced_zero for g in flags[25:]))         # after Park the truck has to pass it again
+        self.assertFalse(any(g.steering for g in flags[25:]))
+
     def test_alert_list_wins_over_the_latch(self):
         def change(i, t):
             if i < 5:
@@ -128,6 +139,11 @@ class DriverTests(unittest.TestCase):
         for period_ms in (88, 130):
             with self.subTest(period_ms=period_ms):
                 self.assertEqual(self.driver([True, True, True], period_ms), [False, True, True])
+
+    def test_span_of_exactly_the_minimum_counts(self):
+        at = lambda *offsets_ms: [T0 + ms * MS for ms in offsets_ms]
+        self.assertEqual(self.driver([True, True, True], times=at(0, 80, 160)), [False, True, True])
+        self.assertEqual(self.driver([True, True, True], times=at(0, 79, 160)), [False, False, True])
 
     def test_span_is_by_time_stamp_not_by_count(self):
         self.assertEqual(self.driver([True, True, True, True], period_ms=30), [False, False, False, True])
@@ -256,6 +272,19 @@ class StraightTests(unittest.TestCase):
         self.assertTrue(all(g.straight for g in flags[40:89]))
         self.assertTrue(all(g.straight for g in flags[211:self.N - 40]))
 
+    def test_sample_five_seconds_away_is_inside_the_window_whatever_the_jitter(self):
+        # Time stamps jitter by about a millisecond. One sharp Sample makes the mean of every
+        # window that holds it too large, so it shows exactly which Samples have it in their window.
+        rng = random.Random(5)
+        for trial in range(20):
+            times = [T0 + i * 100 * MS + rng.randrange(-MS, MS + 1) for i in range(self.N)]
+            flags, _ = run(stream(times, lambda i, t: {"desired_curvature": 0.05} if i == 150 else None))
+            straight = [g.straight for g in flags]
+            with self.subTest(trial=trial):
+                self.assertFalse(any(straight[100:201]))                # up to 5.0 s away, both sides: inside
+                self.assertTrue(all(straight[40:100]))                  # 5.1 s away: outside
+                self.assertTrue(all(straight[201:self.N - 40]))
+
     def test_left_and_right_cancel(self):
         flags = self.straight(lambda i, t: {"desired_curvature": 0.001 if i < 150 else -0.001})
         self.assertTrue(flags[150].straight)                            # 50 before, 51 from here on
@@ -284,6 +313,14 @@ class StraightTests(unittest.TestCase):
         self.assertTrue(flags[149 - 31].straight)                       # 5.05 s back and 3.1 s forward exist
         self.assertFalse(flags[149 - 27].straight)                      # only 2.7 s forward: under 8.0 s
         self.assertTrue(flags[149 - 27].clean)                          # more than 2.0 s before the gap Sample
+
+
+    def test_after_a_gap_only_what_arrived_after_it_counts(self):
+        times = grid(150) + grid(150, start_ns=T0 + 149 * 100 * MS + 300 * MS)
+        flags, _ = run(stream(times))
+        self.assertTrue(flags[150].sample.gap)
+        self.assertFalse(any(g.straight for g in flags[150:150 + 28]))  # the window starts again at the gap Sample
+        self.assertTrue(flags[150 + 28].straight)                       # 0.25 s + 7.8 s of the new run
 
 
 class LatenessTests(unittest.TestCase):

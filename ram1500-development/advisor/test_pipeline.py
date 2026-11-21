@@ -373,6 +373,15 @@ class JoinTests(unittest.TestCase):
         self.assertEqual(replay[0]["latOnS"], 60.0)                         # the first Sample has its control message
         self.assertEqual(replay[0]["health"]["staleS"], {})
 
+    def test_stale_time_on_a_gap_sample_is_its_capped_interval(self):
+        times = stalled(100, 1_000, 100)
+        def change(i, t_ns):
+            return {"skip": ("carOutput",)} if 100 <= i < 105 else None    # the gap Sample and the four after it
+        out = synth.summaries(synth.run(make(), synth.drive(times, change)))
+        self.assertEqual(out[0]["health"]["gapN"], 1)
+        self.assertAlmostEqual(out[0]["health"]["staleS"]["co"], 0.25 + 0.4, delta=0.06)
+        self.assertAlmostEqual(out[0]["health"]["staleSteerS"]["co"], 0.25 + 0.4, delta=0.06)
+
     def test_unknown_stream_is_ignored(self):
         p = make(Probe())
         b = synth.batch(T0)
@@ -405,6 +414,18 @@ class ModelPathTests(unittest.TestCase):
         p.ingest_tick({"drivingModelData": (T0 + 58 * MS, synth.model())})   # a tick without a carState
         p.ingest_tick(synth.batch(T0 + 100 * MS, skip=("drivingModelData",)))
         self.assertEqual([round(t_m - T0 / 1e9, 3) for t_m, _ in probe.models], [0.058])
+
+    def test_model_message_from_before_the_drive_is_never_handed_out(self):
+        for age_ms, handed_out in ((3_000, False), (500, True)):
+            with self.subTest(age_ms=age_ms):
+                probe = Probe()
+                p = make(probe)
+                left_over = (T0 - age_ms * MS) / 1e9
+                p.ingest_tick({"drivingModelData": (T0 - age_ms * MS, synth.model())})    # no carState yet: held
+                synth.run(p, synth.drive(synth.ticks(20, 100, T0),
+                                         lambda i, t: {"skip": ("drivingModelData",)} if i == 0 else None))
+                self.assertEqual(left_over in [t_m for t_m, _ in probe.models], handed_out)
+                self.assertEqual(len(probe.models), 19 + handed_out)
 
     def test_decimated_stream_each_message_once(self):
         probe = Probe()
