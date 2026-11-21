@@ -183,6 +183,10 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(drive["ended"])
         self.assertEqual(drive["restore"], "nothing_to_restore")
         self.assertIsNone(drive["trial"])
+        self.assertEqual(drive["start"]["delay"]["learnedS"], round(LEARNED, 4))
+        self.assertEqual(drive["ready"]["delayProbe"], INERT)
+        self.assertEqual((drive["end"]["windows"], drive["end"]["listening"]), (len(drive["summaries"]), True))
+        self.assertEqual(drive["events"], [])
         self.assertEqual(set(loop.sent_types()), {"agent_start", "drive_start", "drive_ready", "summary", "drive_end"})
         self.assertEqual(loop.with_buttons(), [])
 

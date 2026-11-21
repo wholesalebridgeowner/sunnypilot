@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Drive Advisor Railway service.
 
-Receives signed events from the Comma agent and sends a nightly review about
-an hour after the last drive.
+Receives signed events from the Comma agent, stores what each drive sends, and
+sends a report about an hour after the last drive. It measures and reports; it
+suggests nothing. No rule in it turns a measured number into advice.
 
-The suggestion path (a live suggestion rule, Approve/Decline buttons through
-ntfy, signed approvals for the Comma) is kept for a future build and is locked
-on this one: see the lock constant below.
+What is left of the suggestion path (records, Approve/Decline links, signed
+approvals for the Comma) is kept for a future build and is locked on this one:
+see the lock constant below. Nothing in this service creates a suggestion.
 """
 from __future__ import annotations
 
@@ -16,38 +17,29 @@ import secrets
 import time
 
 from approval import APPROVAL_TTL_S, sign_approval
-from rules import live_suggestion, nightly_recommendation
-from settings_guard import GuardError, trial_values
 from wire import WireError, verify_request
 
 NIGHTLY_DELAY_S = 3600
 SUGGESTION_WINDOW_S = {"live": 30 * 60, "nightly": 12 * 3600}
 SEEN_EVENTS_KEPT = 2000
-REASON_TEXT = {
-    "weaving_on_straight_road": "Weaving on straight road",
-    "late_in_curves": "Steering late in curves",
-}
-TITLE_LIVE = "Ram steering suggestion"
-TITLE_NIGHTLY = "Nightly review: Ram 1500"
+TITLE_REPORT = "Ram drive report"
+REPORT_CLOSING_LINE = "No changes are suggested. This report only measures."
+STATUS_FIELDS = ("w", "n", "windowS", "steeringS", "movingS", "warnEvents")     # of a drive's newest summary
 
 # Lock 1 of the suggestion path. A code constant: no constructor argument,
 # environment variable, file or request can open it. While it is False the
 # service creates no suggestion, answers "not found" on the approve and decline
-# links, hands no approval to the Comma, and prints no advice in the nightly
-# review.
+# links and hands no approval to the Comma.
 SUGGESTIONS_BUILT_IN = False
 
 
 class AdvisorService:
-    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time, live_enabled: bool = True,
-                 nightly_suggestions: bool = True):
+    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time):
         self.store = store
         self.notifier = notifier
         self.key = key
         self.public_url = public_url.rstrip("/")
         self.clock = clock
-        self.live_enabled = live_enabled   # off until the live metrics are calibrated on real drives
-        self.nightly_suggestions = nightly_suggestions   # off: the report is sent without any suggested change
 
     # --- records -----------------------------------------------------------
     def _state(self) -> dict:
@@ -55,9 +47,10 @@ class AdvisorService:
                                                      "nightlyDrives": []}
 
     def _drive(self, drive_id: str) -> dict:
+        """One drive: what drive_start, drive_ready and drive_end said, every summary and every other record."""
         return self.store.get_json(f"drives/{drive_id}.json") or {
-            "driveId": drive_id, "learnedDelayS": None, "baseActuatorDelayS": None, "settings": {},
-            "summaries": [], "trial": None, "declinedReasons": [], "ended": False, "notes": []}
+            "driveId": drive_id, "start": None, "ready": None, "summaries": [], "events": [], "end": None,
+            "ended": False, "restore": None, "trial": None, "declinedReasons": []}
 
     def _save_drive(self, drive: dict) -> None:
         self.store.put_json(f"drives/{drive['driveId']}.json", drive)
@@ -81,20 +74,21 @@ class AdvisorService:
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
         if kind == "drive_start" and isinstance(drive_id, str):
             drive = self._drive(drive_id)
-            drive.update({"learnedDelayS": data.get("learnedDelayS"),
-                          "baseActuatorDelayS": data.get("baseActuatorDelayS"),
-                          "settings": data.get("settings") or {}, "startedAt": self.clock()})
+            drive.update({"start": data, "startedAt": self.clock()})
             self._save_drive(drive)
-            state["nightlyDue"] = None   # a new drive postpones the nightly review
+            state["nightlyDue"] = None   # a new drive postpones the report
             state["lastDriveId"] = drive_id
+        elif kind == "drive_ready" and isinstance(drive_id, str):
+            drive = self._drive(drive_id)
+            drive["ready"] = data
+            self._save_drive(drive)
         elif kind == "summary" and isinstance(drive_id, str):
             drive = self._drive(drive_id)
             drive["summaries"].append(data)
             self._save_drive(drive)
-            self._maybe_suggest_live(drive, data)
         elif kind == "drive_end" and isinstance(drive_id, str):
             drive = self._drive(drive_id)
-            drive.update({"ended": True, "endedAt": self.clock(), "restore": data.get("restore")})
+            drive.update({"end": data, "ended": True, "endedAt": self.clock(), "restore": data.get("restore")})
             self._save_drive(drive)
             if drive_id not in state["nightlyDrives"]:
                 state["nightlyDrives"].append(drive_id)
@@ -102,45 +96,13 @@ class AdvisorService:
         elif kind == "apply_result":
             self._apply_result(state, data)
         elif isinstance(drive_id, str):
+            # Every other record of the drive (braking, lane change, limit event, settings change, listening
+            # disabled) is kept, however long the drive is.
             drive = self._drive(drive_id)
-            drive["notes"] = (drive["notes"] + [{"type": kind, "data": data}])[-50:]
+            drive["events"].append({"type": kind, "data": data})
             self._save_drive(drive)
         self.store.put_json("state.json", state)
         return {"ok": True}
-
-    def _open_live_suggestion(self, drive: dict) -> bool:
-        sid = drive.get("liveSuggestionId")
-        suggestion = self._suggestion(sid) if sid else None
-        if suggestion is None:
-            return False
-        if suggestion["status"] == "pending" and self.clock() - suggestion["created"] > SUGGESTION_WINDOW_S["live"]:
-            suggestion["status"] = "expired"
-            self._save_suggestion(suggestion)
-        return suggestion["status"] in ("pending", "approved")
-
-    def _maybe_suggest_live(self, drive: dict, data: dict) -> None:
-        if not SUGGESTIONS_BUILT_IN:
-            return
-        learned, base = drive.get("learnedDelayS"), drive.get("baseActuatorDelayS")
-        if not self.live_enabled or learned is None or base is None or self._open_live_suggestion(drive):
-            return
-        suggestion = live_suggestion(drive["summaries"], trials_this_drive=int(data.get("trialsThisDrive") or 0),
-                                     trial_active=bool(data.get("trialActive")))
-        if suggestion is None or suggestion["reason"] in drive["declinedReasons"]:
-            return
-        try:
-            change = trial_values(learned, base, suggestion["step"])
-        except GuardError:
-            return
-        record = self._create_suggestion(mode="live", change=change, reason=suggestion["reason"],
-                                         drive_id=drive["driveId"])
-        drive["liveSuggestionId"] = record["id"]
-        self._save_drive(drive)
-        total = base + change["LagdToggleDelay"]
-        message = (f"{REASON_TEXT.get(suggestion['reason'], suggestion['reason'])}. Try a {total:.2f} s steering "
-                   f"delay for the rest of this drive (learned: {learned:.2f} s). Pull over, put the truck in Park, "
-                   f"then tap Approve.")
-        self.notifier.send(TITLE_LIVE, message, priority=4, actions=self._actions(record))
 
     def _create_suggestion(self, *, mode: str, change: dict, reason: str, drive_id: str | None) -> dict:
         if not SUGGESTIONS_BUILT_IN:
@@ -248,42 +210,23 @@ class AdvisorService:
             self.store.put_json("state.json", state)
         return out
 
-    # --- nightly review ------------------------------------------------------------
+    # --- report ---------------------------------------------------------------------
     def run_nightly(self) -> bool:
+        """Send the report when it is due. It carries no button and no advice.
+
+        The body is a placeholder of two lines until the report module is built on the stored drives:
+        how many drives were recorded, and the closing line.
+        """
         state = self._state()
         due = state.get("nightlyDue")
         if due is None or self.clock() < due or not state["nightlyDrives"]:
             return False
-        drives = [self._drive(d) for d in state["nightlyDrives"]]
-        nnlc_on = bool(drives[-1].get("settings", {}).get("NeuralNetworkLateralControl"))
-        report = nightly_recommendation(
-            [{"trial": ({"reason": d["trial"]["reason"], "change": d["trial"]["change"]} if d.get("trial") else None),
-              "summaries": d["summaries"]} for d in drives], nnlc_on=nnlc_on)
-        lines = [f"{report['drives']} drive(s), {report['engagedMinutes']} min with steering on.",
-                 f"Steering warnings: {report['steerWarnings']}. Lane changes: {report['laneChanges']}.",
-                 f"Hard stops: {report['hardBrakes']} ({report['closeLeadHardBrakes']} with a car close ahead)."]
-        if report["brakingAdvice"] and SUGGESTIONS_BUILT_IN:
-            lines.append(report["brakingAdvice"])
-        for trial in report["trials"]:
-            outcome = "improved" if trial["keep"] else "no clear gain"
-            lines.append(f"Trial ({REASON_TEXT.get(trial['reason'], trial['reason'])}): {outcome}.")
-        actions = None
-        suggestion = report["suggestion"] if SUGGESTIONS_BUILT_IN and self.nightly_suggestions else None
-        if suggestion:
-            record = self._create_suggestion(mode="nightly", change=suggestion["change"],
-                                             reason=suggestion["reason"], drive_id=None)
-            actions = self._actions(record)
-            if suggestion["kind"] == "keep_trial":
-                lines.append(f"Suggestion: keep the trial setting ({self._describe(record)}).")
-            else:
-                lines.append("Suggestion: turn on neural-network steering for your next drive.")
-        else:
-            lines.append("No change suggested.")
-        self.store.put_json(f"reports/{int(self.clock())}.json", report)
-        state = self._state()
+        drives = len(state["nightlyDrives"])
+        lines = [f"{drives} drive{'' if drives == 1 else 's'} recorded.", REPORT_CLOSING_LINE]
+        self.store.put_json(f"reports/{int(self.clock())}.json", {"drives": list(state["nightlyDrives"])})
         state.update({"nightlyDue": None, "nightlyDrives": [], "lastReportAt": self.clock()})
         self.store.put_json("state.json", state)
-        self.notifier.send(TITLE_NIGHTLY, "\n".join(lines), priority=3, actions=actions)
+        self.notifier.send(TITLE_REPORT, "\n".join(lines), priority=3, actions=None)
         return True
 
 
@@ -316,13 +259,11 @@ def dispatch(service: AdvisorService, method: str, path: str, headers, body: byt
             if state.get("lastDriveId"):
                 drive = service._drive(state["lastDriveId"])
                 last = drive["summaries"][-1] if drive["summaries"] else {}
-                note = drive["notes"][-1] if drive["notes"] else None
+                newest = drive["events"][-1] if drive["events"] else None
                 last_drive = {"summaries": len(drive["summaries"]), "ended": drive["ended"],
                               "restore": drive.get("restore"),
-                              "lastNote": (note["type"] + ":" + str(note["data"].get("reason"))) if note else None,
-                              "last": {k: last.get(k) for k in ("engagedMinutes", "samples", "steerWarningEpisodes",
-                                                                "laneChanges", "weavePerStraightMinute",
-                                                                "curveRelError")} if last else None}
+                              "lastEvent": (newest["type"] + ":" + str(newest["data"].get("reason"))) if newest else None,
+                              "last": {k: last.get(k) for k in STATUS_FIELDS} if last else None}
             return as_json(200, {"lastEventAt": state.get("lastEventAt"), "lastEventType": state.get("lastEventType"),
                                  "pendingApprovals": len(state["approved"]), "nightlyDue": state.get("nightlyDue"),
                                  "lastDrive": last_drive})
@@ -349,9 +290,7 @@ def serve() -> None:  # pragma: no cover - runs on Railway
                           aws_secret_access_key=env["S3_SECRET_ACCESS_KEY"], region_name=env.get("S3_REGION") or "auto",
                           config=Config(s3={"addressing_style": "virtual"}))
     service = AdvisorService(S3Store(client, env["S3_BUCKET"]), Notifier(env["NTFY_TOPIC"]),
-                             bytes.fromhex(env["ADVISOR_KEY"]), env["PUBLIC_URL"],
-                             live_enabled=env.get("LIVE_SUGGESTIONS", "on").lower() != "off",
-                             nightly_suggestions=env.get("NIGHTLY_SUGGESTIONS", "on").lower() != "off")
+                             bytes.fromhex(env["ADVISOR_KEY"]), env["PUBLIC_URL"])
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):

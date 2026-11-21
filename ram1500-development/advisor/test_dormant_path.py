@@ -279,102 +279,91 @@ class DormantUplinkTests(LocksOpen, test_uplink.UplinkFixture):
 
 
 class DormantServiceTests(LocksOpen, test_service.ServiceFixture):
-    def test_weaving_creates_one_live_suggestion_with_sound(self):
-        self.start()
-        self.weave_minutes(7)
-        suggestions = [n for n in self.notifier.sent if n["actions"]]
-        self.assertEqual(len(suggestions), 1)
-        self.assertEqual(suggestions[0]["priority"], 4)
-        self.assertEqual([label for label, _ in suggestions[0]["actions"]], ["Approve", "Decline"])
-        self.assertIn("Park", suggestions[0]["message"])
+    """What is left of the service's suggestion path: records, the owner's two links, signed approvals.
+
+    Nothing in the service creates a suggestion any more (its rules are deleted), so each test makes one by hand.
+    """
+    CHANGE = trial_values(LEARNED, BASE, -1)
+
+    def suggest(self, mode="live", change=None, reason="weaving_on_straight_road", drive="d1"):
+        return self.service._create_suggestion(mode=mode, change=change or self.CHANGE, reason=reason,
+                                               drive_id=drive if mode == "live" else None)
+
+    def test_a_suggestion_is_stored_with_one_link_to_approve_and_one_to_decline(self):
+        record = self.suggest()
+        self.assertEqual((record["status"], record["approval"]), ("pending", None))
+        self.assertEqual(self.service.store.get_json(f"suggestions/{record['id']}.json"), record)
+        self.assertEqual([label for label, _ in self.service._actions(record)], ["Approve", "Decline"])
+        self.assertNotEqual(record["approveToken"], record["declineToken"])
 
     def test_approve_signs_the_guarded_change_once(self):
         self.start()
-        self.weave_minutes(5)
-        token = self.token("Approve")
-        self.assertEqual(self.service.approve(token)[0], 200)
+        record = self.suggest()
+        self.assertEqual(self.service.approve(record["approveToken"])[0], 200)
         approvals = self.service.approvals_for_comma()
         self.assertEqual(len(approvals), 1)
         fields = verify_approval(KEY, approvals[0], now=self.clock.t, used_nonces=set())
-        self.assertEqual(fields["change"], trial_values(0.25, 0.1, -1))
+        self.assertEqual(fields["change"], self.CHANGE)
         self.assertEqual(fields["mode"], "live")
-        self.assertEqual(self.service.approve(token)[0], 409)
+        self.assertEqual(self.service.approve(record["approveToken"])[0], 409)
+        self.assertEqual(self.service.approve(record["declineToken"])[0], 404)     # each link does one thing
 
-    def test_decline_blocks_the_same_reason_for_this_drive(self):
+    def test_decline_records_the_reason_on_the_drive(self):
         self.start()
-        self.weave_minutes(5)
-        self.assertEqual(self.service.decline(self.token("Decline"))[0], 200)
-        self.weave_minutes(10)
-        self.assertEqual(len([n for n in self.notifier.sent if n["actions"]]), 1)
+        record = self.suggest()
+        self.assertEqual(self.service.decline(record["declineToken"])[0], 200)
+        self.assertEqual(self.stored()["declinedReasons"], ["weaving_on_straight_road"])
         self.assertEqual(self.service.approvals_for_comma(), [])
+        self.assertEqual(self.service.approve(record["approveToken"])[0], 409)
 
-    def test_live_suggestions_can_be_switched_off(self):
-        self.service.live_enabled = False
-        self.start()
-        self.weave_minutes(7)
-        self.assertEqual([n for n in self.notifier.sent if n["actions"]], [])
-
-    def test_no_live_suggestion_without_learned_delay(self):
-        self.start(learned=None)
-        self.weave_minutes(7)
-        self.assertEqual([n for n in self.notifier.sent if n["actions"]], [])
+    def test_a_suggestion_expires(self):
+        record = self.suggest()
+        self.clock.t += 30 * 60 + 1
+        self.assertEqual(self.service.approve(record["approveToken"])[0], 410)
+        self.assertEqual(self.service.approvals_for_comma(), [])
 
     def test_apply_result_records_trial_and_confirms(self):
         self.start()
-        self.weave_minutes(5)
-        self.service.approve(self.token("Approve"))
+        record = self.suggest()
+        self.service.approve(record["approveToken"])
         sid = self.service.approvals_for_comma()[0]["suggestion_id"]
         self.event("apply_result", data={"suggestionId": sid, "status": "applied"})
         self.assertEqual(self.service.approvals_for_comma(), [])
         self.assertIn("Applied", self.notifier.sent[-1]["title"])
-        self.assertEqual(self.service.store.get_json("drives/d1.json")["trial"]["reason"], "weaving_on_straight_road")
+        self.assertEqual(self.stored()["trial"]["reason"], "weaving_on_straight_road")
+
+    def test_a_refused_apply_is_told_to_the_owner(self):
+        self.start()
+        record = self.suggest()
+        self.service.approve(record["approveToken"])
+        self.event("apply_result", data={"suggestionId": record["id"], "status": "refused:delay_inert_on_this_build"})
+        self.assertIn("Not applied", self.notifier.sent[-1]["title"])
+        self.assertIsNone(self.stored()["trial"])
+        self.assertEqual(self.service.approvals_for_comma(), [])
 
     def test_approvals_expire_for_the_comma(self):
         self.start()
-        self.weave_minutes(5)
-        self.service.approve(self.token("Approve"))
+        record = self.suggest()
+        self.service.approve(record["approveToken"])
         self.clock.t += 601
         self.assertEqual(self.service.approvals_for_comma(), [])
 
-    def test_nightly_report_an_hour_after_last_drive(self):
-        self.start()
-        self.event("summary", data=test_service.minute(steerWarningEpisodes=1))
-        for _ in range(9):
-            self.event("summary", data=test_service.minute())
-        self.event("drive_end")
-        self.clock.t += 3700
-        self.service.run_nightly()
-        report = self.notifier.sent[-1]
-        self.assertIn("Nightly", report["title"])
-        self.assertEqual([label for label, _ in report["actions"]], ["Approve", "Decline"])
-        self.service.approve(self.token("Approve"))
+    def test_a_nightly_change_stays_valid_overnight(self):
+        record = self.suggest(mode="nightly", change={"NeuralNetworkLateralControl": True},
+                              reason="frequent_steering_warnings")
+        self.assertEqual(self.service.approve(record["approveToken"])[0], 200)
         fields = verify_approval(KEY, self.service.approvals_for_comma()[0], now=self.clock.t + 11 * 3600,
                                  used_nonces=set())
         self.assertEqual(fields["change"], {"NeuralNetworkLateralControl": True})
 
-    def test_nightly_report_carries_the_braking_advice(self):
+    def test_the_report_carries_no_button_even_with_the_lock_open(self):
         self.start()
-        stop = {"leadPresent": True, "leadDistanceM": 9.0, "speedMs": 20.0}
-        for _ in range(3):
-            self.event("summary", data=test_service.minute(hardBrakes=[stop]))
-        self.event("drive_end")
+        self.minutes(10, warnEvents=3)
+        self.event("drive_end", data=test_service.END)
         self.clock.t += 3700
-        self.service.run_nightly()
-        self.assertIn("following-distance", self.notifier.sent[-1]["message"])
-
-    def test_nightly_suggestions_can_be_switched_off(self):
-        self.service.nightly_suggestions = False
-        self.start()
-        self.event("summary", data=test_service.minute(steerWarningEpisodes=1))
-        for _ in range(9):
-            self.event("summary", data=test_service.minute())
-        self.event("drive_end")
-        self.clock.t += 3700
-        self.service.run_nightly()
+        self.assertTrue(self.service.run_nightly())
         report = self.notifier.sent[-1]
-        self.assertIn("Nightly", report["title"])
-        self.assertEqual(report["actions"], [])
-        self.assertIn("No change suggested", report["message"])
+        self.assertEqual((report["title"], report["actions"]), ("Ram drive report", []))
         self.assertEqual(self.service.approvals_for_comma(), [])
 
 

@@ -9,21 +9,32 @@ test files, and the whole loop is in test_end_to_end.py.
 """
 import ast
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import applier
 import service_app
 from approval import sign_approval
 from service_app import AdvisorService, dispatch
 from service_store import MemoryStore
-from test_service import KEY, URL, Clock, FakeNotifier, minute
+from test_service import END, KEY, START, URL, Clock, FakeNotifier, minute
 from wire import sign_request
 
 LOCKS = {"SUGGESTIONS_BUILT_IN": "service_app.py", "APPLY_ENABLED": "applier.py"}
 LEARNED = 0.32812345678901234      # an invented value with the precision a learned delay really has
-SETTINGS = {"LagdToggle": True, "LagdToggleDelay": 0.2, "NeuralNetworkLateralControl": False}
 CLOSE_STOP = {"leadPresent": True, "leadDistanceM": 9.0, "speedMs": 20.0}
+
+
+def old_minute(weave=1.0, **overrides):
+    """A summary as the first version of the agent sent it: the numbers its suggestion rules acted on."""
+    values = {"engagedMinutes": 1.0, "straightMinutes": 1.0, "weavePerStraightMinute": weave,
+              "curveSamples": 0, "curveRelError": None, "steerWarningEpisodes": 0, "laneChanges": 0,
+              "overrideEpisodes": 0, "hardBrakes": [], "speedMeanMs": 25.0,
+              "trialActive": False, "trialsThisDrive": 0}
+    values.update(overrides)
+    return values
 
 
 class ServiceLockTests(unittest.TestCase):
@@ -40,11 +51,12 @@ class ServiceLockTests(unittest.TestCase):
         return self.service.handle_event({"type": kind, "driveId": drive, "id": f"e{self.seq}", "data": data or {}})
 
     def drive(self, drive, **metrics):
-        self.event("drive_start", drive, {"learnedDelayS": LEARNED, "baseActuatorDelayS": 0.2,
-                                          "settings": dict(SETTINGS)})
-        for _ in range(7):
-            self.event("summary", drive, minute(**metrics))
-        self.event("drive_end", drive)
+        """A drive whose summaries also carry what the first version's rules acted on."""
+        self.event("drive_start", drive, {**START, "learnedDelayS": LEARNED, "baseActuatorDelayS": 0.2})
+        for w in range(7):
+            self.event("summary", drive, {**minute(w, warnEvents=metrics.get("steerWarningEpisodes", 0)),
+                                          **old_minute(**metrics)})
+        self.event("drive_end", drive, END)
 
     def stored(self, prefix):
         return [key for key in self.service.store.objects if key.startswith(prefix)]
@@ -78,10 +90,11 @@ class ServiceLockTests(unittest.TestCase):
         self.clock.t += 3700
         self.assertTrue(self.service.run_nightly())
         report = self.notifier.sent[-1]
-        self.assertIn("Nightly", report["title"])
-        self.assertIn("Hard stops: 7 (7 with a car close ahead).", report["message"])     # the fact stays
-        self.assertNotIn("following-distance", report["message"])                         # the advice does not
-        self.assertNotIn("Suggestion", report["message"])
+        self.assertEqual(report["title"], "Ram drive report")
+        self.assertEqual(report["message"].splitlines(),
+                         ["3 drives recorded.", "No changes are suggested. This report only measures."])
+        for advice in ("following-distance", "Suggestion", "Trial", "neural-network", "Pull over", "Park"):
+            self.assertNotIn(advice, report["message"])
         self.assertEqual(self.with_buttons(), [])
         self.assertEqual(self.stored("suggestions/") + self.stored("tokens/"), [])
         self.assertEqual(self.service.approvals_for_comma(), [])
@@ -110,14 +123,31 @@ class ServiceLockTests(unittest.TestCase):
         self.assertEqual((status, json.loads(body)), (200, {"approvals": []}))
 
     def test_no_constructor_argument_opens_the_lock(self):
-        service = AdvisorService(MemoryStore(), self.notifier, KEY, URL, clock=self.clock,
-                                 live_enabled=True, nightly_suggestions=True)
-        self.service = service
-        self.drive("d1", weave=10.0, steerWarningEpisodes=3)
-        self.clock.t += 3700
-        service.run_nightly()
+        for switch in ("live_enabled", "nightly_suggestions", "suggestions", "SUGGESTIONS_BUILT_IN"):
+            with self.subTest(switch=switch), self.assertRaises(TypeError):
+                AdvisorService(MemoryStore(), self.notifier, KEY, URL, clock=self.clock, **{switch: True})
+
+    def test_no_environment_variable_opens_the_lock(self):
+        with mock.patch.dict(os.environ, {"LIVE_SUGGESTIONS": "on", "NIGHTLY_SUGGESTIONS": "on",
+                                          "SUGGESTIONS_BUILT_IN": "1", "APPLY_ENABLED": "1"}):
+            self.service = AdvisorService(MemoryStore(), self.notifier, KEY, URL, clock=self.clock)
+            self.drive("d1", weave=10.0, steerWarningEpisodes=3, hardBrakes=[CLOSE_STOP])
+            self.clock.t += 3700
+            self.service.run_nightly()
+            self.assertIs(service_app.SUGGESTIONS_BUILT_IN, False)
+            self.assertIs(applier.APPLY_ENABLED, False)
         self.assertEqual(self.with_buttons(), [])
-        self.assertEqual(self.stored("suggestions/"), [])
+        self.assertEqual(self.stored("suggestions/") + self.stored("tokens/"), [])
+
+    def test_with_the_lock_patched_open_the_service_still_suggests_nothing_by_itself(self):
+        # The rules of the first version are deleted, not switched off: nothing in the service creates a suggestion.
+        with mock.patch.object(service_app, "SUGGESTIONS_BUILT_IN", True):
+            self.drive("d1", weave=10.0, curveSamples=600, curveRelError=0.6, steerWarningEpisodes=3,
+                       hardBrakes=[CLOSE_STOP])
+            self.clock.t += 3700
+            self.assertTrue(self.service.run_nightly())
+        self.assertEqual(self.with_buttons(), [])
+        self.assertEqual(self.stored("suggestions/") + self.stored("tokens/"), [])
 
 
 def _docstrings(tree):
