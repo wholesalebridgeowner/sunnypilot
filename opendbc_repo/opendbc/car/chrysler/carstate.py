@@ -1,12 +1,17 @@
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
-from opendbc.car.chrysler.values import DBC, STEER_THRESHOLD, RAM_CARS
+from opendbc.car.chrysler.values import DBC, STEER_THRESHOLD, RAM_CARS, RAM_DT
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 
 from opendbc.sunnypilot.car.chrysler.mads import MadsCarState
 
 ButtonType = structs.CarState.ButtonEvent.Type
+
+# Observed on the US-configured Ram DT. Unconfirmed codes (including 0x04/0x0D)
+# and unavailable codes 0x00/0x3F leave the display blank.
+SPEED_LIMIT_MPH = {0x05: 25, 0x06: 30, 0x07: 35, 0x08: 40, 0x09: 45, 0x0A: 50, 0x0B: 55, 0x0C: 60, 0x0E: 70}
+SPEED_LIMIT_FRESH_NS = 1_500_000_000
 
 
 class CarState(CarStateBase, MadsCarState):
@@ -26,6 +31,33 @@ class CarState(CarStateBase, MadsCarState):
       self.shifter_values = can_define.dv["GEAR"]["PRNDL"]
 
     self.distance_button = 0
+    self.limit_sample_ns: int | None = None
+    self.limit_clock_ns = 0
+    self.limit_mps = 0.0
+    self.limit_fresh = False
+    if CP.carFingerprint in RAM_DT:
+      self.observe_can = self.observe_speed_limit
+
+  def observe_speed_limit(self, packets, now_nanos, packet_valid):
+    # In replay, CAN logMonoTime supplies the publication clock. An empty replay
+    # tick has no recording time; withhold until a timestamp is available again.
+    now = now_nanos if now_nanos is not None else max((stamp for stamp, _ in packets), default=None)
+    self.limit_fresh = False
+    if now is None or now < self.limit_clock_ns:
+      return
+    self.limit_clock_ns = now
+    for i, (stamp, frames) in enumerate(packets):
+      if stamp < 0 or stamp > now or (self.limit_sample_ns is not None and stamp < self.limit_sample_ns):
+        continue
+      valid = None
+      for address, data, bus in frames:
+        if address == 0x265 and bus == 0:
+          if valid is None:
+            valid = packet_valid is None or packet_valid(i)
+          self.limit_sample_ns = stamp
+          mph = SPEED_LIMIT_MPH.get(data[5], 0) if valid and len(data) == 8 else 0
+          self.limit_mps = mph * CV.MPH_TO_MS
+    self.limit_fresh = self.limit_sample_ns is not None and now - self.limit_sample_ns <= SPEED_LIMIT_FRESH_NS
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     cp = can_parsers[Bus.pt]
@@ -33,6 +65,9 @@ class CarState(CarStateBase, MadsCarState):
 
     ret = structs.CarState()
     ret_sp = structs.CarStateSP()
+    if self.limit_fresh and self.limit_mps > 0:
+      ret_sp.speedLimit = self.limit_mps
+      ret_sp.speedLimitValid = True
 
     prev_distance_button = self.distance_button
     self.distance_button = cp.vl["CRUISE_BUTTONS"]["ACC_Distance_Dec"]

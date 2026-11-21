@@ -268,7 +268,13 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
     tune.torque.latAccelOffset = 0.0
     tune.torque.steeringAngleDeadzoneDeg = steering_angle_deadzone_deg
 
-  def update(self, can_packets: list[tuple[int, list[CanData]]]) -> tuple[structs.CarState, structs.CarStateSP]:
+  def update(self, can_packets: list[tuple[int, list[CanData]]], *, now_nanos: int | None = None,
+             packet_valid: Callable[[int], bool] | None = None) -> tuple[structs.CarState, structs.CarStateSP]:
+    if self.CS.observe_can is not None:
+      # CANParser also accepts a single (timestamp, frames) pair from replay callers.
+      packets = [can_packets] if can_packets and not isinstance(can_packets[0], (list, tuple)) else can_packets
+      self.CS.observe_can(packets, now_nanos, packet_valid)
+
     # parse can
     for cp in self.can_parsers.values():
       if cp is not None:
@@ -303,6 +309,9 @@ class CarInterfaceBase(ABC, CarInterfaceBaseSP):
 
 
 class CarStateBase(ABC):
+  # Optional incoming-frame consumer. Its data never contributes to parser health.
+  observe_can: Callable[[list[tuple[int, list[CanData]]], int | None, Callable[[int], bool] | None], None] | None = None
+
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
     self.CP = CP
     self.CP_SP = CP_SP

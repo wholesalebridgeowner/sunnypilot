@@ -197,7 +197,11 @@ class Car:
     can_list = can_capnp_to_list(can_strs)
 
     # Update carState from CAN
-    CS, CS_SP = self.CI.update(can_list)
+    # Native pandad timestamps incoming CAN with CLOCK_BOOTTIME. Replay uses
+    # the recording clock. Decode an envelope's validity only when requested.
+    now_nanos = None if REPLAY else time.clock_gettime_ns(getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC))
+    CS, CS_SP = self.CI.update(can_list, now_nanos=now_nanos,
+                               packet_valid=lambda i: messaging.log_from_bytes(can_strs[i]).valid)
     CS_SP = convert_to_capnp(CS_SP)
     if self.CP.brand == 'mock':
       CS, CS_SP = self.mock_carstate.update(CS, CS_SP)
