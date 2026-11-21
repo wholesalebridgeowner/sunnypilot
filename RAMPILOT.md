@@ -50,7 +50,9 @@ The steering-calibration learner (`paramsd`) no longer updates steer ratio, stif
 
 - **Chrysler checksum** (opendbc #3782): a table lookup gives the same checksum as the former bit loop. On 400,000 recorded frames it matched every one and was about 14 times faster per frame. Tests: `opendbc/car/chrysler/tests/test_rampilot_checksum.py`.
 - **Fixed steering-delay setting** (sunnypilot #1906): with live delay learning off, controlsd now uses the fixed delay (steerActuatorDelay plus the software delay) as intended. The swapped branches made that setting have no effect. With learning on, as on this truck today, nothing changes. Tests: `sunnypilot/livedelay/test_rampilot_lat_delay.py`.
-- **Loop catch-up** (openpilot #39095): after a stall of more than one frame, the Ratekeeper resyncs instead of running catch-up frames back to back. Tests: `common/tests/test_rampilot_ratekeeper.py`.
+- **Loop timing** (openpilot #39095). Ratekeeper rebases the next deadline when a loop falls more than one frame behind. See `common/tests/test_rampilot_ratekeeper.py`.
+
+`card`, `controlsd` and `selfdrived` call `monitor_time()` to record loop timing. Their messages govern when they run. Only callers of `keep_time()` sleep for the remaining interval, so only those callers change their pacing after a stall.
 
 ## Install and rollback
 
