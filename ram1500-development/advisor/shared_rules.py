@@ -60,6 +60,12 @@ ASK_LIMIT = 0.98              # of the full command asked for
 EVENT_MERGE_S = 10.0          # warnings or limit samples closer than this are one event
 LIMIT_EVENT_MIN_S = 0.4       # a shorter limit event is not recorded
 
+# --- learned steering delay ---------------------------------------------------------
+DELAY_TRUST_MIN_S = 0.05      # a learned delay is trusted only strictly between these two ...
+DELAY_TRUST_MAX_S = 0.95      # ... and only with the learner's status `estimated`
+DELAY_BAND_MIN_S = 0.28       # every recorded drive stayed inside this band; a value outside it is marked
+DELAY_BAND_MAX_S = 0.38
+
 # --- driving time ------------------------------------------------------------------
 MOVING_ABOVE_MS = 0.5         # above this speed the truck is driving; "driving" always means this
 MIN_DRIVE_MOVING_S = 60       # service: a session with less movement is not a drive

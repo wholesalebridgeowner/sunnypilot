@@ -48,7 +48,7 @@ def get(obj, *names):
     return obj
 
 
-def _number(value):
+def number(value):
     """A finite number as a float, else None. Plain numbers and numpy scalars count; a bool does not."""
     if type(value) is not float:
         if isinstance(value, bool) or not isinstance(value, numbers.Real):
@@ -178,7 +178,7 @@ class StreamJoiner:
         if self._last_car_state_ns is not None and t_ns <= self._last_car_state_ns:
             return None
         self._last_car_state_ns = t_ns
-        v_ego = _number(get(car_state, "vEgo"))
+        v_ego = number(get(car_state, "vEgo"))
         if v_ego is None:
             return None                       # no Sample: the time stays unobserved
         if self._prev_sample_ns is None:
@@ -200,21 +200,21 @@ class StreamJoiner:
             found[ALERT_STREAM] = None        # a list that cannot be read is missing, never "no alert"
         return Sample(
             t=t_ns / 1e9, dt=dt, gap=gap, raw_dt=raw_dt, v_ego=v_ego,
-            steering_angle_deg=_number(get(car_state, "steeringAngleDeg")),
-            steering_torque=_number(get(car_state, "steeringTorque")) or 0.0,
-            steering_torque_eps=_number(get(car_state, "steeringTorqueEps")) or 0.0,
+            steering_angle_deg=number(get(car_state, "steeringAngleDeg")),
+            steering_torque=number(get(car_state, "steeringTorque")) or 0.0,
+            steering_torque_eps=number(get(car_state, "steeringTorqueEps")) or 0.0,
             steering_pressed=_true(get(car_state, "steeringPressed")),
             brake_pressed=_true(get(car_state, "brakePressed")),
             cruise_enabled=_true(get(car_state, "cruiseState", "enabled")),
             gear_drive=str(get(car_state, "gearShifter")) == GEAR_DRIVE,
             blinker=_true(get(car_state, "leftBlinker")) or _true(get(car_state, "rightBlinker")),
             lat_active=None if control is None else _true(get(control, "latActive")),
-            actuators_torque=_number(get(control, "actuators", "torque")),
-            desired_curvature=_number(get(controls_state, "desiredCurvature")),
-            actual_curvature=_number(get(controls_state, "curvature")),
-            torque_output=_number(get(found["carOutput"], "actuatorsOutput", "torqueOutputCan")),
+            actuators_torque=number(get(control, "actuators", "torque")),
+            desired_curvature=number(get(controls_state, "desiredCurvature")),
+            actual_curvature=number(get(controls_state, "curvature")),
+            torque_output=number(get(found["carOutput"], "actuatorsOutput", "torqueOutputCan")),
             lead_present=lead_present,
-            lead_distance_m=_number(get(lead, "dRel")) if lead_present else None,
+            lead_distance_m=number(get(lead, "dRel")) if lead_present else None,
             lane_change_state=_code(get(model, "meta", "laneChangeState"), LANE_CHANGE_STATES),
             alerts=alerts,
             missing=tuple(short for stream, short in JOINED if found[stream] is None),
@@ -247,8 +247,8 @@ class StreamJoiner:
         return ModelMsg(
             t_m=m_ns / 1e9,
             dt_m=0.0 if spacing is None else min(spacing, MODEL_DT_CAP_S),
-            left_y=_number(get(lines, "leftY")), right_y=_number(get(lines, "rightY")),
-            left_prob=_number(get(lines, "leftProb")), right_prob=_number(get(lines, "rightProb")),
+            left_y=number(get(lines, "leftY")), right_y=number(get(lines, "rightY")),
+            left_prob=number(get(lines, "leftProb")), right_prob=number(get(lines, "rightProb")),
             lane_change_state=_code(get(msg, "meta", "laneChangeState"), LANE_CHANGE_STATES),
             lane_change_direction=_code(get(msg, "meta", "laneChangeDirection"), LANE_CHANGE_DIRECTIONS),
             spacing=spacing, slow=slow,
@@ -334,22 +334,22 @@ class SampleBuilder:
             self.next_due_ns = max(self.next_due_ns + self.interval_ns, t_ns + self.interval_ns)
         control = self._fresh("carControl", t_ns)
         controls_state = self._fresh("controlsState", t_ns)
-        torque = _number(get(self._fresh("carOutput", t_ns), "actuatorsOutput", "torqueOutputCan"))
+        torque = number(get(self._fresh("carOutput", t_ns), "actuatorsOutput", "torqueOutputCan"))
         lead = get(self._fresh("radarState", t_ns), "leadOne")
         lead_present = get(lead, "status") is True
         lane_state = str(get(self._fresh("drivingModelData", t_ns), "meta", "laneChangeState"))
         return _v1.Sample(
             t=t_ns / 1e9,
-            v_ego=_number(get(msg, "vEgo")) or 0.0,
-            a_ego=_number(get(msg, "aEgo")) or 0.0,
-            steering_rate_deg_s=_number(get(msg, "steeringRateDeg")) or 0.0,
+            v_ego=number(get(msg, "vEgo")) or 0.0,
+            a_ego=number(get(msg, "aEgo")) or 0.0,
+            steering_rate_deg_s=number(get(msg, "steeringRateDeg")) or 0.0,
             steering_pressed=get(msg, "steeringPressed") is True,
             lat_active=get(control, "latActive") is True,
-            desired_curvature=_number(get(controls_state, "desiredCurvature")),
-            actual_curvature=_number(get(controls_state, "curvature")),
+            desired_curvature=number(get(controls_state, "desiredCurvature")),
+            actual_curvature=number(get(controls_state, "curvature")),
             torque_at_limit=torque is not None and abs(torque) >= 0.98 * self.steer_limit,
             lead_present=lead_present,
-            lead_distance_m=_number(get(lead, "dRel")) if lead_present else None,
+            lead_distance_m=number(get(lead, "dRel")) if lead_present else None,
             lane_change=lane_state not in LANE_CHANGE_OFF,
             alerts=self.alerts,
         )

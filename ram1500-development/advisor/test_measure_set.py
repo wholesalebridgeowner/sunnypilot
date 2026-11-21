@@ -21,6 +21,8 @@ FLAT_FIELDS = {
     "brake": {"brakeEpisodes"},
     "laneChange": {"lcStarts", "lcCompleted", "lcCancelled", "lcBlinkerOnly", "lcHandsOn", "lcTruncated"},
 }
+# The learned delay is owner-facing too. It sends one block, from the learner's first message of the drive on.
+OWNER_BLOCKS = {"delay": {"valueS", "minS", "maxS", "status", "blocks"}}
 # Log-only measures send one block each, named like the measure, and only when it has something to say.
 BLOCKS = {
     "lane": {"n", "sumSq", "scoredS", "validS", "eligibleS", "vMean", "widthMin", "widthMax", "probMin"},
@@ -67,19 +69,22 @@ def drive(n, stop_at_s=None, lane_change_at_s=None, limit_at_s=None):
     return synth.drive(synth.ticks(n, 100, T0), change)
 
 
-def road(n, stop_at_s=None, period_ms=100.0):
+def road(n, stop_at_s=None, period_ms=100.0, live_delay=False):
     """Batches of a drive that gives every log-only measure something to say: a straight with a small wave of
     the wheel, of the truck in its lane and of its cornering, and a curve of 1.2 m/s^2 in the second half of
-    every minute, followed 0.4 s late. Optionally a stop."""
+    every minute, followed 0.4 s late. Optionally a stop, and the delay learner's messages (4 a second)."""
     def change(i, t_ns):
         t_s = (t_ns - T0) / SEC
         v = 25.0 if stop_at_s is None else 25.0 - 3.0 * min(max(t_s - stop_at_s, 0.0), 4.0)
         demand = lambda u: 1.2 + 0.3 * math.sin(2 * math.pi * 0.3 * u) if u % 60.0 >= 30.0 else 0.0
         wobble = 0.04 * math.sin(2 * math.pi * 0.2 * t_s)
         centre = 0.05 * math.sin(2 * math.pi * 0.1 * t_s)
-        return {"carState": dict(v=v, angle=3.0 * math.sin(2 * math.pi * 0.25 * t_s), brake=v < 25.0),
-                "controlsState": dict(desired=demand(t_s) / 625.0, actual=(0.95 * demand(t_s - 0.4) + wobble) / 625.0),
-                "drivingModelData": dict(left_y=centre - 1.8, right_y=centre + 1.8)}
+        out = {"carState": dict(v=v, angle=3.0 * math.sin(2 * math.pi * 0.25 * t_s), brake=v < 25.0),
+               "controlsState": dict(desired=demand(t_s) / 625.0, actual=(0.95 * demand(t_s - 0.4) + wobble) / 625.0),
+               "drivingModelData": dict(left_y=centre - 1.8, right_y=centre + 1.8)}
+        if live_delay and round(t_s * 1000) % 250 < 100:
+            out["liveDelay"] = dict(delay=0.3457 + 0.0004 * math.sin(2 * math.pi * t_s / 480.0), blocks=30)
+        return out
     return synth.drive(synth.ticks(n, period_ms, T0), change)
 
 
@@ -92,44 +97,50 @@ def envelope(kind, data) -> str:
 class SummaryTests(unittest.TestCase):
     def test_the_measures_of_this_build_in_run_order(self):
         names = [m.name for m in measure_set.MEASURES]
-        self.assertEqual(names, list(FLAT_FIELDS) + list(BLOCKS))
-        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 4 + [False] * 5)
+        self.assertEqual(names, list(FLAT_FIELDS) + list(OWNER_BLOCKS) + list(BLOCKS))
+        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 5 + [False] * 5)
         self.assertEqual(Pipeline().measure_names, names)             # the owner-facing ones run first
         self.assertTrue(all(issubclass(m, Measure) for m in measure_set.MEASURES))
 
     def test_a_summary_holds_every_flat_field_once(self):
         out = synth.summaries(synth.run(Pipeline(), drive(300)))
         self.assertEqual(len(ALL_FLAT), sum(len(fields) for fields in FLAT_FIELDS.values()))  # no name used twice
-        self.assertFalse(ALL_FLAT & set(BLOCKS))
+        self.assertFalse(ALL_FLAT & (set(BLOCKS) | set(OWNER_BLOCKS)))
         self.assertEqual(set(out[0]) - PIPELINE_FIELDS - {"health"} - set(BLOCKS), ALL_FLAT)
 
     def test_each_measure_sends_its_own_fields_and_no_other(self):
         for measure in measure_set.MEASURES:
             with self.subTest(measure=measure.name):
                 p = Pipeline(PipelineConfig(measures=(measure,)))
-                out = synth.summaries(synth.run(p, road(1300)))
+                out = synth.summaries(synth.run(p, road(1300, live_delay=True)))
                 sent = set().union(*(set(s) for s in out)) - PIPELINE_FIELDS - {"health"}
-                if measure.owner_facing:
+                if measure.name in FLAT_FIELDS:
+                    self.assertTrue(measure.owner_facing)
                     self.assertEqual(sent, FLAT_FIELDS[measure.name])
                     self.assertTrue(all(set(s) - PIPELINE_FIELDS - {"health"} == sent for s in out))
                 else:
+                    blocks = OWNER_BLOCKS if measure.owner_facing else BLOCKS
                     self.assertEqual(sent, {measure.name})
                     for s in out:
                         if measure.name in s:
-                            self.assertEqual(set(s[measure.name]), BLOCKS[measure.name])
+                            self.assertEqual(set(s[measure.name]), blocks[measure.name])
 
     def test_a_summary_with_every_block(self):
-        out = synth.summaries(synth.run(Pipeline(), road(1300)))
-        self.assertEqual(set(out[1]) - PIPELINE_FIELDS - {"health"}, ALL_FLAT | set(BLOCKS))
-        for name, fields in BLOCKS.items():
+        out = synth.summaries(synth.run(Pipeline(), road(1300, live_delay=True)))
+        self.assertEqual(set(out[1]) - PIPELINE_FIELDS - {"health"}, ALL_FLAT | set(OWNER_BLOCKS) | set(BLOCKS))
+        for name, fields in list(BLOCKS.items()) + list(OWNER_BLOCKS.items()):
             self.assertEqual(set(out[1][name]), fields)
         self.assertNotIn("failed", out[1]["health"])
         # Blocks in the order the size cap takes them out last: lane, swings, ay, curve, lag.
-        self.assertEqual([m.name for m in measure_set.MEASURES][4:], ["lane", "swings", "ay", "curve", "lag"])
+        self.assertEqual([m.name for m in measure_set.MEASURES][5:], ["lane", "swings", "ay", "curve", "lag"])
+
+    def test_without_the_delay_learner_there_is_no_delay_block(self):
+        out = synth.summaries(synth.run(Pipeline(), road(1300)))
+        self.assertEqual(set(out[1]) - PIPELINE_FIELDS - {"health"}, ALL_FLAT | set(BLOCKS))
 
     def test_a_full_summary_stays_well_under_the_size_cap(self):
-        out = synth.summaries(synth.run(Pipeline(), road(1300)))
-        full = [s for s in out if set(BLOCKS) <= set(s)]
+        out = synth.summaries(synth.run(Pipeline(), road(1300, live_delay=True)))
+        full = [s for s in out if set(BLOCKS) | set(OWNER_BLOCKS) <= set(s)]
         self.assertTrue(full)
         for s in full:
             self.assertLess(len(envelope("summary", s)), 1600)        # the cap is 2,048 bytes
@@ -146,14 +157,14 @@ class SummaryTests(unittest.TestCase):
         p = Pipeline()
         synth.run(p, drive(300))
         end = p.drive_end_fields()
-        self.assertEqual(set(end), {"windows", "totals", "failed", "truncatedLaneChanges"})
+        self.assertEqual(set(end), {"windows", "totals", "failed", "truncatedLaneChanges", "delay"})
         self.assertEqual(set(end["totals"]), {"windowS", "unobservedS", "steeringS", "movingS"})
         self.assertEqual((end["failed"], end["truncatedLaneChanges"]), ([], 0))
 
     def test_only_the_known_message_types_are_sent(self):
         messages = synth.run(Pipeline(), drive(900, stop_at_s=20.0, lane_change_at_s=30.0, limit_at_s=50.0))
         self.assertEqual({kind for kind, _ in messages}, RECORD_TYPES)
-        self.assertEqual({kind for kind, _ in synth.run(Pipeline(), road(1300))}, {"summary"})
+        self.assertEqual({kind for kind, _ in synth.run(Pipeline(), road(1300, live_delay=True))}, {"summary"})
 
     def test_every_number_sent_is_finite_and_no_string_is(self):
         def walk(value):
