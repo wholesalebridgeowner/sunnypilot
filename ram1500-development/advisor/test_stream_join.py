@@ -169,7 +169,7 @@ class ValueTypeTests(unittest.TestCase):
                 j = StreamJoiner()
                 j.offer("carControl", T0, ns(latActive=flag))
                 s = j.sample(T0, car_state(steeringPressed=flag, leftBlinker=flag))
-                self.assertIs(s.lat_active, False)           # only a real True switches anything on
+                self.assertIsNone(s.lat_active)
                 self.assertIs(s.steering_pressed, False)
                 self.assertIs(s.blinker, False)
 

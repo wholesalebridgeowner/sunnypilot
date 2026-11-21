@@ -11,10 +11,11 @@ import parking_live
 import schema_v2
 import synth
 from parking_live import GATE_CLOSE_AT_MS, GATE_OPEN_AT_MS, MAX_MSGS_PER_TICK, ParkingLive
-from test_agent import T0, AgentFixture
+from test_agent import AgentFixture
 from test_parking_raw import e9, f6
 
 MS = 1_000_000
+T0 = 0
 
 
 def frame(address, dat, src=0):
@@ -114,12 +115,14 @@ class GateTests(unittest.TestCase):
         p.context(0.0, T0, 1.0, "reverse", True)
         p.want_open(0.0)
         p.on_open(0.0)
-        p.on_close()                                    # closed for 100 s
+        p.on_close(0.0)                                 # closed for 100 s
         p.context(100.0, T0 + 100_000 * MS, 1.0, "reverse", True)
         p.want_open(100.0)
         p.on_open(100.0)
-        for i in range(101):                            # 0.1 s CPU per 0.1 s tick for 10 s: 100 % of a core
-            p.collect(100.0 + 0.1 * i, Sock([can_msg(T0, frame(0x1F6, f6()))], cpu=cpu, cost=0.1))
+        for i in range(102):
+            now = 100 + i / 10
+            p.context(now, 100_000_000_000 + i * 100_000_000, 1.0, "reverse", True)
+            p.collect(now, Sock([can_msg(T0, frame(0x1F6, f6()))], cpu=cpu, cost=0.1))
             if p.disabled_reason:
                 break
         self.assertEqual(p.disabled_reason, "self_cpu_limit")
@@ -133,6 +136,97 @@ class GateTests(unittest.TestCase):
         p.collect(0.0, sock)
         self.assertEqual(sock.reads, MAX_MSGS_PER_TICK)
         self.assertEqual(p.record()["cappedTicks"], 1)
+
+    def test_gate_needs_observed_speed_gear_validity_and_source_time(self):
+        for stamp, v, gear, valid in ((0, 1, "drive", True), (2_100*MS, 1, "drive", True),
+                                       (2_000*MS, 1, None, True), (2_000*MS, 1, "unknown", True),
+                                       (2_000*MS, 1, "drive", None), (2_000*MS, True, "drive", True),
+                                       (None, 1, "drive", True)):
+            with self.subTest(stamp=stamp, v=v, gear=gear, valid=valid):
+                p = self.live()
+                p.context(2., stamp, v, gear, valid)
+                self.assertFalse(p.want_open(2.))
+                self.assertEqual(p.log.invalid_context, 1)
+
+    def test_repeated_and_out_of_order_samples_do_not_reopen_the_gate(self):
+        p = self.live()
+        p.context(2., 2_000*MS, 20, "drive", True)
+        p.context(2.1, 1_900*MS, 0, "reverse", True)
+        p.context(2.2, 2_000*MS, 0, "reverse", True)
+        self.assertFalse(p.want_open(2.2))
+        p.context(2.3, 2_300*MS, 0, "reverse", True)
+        self.assertTrue(p.want_open(2.3))
+        p.context(2.4, 2_300*MS, 0, "reverse", True)
+        self.assertFalse(p.want_open(2.4))
+        self.assertEqual(p.log.invalid_context, 3)
+
+    def test_gate_uses_speed_magnitude_and_accepts_negative_creep_readings(self):
+        p = self.live()
+        p.context(0., 0, -.039, "park", True)
+        self.assertTrue(p.want_open(0.))
+        p.context(.1, 100*MS, -20., "drive", True)
+        self.assertFalse(p.want_open(.1))
+        p.context(.2, 200*MS, -.039, "reverse", True)
+        self.assertTrue(p.want_open(.2))
+
+    def test_delay_uses_source_age_and_splits_time_at_expiry(self):
+        p = self.live()
+        p.context(.8, 0, 0, "park", True)
+        p.on_open(.8)
+        self.assertFalse(p.want_open(10.))
+        self.assertAlmostEqual(p.collect_s, .2)
+        self.assertAlmostEqual(p.gate_open_s, .2)
+        self.assertAlmostEqual(p.unknown_state_s, 9.)
+        p.on_close(10.)
+        p.context(10., 10_000*MS, 3.8, "drive", True)
+        self.assertFalse(p.want_open(10.))        # stale interval reset hysteresis
+
+    def test_slot_refusal_has_no_collect_time_and_retries_at_deadline(self):
+        p = self.live()
+        p.context(0., 0, 0, "park", True)
+        p.note_slot_refusal(0.)
+        for now in range(1, 11):
+            p.context(now, now*1_000_000_000, 0, "park", True)
+            self.assertEqual(p.can_try_slot(now), now == 10)
+        p.on_open(10.)
+        p.want_open(10.5)
+        p.on_close(10.5)
+        self.assertEqual(p.collect_s, .5)
+        self.assertEqual(p.gate_open_s, 10.5)
+        self.assertEqual(p.slot_refusals, 1)
+
+    def test_open_and_close_cost_count_once_and_cutoff_freezes_collection(self):
+        cpu = FakeCpu()
+        p = self.live(cpu_clock=cpu)
+        with p.measure_tick(0.):
+            p.context(0., 0, 0, "park", True)
+            p.on_open(0.)
+            cpu.t += .03
+            p.collect(0., Sock(cpu=cpu, cost=.01))
+        with p.measure_tick(.1):
+            p.collect(.1, Sock(cpu=cpu, cost=.30))
+        self.assertEqual(p.disabled_reason, "tick_cpu_limit")
+        with p.measure_tick(.2):
+            p.on_close(.2)
+            cpu.t += .04
+        p.want_open(60.)
+        self.assertAlmostEqual(p.collect_s, .1)
+        self.assertAlmostEqual(p.cpu_s, .38)
+        self.assertEqual(p.disabled_reason, "tick_cpu_limit")
+
+    def test_measured_tick_books_actual_time_after_open_before_cutoff(self):
+        cpu, wall = FakeCpu(), FakeCpu()
+        p = ParkingLive(lambda value: value, cpu_clock=cpu, monotonic=wall)
+        with p.measure_tick(0.):
+            p.context(0., 0, 0, "park", True)
+            wall.t = .2                         # time spent checking slot and opening socket
+            p.on_open(wall())
+            p.collect(wall(), Sock(cpu=cpu, cost=.3))
+            wall.t = .5                         # final collect tick was slow
+        self.assertEqual(p.disabled_reason, "tick_cpu_limit")
+        self.assertAlmostEqual(p.collect_s, .3)
+        self.assertAlmostEqual(p.gate_open_s, .5)
+        p.on_close(wall())
 
     def test_record_fits_schema_v2(self):
         p = self.live()
@@ -149,11 +243,17 @@ class GateTests(unittest.TestCase):
 
 
 class AgentParkingTests(AgentFixture):
+    def setUp(self):
+        super().setUp()
+        self.mono.t = T0 / 1e9
+
     def make_agent(self, **overrides):
         overrides.setdefault("can_decode", lambda raw: raw)
+        overrides.setdefault("decode", lambda stream, raw: (*self.decode(stream, raw), True))
         return super().make_agent(**overrides)
 
     def tick_with(self, t_ns, v, gear, can=()):
+        self.mono.t = max(self.mono.t, t_ns / 1e9)
         if "can" in self.socks:
             self.socks["can"].queue.extend(can)
         self.feed({"carState": (t_ns, synth.car_state(v=v, gear=gear)),
@@ -239,6 +339,33 @@ class AgentParkingTests(AgentFixture):
                 self.mono.t = round(self.mono.t + 0.1, 6)
             self.assertTrue(self.can_socks()[0].closed)
             self.end()
+
+    def test_unreadable_car_state_closes_socket_immediately(self):
+        with mock.patch.object(parking_live, "PARKING_LIVE_ENABLED", True):
+            self.drive()
+            self.tick_with(T0, 0.0, "reverse")
+            self.broken_decode.add("carState")
+            self.tick_with(T0 + 100 * MS, 0.0, "reverse")
+            self.assertTrue(self.can_socks()[0].closed)
+            self.end()
+        self.assertEqual(self.uplink.data("parking_raw")[0]["invalidContext"], 1)
+
+    def test_optional_receive_error_leaves_core_listening(self):
+        with mock.patch.object(parking_live, "PARKING_LIVE_ENABLED", True):
+            self.drive()
+            self.tick_with(T0, 0.0, "reverse")
+            sock = self.can_socks()[0]
+            with mock.patch.object(sock, "receive", side_effect=OSError("CAN reader failed")):
+                self.tick_with(T0 + 100 * MS, 0.0, "reverse")
+            self.assertTrue(sock.closed)
+            self.assertTrue(self.agent.listening)
+            self.tick_with(T0 + 200 * MS, 0.0, "reverse")
+            self.assertEqual(len(self.can_socks()), 1)
+            self.end()
+        event = self.uplink.of("parking_raw")[0]
+        self.assertEqual(event["data"]["disabledReason"], "socket_error")
+        self.assertEqual(schema_v2.problems(event), [])
+        self.assertIn("drive_end", self.uplink.types())
 
 
 if __name__ == "__main__":

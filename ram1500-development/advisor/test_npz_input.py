@@ -67,6 +67,14 @@ class DecimatedBatchesTests(unittest.TestCase):
         self.assertEqual(first["onroadEvents"][1], [])
         self.assertEqual([e.name for e in second["onroadEvents"][1]], ["belowSteerSpeed", "steerSaturated"])
 
+    def test_unobserved_control_cell_stays_unknown(self):
+        for value in (float("nan"), float("inf"), -1, 0.5, 2):
+            with self.subTest(value=value):
+                data = tables()
+                data["cc"] = [[data["cs"][0][0], 0, value, 0, 0, 0]]
+                batch = next(npz_input.decimated_batches(data))
+                self.assertIsNone(batch["carControl"][1].latActive)
+
     def test_streams_can_be_left_out(self):
         batches = list(npz_input.decimated_batches(tables(), without=("onroadEvents", "liveDelay")))
         self.assertFalse(any("onroadEvents" in b or "liveDelay" in b for b in batches))

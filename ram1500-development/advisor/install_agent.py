@@ -97,17 +97,21 @@ def hook_status(continue_path: Path = CONTINUE) -> str:
     return "unknown"
 
 
-def install_hook(continue_path: Path = CONTINUE, backup_path: Path = HOME / "continue.sh.orig") -> str:
+def install_hook(continue_path: Path = CONTINUE, backup_path: Path = HOME / "continue.sh.orig",
+                 *, launcher_path: Path | None = None) -> str:
     continue_path, backup_path = Path(continue_path), Path(backup_path)
     status = hook_status(continue_path)
-    if status == "installed":
-        return "already_installed"
-    if status != "original":
+    if status not in ("original", "installed"):
         raise InstallError("unknown_continue_script")
     if not backup_path.exists():
         _atomic_write(backup_path, ORIGINAL, 0o644)
     if backup_path.read_bytes() != ORIGINAL:
         raise InstallError("backup_mismatch")
+    # Prepare the launcher only after the hook and rollback bytes have been checked.
+    if launcher_path is not None:
+        write_start_script(launcher_path)
+    if status == "installed":
+        return "already_installed"
     _atomic_write(continue_path, HOOKED, 0o755)
     if hook_status(continue_path) != "installed":
         raise InstallError("verify_failed")
@@ -150,12 +154,7 @@ def main(argv: list) -> int:
             missing = missing_payload(HOME)
             if missing:
                 raise InstallError("missing_agent_files " + " ".join(missing))
-            # Check the startup hook BEFORE writing anything: a refused install must leave the
-            # installed launcher (which also starts the log keeper) exactly as it was.
-            if hook_status(CONTINUE) not in ("original", "installed"):
-                raise InstallError("unknown_continue_script")
-            write_start_script(HOME / "start_agent.sh")
-            print(install_hook(CONTINUE, backup))
+            print(install_hook(CONTINUE, backup, launcher_path=HOME / "start_agent.sh"))
             extra = extra_modules(HOME)
             if extra:
                 print("not_part_of_this_agent " + " ".join(extra))

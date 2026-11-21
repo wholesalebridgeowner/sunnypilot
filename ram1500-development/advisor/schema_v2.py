@@ -89,7 +89,7 @@ DATA = {
                     "settleS": NUMBER, "overshootM": NUMBER},
     "parking_raw": {"experimental": FLAG, "gateOpenS": NUMBER, "collectS": NUMBER, "unknownStateS": NUMBER,
                     "cpuS": NUMBER, "selfDisabled": FLAG,
-                    "disabledReason": _tokens("self_cpu_limit", "tick_cpu_limit"),
+                    "disabledReason": _tokens("self_cpu_limit", "tick_cpu_limit", "socket_error"),
                     **dict.fromkeys(("canMsgs", "decodeErrors", "cappedTicks", "socketOpens", "slotRefusals",
                                      "invalidContext", "f6Frames", "f6FormatMismatch", "f6UnknownCodeValues",
                                      "groupAActive", "groupBActive", "groupBActiveReverse", "e9Frames",

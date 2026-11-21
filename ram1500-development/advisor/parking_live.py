@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import contextmanager
 
-from parking_raw import ADDR_E9, ADDR_F6, ParkingLog
+from parking_raw import ADDR_E9, ADDR_F6, GEARS, ParkingLog
 
 PARKING_LIVE_ENABLED = False
 STREAM = "can"
@@ -40,6 +41,7 @@ MAX_MSGS_PER_TICK = 40
 SELF_CPU_LIMIT_PCT = 5.0
 SELF_CHECK_S = 10.0
 TICK_CPU_LIMIT_S = 0.25
+SLOT_RETRY_S = 10.0
 
 
 def _pairs(hist: dict) -> list:
@@ -48,14 +50,18 @@ def _pairs(hist: dict) -> list:
 
 
 class ParkingLive:
-    def __init__(self, decode_can, cpu_clock=time.process_time):
+    def __init__(self, decode_can, cpu_clock=time.process_time, monotonic=None):
         self.decode_can = decode_can        # raw message -> (logMonoTime_ns, iterable of frames: src/address/dat)
         self.cpu_clock = cpu_clock
+        self.monotonic = monotonic             # device clock, or explicit timestamps in an offline replay
         self.log = ParkingLog()
         self.disabled_reason = None
         self.open = False                   # the gate decision of the newest tick
-        self._ctx = None                    # (receipt time, speed, gear, valid) of the newest vehicle state
-        self._held = False                  # hysteresis state while the context is good
+        self._expires = None                # seconds on the carState publisher's monotonic clock
+        self._last_stamp_ns = None
+        self._collecting = False
+        self._next_slot_try = 0.0
+        self._measuring = False
         self._last_now = None
         self.gate_open_s = 0.0
         self.collect_s = 0.0
@@ -70,89 +76,132 @@ class ParkingLive:
         self._win_cpu = 0.0
 
     # --- vehicle state and gate --------------------------------------------------------------------
+    def _advance(self, now: float) -> None:
+        """Account only the portion of the previous interval covered by fresh vehicle state."""
+        previous = self._last_now
+        if previous is not None:
+            if now < previous:
+                raise ValueError("parking monotonic clock went backwards")
+            known = max(0.0, min(now, self._expires) - previous) if self._expires is not None else 0.0
+            self.unknown_state_s += max(0.0, now - previous - known)
+            if self.open:
+                self.gate_open_s += known
+                if self._collecting and self.disabled_reason is None:
+                    self.collect_s += known
+        self._last_now = now
+        if self._expires is not None and now > self._expires:
+            self._expires = None
+            self.open = False
+
     def context(self, now: float, t_ns, v_ego, gear, valid) -> None:
-        """A newly decoded carState: its log time, speed (m/s), gear name and validity."""
-        t = t_ns / 1e9 if isinstance(t_ns, (int, float)) else None
-        self.log.car_state(t, gear, v_ego, valid is not False)
-        good = (valid is not False and isinstance(v_ego, (int, float)) and math.isfinite(v_ego))
-        self._ctx = (now, float(v_ego) if good else None, str(gear) if gear is not None else "other", good)
+        """now and logMonoTime must both use the carState publisher's monotonic clock."""
+        self._advance(now)
+        stamp_ok = (type(t_ns) is int and 0 <= t_ns and t_ns / 1e9 <= now
+                    and (self._last_stamp_ns is None or t_ns > self._last_stamp_ns))
+        if stamp_ok:
+            self._last_stamp_ns = t_ns
+        t = t_ns / 1e9 if stamp_ok else None
+        gear = str(gear)
+        good = (valid is True and t is not None and now - t <= STATE_MAX_AGE_S and gear in GEARS
+                and type(v_ego) in (int, float) and math.isfinite(v_ego))
+        self.log.car_state(t, gear, v_ego, good)
+        if not good:
+            self._expires = None
+            self.open = False
+            return
+        self._expires = t + STATE_MAX_AGE_S
+        if gear == "reverse" or abs(v_ego) <= GATE_OPEN_AT_MS:
+            self.open = True
+        elif abs(v_ego) >= GATE_CLOSE_AT_MS:
+            self.open = False
 
     def want_open(self, now: float) -> bool:
         """The gate for this tick. Also books gate, collection and unknown-state time."""
-        ctx = self._ctx
-        fresh = ctx is not None and ctx[3] and 0.0 <= now - ctx[0] <= STATE_MAX_AGE_S
-        if not fresh:
-            self._held = False
-            decision = False
-        elif ctx[2] == "reverse" or ctx[1] <= GATE_OPEN_AT_MS:
-            self._held = decision = True
-        elif ctx[1] >= GATE_CLOSE_AT_MS:
-            self._held = decision = False
-        else:
-            decision = self._held
-        if self._last_now is not None:
-            step = max(0.0, now - self._last_now)
-            if self.open:
-                self.gate_open_s += step
-                if self.disabled_reason is None:
-                    self.collect_s += step
-            if not fresh:
-                self.unknown_state_s += step
-        self._last_now = now
-        self.open = decision
-        return decision and self.disabled_reason is None
+        self._advance(now)
+        return self.open and self.disabled_reason is None
 
     # --- collection ------------------------------------------------------------------------------------
     def on_open(self, now: float) -> None:
+        self._advance(now)
         self.socket_opens += 1
-        self._win_start, self._win_cpu = now, 0.0       # a fresh window at every gate opening
+        self._collecting = True
+        self._win_start, self._win_cpu = self.collect_s, 0.0
 
-    def on_close(self) -> None:
-        self._win_start, self._win_cpu = None, 0.0
+    def on_close(self, now: float) -> None:
+        self._advance(now)
+        self._collecting = False
+        if not self._measuring:
+            self._check_budget(0.)
+        self.log.break_counter_continuity()
 
-    def collect(self, now: float, sock) -> None:
-        """Read at most MAX_MSGS_PER_TICK messages from the open socket and count them; time all of it."""
-        if self.disabled_reason is not None:
+    @contextmanager
+    def measure_tick(self, now: float):
+        """Charge the whole feature tick, including failed setup, receive, parsing and teardown."""
+        if self._measuring:
+            yield
             return
+        self._advance(now)
+        self._measuring = True
         c0 = self.cpu_clock()
         try:
-            n = 0
-            while n < MAX_MSGS_PER_TICK:
+            yield
+        finally:
+            self._measuring = False
+            if self.monotonic is not None:
+                self._advance(self.monotonic())
+            used = max(0.0, self.cpu_clock() - c0)
+            self._check_budget(used)
+
+    def _check_budget(self, used: float) -> None:
+        self.cpu_s += used
+        self._win_cpu += used
+        if self.disabled_reason is None and used > TICK_CPU_LIMIT_S:
+            self.disabled_reason = "tick_cpu_limit"
+        if self._win_start is not None:
+            elapsed = self.collect_s - self._win_start
+            if elapsed >= SELF_CHECK_S:
+                if self.disabled_reason is None and 100 * self._win_cpu / elapsed > SELF_CPU_LIMIT_PCT:
+                    self.disabled_reason = "self_cpu_limit"
+                self._win_start, self._win_cpu = self.collect_s, 0.0
+        if not self._collecting:
+            self._win_start, self._win_cpu = None, 0.0
+
+    def collect(self, now: float, sock) -> None:
+        if not self._collecting or not self.want_open(now):
+            return
+        with self.measure_tick(now):
+            for _ in range(MAX_MSGS_PER_TICK):
                 raw = sock.receive(non_blocking=True)
                 if raw is None:
                     break
-                n += 1
                 self._one(raw)
-            if n == MAX_MSGS_PER_TICK:
+            else:
                 self.capped_ticks += 1
-        finally:
-            used = max(0.0, self.cpu_clock() - c0)
-            self.cpu_s += used
-            self._win_cpu += used
-            if used > TICK_CPU_LIMIT_S:
-                self.disabled_reason = "tick_cpu_limit"
-            elif self._win_start is not None and now - self._win_start >= SELF_CHECK_S:
-                if 100.0 * self._win_cpu / (now - self._win_start) > SELF_CPU_LIMIT_PCT:
-                    self.disabled_reason = "self_cpu_limit"
-                self._win_start, self._win_cpu = now, 0.0
 
     def _one(self, raw) -> None:
         try:
             t_ns, frames = self.decode_can(raw)
+            if type(t_ns) is not int or t_ns < 0:
+                raise ValueError("invalid CAN event timestamp")
             seen = []
             for f in frames:                            # lazy frame access stays inside the error handling
                 address = f.address
                 if address == ADDR_F6 or address == ADDR_E9:
                     seen.append((int(f.src), address, bytes(f.dat)))
+            for src, address, dat in seen:
+                self.log.frame(t_ns / 1e9, src, address, dat)
         except Exception:
             self.decode_errors += 1
+            self.log.break_counter_continuity()
             return
         self.can_msgs += 1
-        for src, address, dat in seen:
-            self.log.frame(t_ns / 1e9, src, address, dat)
 
-    def note_slot_refusal(self) -> None:
+    def can_try_slot(self, now: float) -> bool:
+        return now >= self._next_slot_try
+
+    def note_slot_refusal(self, now: float) -> None:
         self.slot_refusals += 1
+        self._next_slot_try = now + SLOT_RETRY_S
 
     # --- record --------------------------------------------------------------------------------------------
     def record(self) -> dict:

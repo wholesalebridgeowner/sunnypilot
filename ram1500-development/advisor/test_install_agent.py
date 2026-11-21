@@ -72,7 +72,7 @@ class HookTests(unittest.TestCase):
         start = self.dir / "start_agent.sh"
         write_start_script(start)
         for script in (self.cont, start):
-            result = subprocess.run(["bash", "-n", str(script)], capture_output=True)
+            result = subprocess.run(["bash", "-n"], input=script.read_bytes(), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -277,6 +277,21 @@ class CommandTests(unittest.TestCase):
         keeper = "[ -x /data/ram-diag/keeper/keep_logs.sh ] && ( setsid nice -n 19 /data/ram-diag/keeper/keep_logs.sh"
         self.assertIn(keeper, text)
         self.assertLess(text.index(keeper), text.index("exec setsid"))  # started before the agent replaces the shell
+
+    def test_mismatched_backup_preserves_files_on_fresh_install_and_update(self):
+        copy_payload(self.home)
+        launcher = self.home / "start_agent.sh"
+        backup = self.home / "continue.sh.orig"
+        original_launcher = b"#!/usr/bin/bash\nexec /data/ram-diag/keeper/keep_logs.sh\n"
+        for hook in (ORIGINAL, HOOKED):
+            with self.subTest(already_installed=hook == HOOKED):
+                launcher.write_bytes(original_launcher)
+                self.cont.write_bytes(hook)
+                backup.write_bytes(b"different rollback script\n")
+                self.assertEqual(self.run_command("install"), (2, ["refused: backup_mismatch"]))
+                self.assertEqual(launcher.read_bytes(), original_launcher)
+                self.assertEqual(self.cont.read_bytes(), hook)
+                self.assertEqual(backup.read_bytes(), b"different rollback script\n")
 
     def test_install_names_modules_left_behind_by_an_earlier_version(self):
         copy_payload(self.home)

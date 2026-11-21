@@ -31,7 +31,7 @@ OBSERVED_F6_CODES = frozenset((0x31, 0x32, 0x33, 0xB4, 0xB5, 0xB6, 0xF0, 0xFF))
 GROUP_A = (1, 2, 5)
 GROUP_B = (3, 4, 6)
 COUNTER_MAX_GAP_S = 0.55
-CONTEXT_MAX_AGE_S = 0.5       # a frame takes its gear from a valid vehicle-state sample at most this much older       # adjacent 0x1E9 frames closer than this must advance the counter by one
+CONTEXT_MAX_AGE_S = 0.5
 GEARS = ("drive", "reverse", "neutral", "park")  # anything else is "other"; no recent valid context is "unknown"
 
 
@@ -78,7 +78,8 @@ class ParkingLog:
     """
 
     def __init__(self):
-        self._ctx = deque(maxlen=64)  # (t, gear, v) of recent VALID vehicle-state samples
+        self._ctx = deque(maxlen=64)  # (source time, gear, speed), including timestamped invalidations
+        self._last_context_t = None
         self.f6 = Counter()
         self.f6_codes = {i: Counter() for i in range(1, 7)}
         self.f6_a_gear = Counter()
@@ -89,17 +90,22 @@ class ParkingLog:
         self.e9_byte1 = Counter()
         self.e9_byte3_gear = Counter()
         self._e9_prev = None          # (t, counter) of the previous VALID frame
+        self._e9_latest_t = None      # repeated or older timestamps cannot seed the next pair
         self.bus2 = Counter()
         self.invalid_context = 0
 
-    def car_state(self, t: float, gear, v_ego, valid: bool = True) -> None:
-        ok = (valid and isinstance(v_ego, (int, float)) and math.isfinite(v_ego)
-              and isinstance(t, (int, float)) and math.isfinite(t))
-        if not ok:
+    def car_state(self, t: float | None, gear, v_ego, valid: bool = True) -> None:
+        if type(t) not in (int, float) or not math.isfinite(t):
+            self.invalid_context += 1
+            self._ctx.clear()
+            return
+        if self._last_context_t is not None and t <= self._last_context_t:
             self.invalid_context += 1
             return
-        if self._ctx and t < self._ctx[-1][0]:
-            self.invalid_context += 1        # out of order: not used
+        self._last_context_t = t
+        if valid is not True or type(v_ego) not in (int, float) or not math.isfinite(v_ego):
+            self.invalid_context += 1
+            self._ctx.append((t, "unknown", None))
             return
         gear = str(gear) if gear is not None else "other"
         self._ctx.append((t, gear if gear in GEARS else "other", float(v_ego)))
@@ -110,18 +116,42 @@ class ParkingLog:
                 return (gear, v) if t - ct <= CONTEXT_MAX_AGE_S else ("unknown", None)
         return ("unknown", None)
 
+    def break_counter_continuity(self):
+        self._e9_prev = None
+
+    def _observe_counter(self, t, counter):
+        if not math.isfinite(t) or (self._e9_latest_t is not None and t <= self._e9_latest_t):
+            self.break_counter_continuity()
+            return
+        self._e9_latest_t = t
+        if counter is None:
+            self.break_counter_continuity()
+            return
+        if self._e9_prev is not None:
+            pt, pc = self._e9_prev
+            if t - pt < COUNTER_MAX_GAP_S:
+                self.e9["counter_pairs"] += 1
+                self.e9["counter_skips"] += counter != (pc + 1) % 16
+        self._e9_prev = (t, counter)
+
     def frame(self, t: float, bus: int, address: int, payload: bytes) -> None:
         if address not in (ADDR_F6, ADDR_E9):
             return
         if bus == 2:
             self.bus2[hex(address)] += 1
             return
+        if bus != 0:
+            return
+        stats = self.f6 if address == ADDR_F6 else self.e9
+        stats["frames"] += 1
         r = decode(address, bus, payload)
         if r is None:
+            stats["format_mismatch"] += 1
+            if address == ADDR_E9:
+                self._observe_counter(t, None)
             return
         gear, v = self._context_at(t)
         if address == ADDR_F6:
-            self.f6["frames"] += 1
             self.f6["format_mismatch"] += not r["format_ok"]
             if r["group_a_active"] is None or r["group_b_active"] is None:
                 self.f6["inconsistent_group"] += 1
@@ -129,6 +159,8 @@ class ParkingLog:
                 self.f6_codes[i][f"{c:02X}"] += 1          # unknown codes stay distinct
                 if c not in OBSERVED_F6_CODES:
                     self.f6["unknown_code_values"] += 1
+            if not r["format_ok"]:
+                return
             if r["group_a_active"]:
                 self.f6["group_a_active"] += 1
                 self.f6_a_gear[gear] += 1
@@ -138,19 +170,13 @@ class ParkingLog:
                 self.f6["group_b_active"] += 1
                 self.f6_b_gear[gear] += 1
         else:
-            self.e9["frames"] += 1
             if not (r["checksum_ok"] and r["format_ok"]):
                 self.e9["checksum_fail"] += not r["checksum_ok"]
                 self.e9["format_mismatch"] += not r["format_ok"]
-                self._e9_prev = None                          # continuity is unknown across a bad frame
+                self._observe_counter(t, None)
                 return
             self.e9["valid_frames"] += 1
-            if self._e9_prev is not None:
-                pt, pc = self._e9_prev
-                if 0 < t - pt < COUNTER_MAX_GAP_S:
-                    self.e9["counter_pairs"] += 1
-                    self.e9["counter_skips"] += r["counter"] != (pc + 1) % 16
-            self._e9_prev = (t, r["counter"])
+            self._observe_counter(t, r["counter"])
             if r["byte0"] != 0xFF:
                 self.e9_byte0[r["byte0"]] += 1
                 self.e9[f"byte0_set_in_{gear}"] += 1

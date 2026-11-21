@@ -462,6 +462,16 @@ class ListeningTests(AgentFixture):
         self.assertEqual(set(self.socks), set(STREAMS))
         self.assertEqual(self.uplink.types()[-2:], ["drive_start", "drive_ready"])
 
+    def test_unreadable_control_then_off_does_not_create_a_loss(self):
+        self.drive()
+        self.play(self.ticks(20))
+        self.broken_decode.add("carControl")
+        self.play(self.ticks(1))
+        self.broken_decode.clear()
+        self.play(self.ticks(40, change=lambda i, t: {"carControl": {"lat": False}}))
+        self.end()
+        self.assertEqual(self.uplink.data("steering_loss"), [])
+
     def test_decodes_only_the_newest_message_of_each_stream(self):
         self.drive()
         for batch in self.ticks(5):

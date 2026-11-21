@@ -93,6 +93,21 @@ class ParkingLogTests(unittest.TestCase):
         rec = log.record()["f6"]
         self.assertEqual(rec["codes_by_byte"]["3"], {"77": 1, "78": 1})
         self.assertEqual(rec["unknown_code_values"], 6)           # bytes 3, 4, 6 of each frame
+        self.assertEqual(rec["groupB_active_by_gear"], {})
+
+    def test_f6_group_counts_exclude_bad_header_trailer_code_group_and_length(self):
+        log = ParkingLog()
+        log.car_state(0., "reverse", 1.)
+        good = f6(a=0x31,b=0x32)
+        for payload in (good, b"short", b"\x05" + good[1:], good[:-1] + b"\x01",
+                        f6(a=0x77,b=0x32), f6(a=0x31,b=0x32,a_codes={2:0xff})):
+            log.frame(.1, 0, ADDR_F6, payload)
+        f = log.record()["f6"]
+        self.assertEqual((f["frames"], f["format_mismatch"]), (6, 5))
+        self.assertEqual(f["codes_by_byte"]["3"], {"32":5})
+        self.assertEqual(f["codes_by_byte"]["2"], {"31":3, "77":1, "FF":1})
+        self.assertEqual(f["groupA_active_by_gear"], {"reverse":1})
+        self.assertEqual(f["groupB_active_by_gear"], {"reverse":1})
 
     def test_review_a_bad_checksum_frame_never_enters_values_or_continuity(self):
         log = ParkingLog()
@@ -114,6 +129,39 @@ class ParkingLogTests(unittest.TestCase):
         self.assertEqual(rec["e9"].get("byte0_set_in_reverse", 0), 0)
         self.assertEqual(rec["e9"]["byte0_set_in_unknown"], 2)
         self.assertEqual(rec["invalid_context"], 2)
+
+    def test_invalid_state_expires_previous_gear_at_its_own_timestamp(self):
+        log = ParkingLog()
+        log.car_state(10., "reverse", 1.)
+        log.car_state(10.1, "reverse", 1., valid=False)
+        log.frame(10.05, 0, ADDR_E9, e9(byte0=80))
+        log.frame(10.15, 0, ADDR_E9, e9(byte0=81))
+        log.car_state(None, None, None, valid=False)
+        log.car_state(10., "reverse", 1.)  # old input cannot restore the cleared history
+        log.frame(10.2, 0, ADDR_E9, e9(byte0=82))
+        record = log.record()["e9"]
+        self.assertEqual(record["byte0_set_in_reverse"], 1)
+        self.assertEqual(record["byte0_set_in_unknown"], 2)
+
+    def test_short_e9_resets_counter_history(self):
+        log = ParkingLog()
+        log.frame(0., 0, ADDR_E9, e9(counter=1))
+        log.frame(0.1, 0, ADDR_E9, b"")
+        log.frame(0.2, 0, ADDR_E9, e9(counter=3))
+        record = log.record()["e9"]
+        self.assertEqual((record["frames"], record["valid_frames"]), (3, 2))
+        self.assertEqual(record["format_mismatch"], 1)
+        self.assertEqual(record.get("counter_pairs", 0), 0)
+
+    def test_e9_out_of_order_or_duplicate_frame_breaks_pairing_until_reseeded(self):
+        for anomalous_time in (1., .95):
+            with self.subTest(anomalous_time=anomalous_time):
+                log = ParkingLog()
+                for stamp, counter in ((1.,1), (anomalous_time,9), (.99,8), (1.1,2), (1.2,3)):
+                    log.frame(stamp, 0, ADDR_E9, e9(byte0=10,counter=counter))
+                r = log.record()["e9"]
+                self.assertEqual((r["valid_frames"], r["byte0_set"]), (5, 5))
+                self.assertEqual((r["counter_pairs"], r["counter_skips"]), (1, 0))
 
     def test_ff_is_never_reported_as_clear_or_failed(self):
         log = ParkingLog()

@@ -25,6 +25,7 @@ def drive_record(paths, schema_dir: str) -> dict:
     log = capnp.load(os.path.join(schema_dir, "log.capnp"), imports=[schema_dir])
     out = ParkingLog()
     unreadable = 0
+    invalid_can = 0
     for path in paths:
         with open(path, "rb") as fh:
             raw = fh.read()
@@ -37,6 +38,10 @@ def drive_record(paths, schema_dir: str) -> dict:
                     events.append((e.logMonoTime, 0, (str(e.carState.gearShifter), float(e.carState.vEgo),
                                                       bool(e.valid))))
                 elif k == "can":
+                    if not e.valid:
+                        invalid_can += 1
+                        events.append((e.logMonoTime, 2, None))
+                        continue
                     frames = [(int(f.src), int(f.address), bytes(f.dat)) for f in e.can if f.address in _WANTED]
                     if frames:
                         events.append((e.logMonoTime, 1, frames))
@@ -47,12 +52,15 @@ def drive_record(paths, schema_dir: str) -> dict:
             if kind == 0:
                 gear, v, valid = item
                 out.car_state(t_ns / 1e9, gear, v, valid)
-            else:
+            elif kind == 1:
                 for bus, address, payload in item:
                     out.frame(t_ns / 1e9, bus, address, payload)
+            else:
+                out.break_counter_continuity()
     rec = out.record()
     rec["files"] = len(paths)
     rec["filesWithReadError"] = unreadable
+    rec["invalidCanEvents"] = invalid_can
     return rec
 
 

@@ -43,7 +43,7 @@ from measure_delay import delay_record, trusted_delay_s
 from messages import drive_end_data, drive_ready_data, drive_start_data, envelope, fit
 import parking_live
 from pipeline import STREAMS, Pipeline, PipelineConfig
-from samples import get
+from samples import event_payload, get
 from settings_snapshot import changed_keys, nnlc_model_token, read_settings, reread_watched
 from uplink import Uplink
 
@@ -63,13 +63,14 @@ class Agent:
     def __init__(self, *, params, applier, uplink, socket_factory, decode, slot_check,
                  car_params_decode=None, car_params_sp_decode=None, live_delay_decode=None, delay_probe=None,
                  wall_clock=time.time, monotonic=time.monotonic, resource_probe=None,
-                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None):
+                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None, can_slot_check=None):
         self.params = params
         self.applier = applier
         self.uplink = uplink
         self.socket_factory = socket_factory
         self.decode = decode
         self.slot_check = slot_check
+        self.can_slot_check = can_slot_check if can_slot_check is not None else slot_check
         # Decoders of stored messages; None = the Comma's own (device_params.py).
         self._decoders = {"car": car_params_decode, "car_sp": car_params_sp_decode, "delay": live_delay_decode}
         self.delay_probe = delay_probe
@@ -218,7 +219,7 @@ class Agent:
         self.socks = {stream: self.socket_factory(stream) for stream in STREAMS}
         if parking_live.PARKING_LIVE_ENABLED and self.can_decode is not None:
             # No `can` socket yet: it is opened only while the parking gate is open (_parking_tick).
-            self.parking = parking_live.ParkingLive(self.can_decode)
+            self.parking = parking_live.ParkingLive(self.can_decode, monotonic=self.monotonic)
         self.drive_probe = self.probe = dict(self.delay_probe()) if self.delay_probe else dict(PROBE_NOT_AVAILABLE)
         name, fuzzy = self._decoded(nnlc_match, "car_sp")
         self._event("drive_ready", drive_ready_data(probe=self.drive_probe, nnlc_model=nnlc_model_token(name),
@@ -229,6 +230,7 @@ class Agent:
         """Empty every socket, decode the newest message of each stream, and hand the batch to the pipeline."""
         batch = {}
         car_state_valid = None
+        car_state_unreadable = False
         for stream, sock in self.socks.items():
             newest = None
             while (raw := sock.receive(non_blocking=True)) is not None:
@@ -238,6 +240,11 @@ class Agent:
             try:
                 decoded = self.decode(stream, newest)
             except Exception:
+                if stream == "carControl":
+                    self.pipeline.control_decode_failed()
+                    self.latest_state.pop(stream, None)
+                if stream == "carState":
+                    car_state_unreadable = True
                 continue                # this stream is missing for this tick
             # The device decoder also returns the event's validity; test decoders may return only two values.
             t_ns, msg = decoded[0], decoded[1]
@@ -247,35 +254,43 @@ class Agent:
                 self.latest_state[stream] = (now, msg)
             if stream == "carState":
                 car_state_valid = valid
-        if self.parking is not None:
-            car_state = batch.get("carState")
-            if car_state is not None:
-                t_ns, msg = car_state
-                valid = car_state_valid if car_state_valid is not None else get(msg, "canValid")
-                self.parking.context(now, t_ns, get(msg, "vEgo"), get(msg, "gearShifter"),
-                                     None if valid is None else bool(valid))
-            self._parking_tick(now)
         if batch:
             self._send(self.pipeline.ingest_tick(batch))
+        if self.parking is not None:
+            self._parking_tick(batch.get("carState"), car_state_valid, car_state_unreadable)
 
-    def _parking_tick(self, now: float) -> None:
-        """Experimental parking telemetry: the `can` socket exists only while the gate is open."""
-        want = self.parking.want_open(now)
-        if want and self.can_sock is None:
-            if self.slot_check():
-                self.can_sock = self.socket_factory(parking_live.STREAM)
-                self.parking.on_open(now)
-            else:
-                self.parking.note_slot_refusal()
-        if self.can_sock is not None and not want:
-            self._close_can_sock()
-            self.parking.on_close()
+    def _parking_tick(self, car_state, valid, unreadable):
+        parking = self.parking
+        if parking.disabled_reason is not None:
             return
-        if self.can_sock is not None:
-            self.parking.collect(now, self.can_sock)
-            if self.parking.disabled_reason is not None:     # switched itself off: no more `can` work
+        # carState.logMonoTime in the installed build uses Python's monotonic clock.
+        now = self.monotonic()
+        try:
+            with parking.measure_tick(now):
+                if unreadable:
+                    parking.context(now, None, None, None, False)
+                elif car_state is not None:
+                    stamp, msg = car_state
+                    parking.context(now, stamp, get(msg, "vEgo"), get(msg, "gearShifter"), valid)
+                if parking.want_open(now):
+                    if self.can_sock is None and parking.can_try_slot(now):
+                        if self.can_slot_check():
+                            self.can_sock = self.socket_factory(parking_live.STREAM)
+                            parking.on_open(self.monotonic())
+                        else:
+                            parking.note_slot_refusal(now)
+                    if self.can_sock is not None:
+                        parking.collect(self.monotonic(), self.can_sock)
+                elif self.can_sock is not None:
+                    self._close_can_sock()
+                    parking.on_close(self.monotonic())
+        except Exception:
+            # Optional CAN transport failure must not consume the ordinary driving records.
+            parking.disabled_reason = "socket_error"
+        if parking.disabled_reason is not None and self.can_sock is not None:
+            with parking.measure_tick(self.monotonic()):
                 self._close_can_sock()
-                self.parking.on_close()
+                parking.on_close(self.monotonic())
 
     def _close_can_sock(self) -> None:
         sock, self.can_sock = self.can_sock, None
@@ -289,6 +304,9 @@ class Agent:
     def _send_parking(self) -> None:
         if self.parking is not None:
             parking, self.parking = self.parking, None
+            with parking.measure_tick(self.monotonic()):
+                self._close_can_sock()
+                parking.on_close(self.monotonic())
             self._event("parking_raw", parking.record())
 
     def _stop_listening(self, reason: str, cpu_pct=None, rss_mb=None) -> None:
@@ -425,15 +443,15 @@ def main() -> None:  # pragma: no cover - runs on the Comma
 
     def decode(service, raw):
         event = messaging.log_from_bytes(raw)
-        return event.logMonoTime, getattr(event, service), bool(event.valid)
+        return event.logMonoTime, event_payload(event, service), bool(event.valid)
 
-    streams = STREAMS + ((parking_live.STREAM,) if parking_live.PARKING_LIVE_ENABLED else ())
-
-    def slot_check():
+    def slot_check(streams=STREAMS):
         return not device_telemetry.slot_problems(device_telemetry.msgq_reader_counts(streams))
 
     def can_decode(raw):
         event = messaging.log_from_bytes(raw)
+        if not event.valid:
+            raise ValueError("invalid CAN event")
         return event.logMonoTime, event.can
 
     log_path = home / "agent.log"
@@ -445,7 +463,8 @@ def main() -> None:  # pragma: no cover - runs on the Comma
 
     agent = Agent(params=params, applier=applier, uplink=uplink, socket_factory=messaging.sub_sock,
                   decode=decode, slot_check=slot_check, delay_probe=DelayProbe().run,
-                  resource_probe=_resource_probe, on_tick_error=log_error, can_decode=can_decode)
+                  resource_probe=_resource_probe, on_tick_error=log_error, can_decode=can_decode,
+                  can_slot_check=lambda: slot_check((parking_live.STREAM,)))
     agent.start()
     while True:
         time.sleep(agent.step())
