@@ -100,6 +100,11 @@ class QualityAcceptance:
 class LaneSwayAcceptance(QualityAcceptance, unittest.TestCase):
     SECTION, BLOCK = "laneSway", "lane"
 
+    # The two tiers apply the minimum of 20 scored seconds to different numbers. Tier 1 reads the adapter's
+    # sums as they are, like the analysts did. Tier 2 reads the block as sent, with its one decimal, because
+    # that is all the service will ever see. A minute of exactly 40 messages on a stream of two a second can
+    # sit a few thousandths of a second under 20.0 and still read 20.0 as sent, so the two can differ by such
+    # minutes. Which reading the rule means is open; the expected-numbers file says what each one gives.
     def test_tier1_per_minute_values(self):
         per_drive = [[v for v in map(qv.lane_sway_sd, run["lane"].values()) if v is not None] for run in self.port]
         values = [v for drive in per_drive for v in drive]

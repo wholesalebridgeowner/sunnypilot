@@ -4,6 +4,7 @@ import unittest
 
 import quality_values as qv
 import shared_rules
+from measure_lane_sway import rounded as lane_as_sent
 
 LANE = {"n": 400, "sumSq": 0.49, "scoredS": 40.0, "validS": 45.0, "eligibleS": 50.0, "vMean": 30.0,
         "widthMin": 3.4, "widthMax": 3.8, "probMin": 0.93}
@@ -90,6 +91,15 @@ class ValueTests(unittest.TestCase):
         self.assertAlmostEqual(qv.lane_sway_sd(dict(LANE, scoredS=3.0), min_scored_s=0.0), 0.035)
         self.assertIsNone(qv.lane_sway_sd(dict(LANE, n=0, sumSq=0.0, scoredS=0.0), min_scored_s=0.0))
         self.assertIsNone(qv.lane_sway_sd(None))
+
+    def test_the_lane_minimum_is_read_on_the_block_as_sent(self):
+        # Forty messages of a stream of two a second are 20 s only by name: with the jitter of their time
+        # stamps they can add up to a few thousandths of a second less. The block carries its scored time with
+        # one decimal, and the service has nothing but the block, so such a window has a value.
+        scored = dict(LANE, n=40, sumSq=0.049, scoredS=19.997)
+        self.assertIsNone(qv.lane_sway_sd(scored))                    # the sum as the agent held it falls short
+        self.assertEqual(lane_as_sent(scored)["scoredS"], 20.0)
+        self.assertAlmostEqual(qv.lane_sway_sd(lane_as_sent(scored)), 0.035)
 
     def test_swing_rate(self):
         self.assertAlmostEqual(qv.swing_rate(SWINGS), 12.0)           # 6 swings in half a straight minute
