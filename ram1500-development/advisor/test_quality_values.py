@@ -56,8 +56,8 @@ class PoolTests(unittest.TestCase):
                          (None, None, None, None))
 
     def test_swing_blocks_pool_their_speed_by_time(self):
-        pooled = qv.pool("swings", [SWINGS, {"n": 2, "straightS": 10.0, "vMean": 20.0}])
-        self.assertEqual((pooled["n"], pooled["straightS"]), (8, 40.0))
+        pooled = qv.pool("swings", [SWINGS, {"n": 5, "straightS": 10.0, "vMean": 20.0}])
+        self.assertEqual((pooled["n"], pooled["straightS"]), (11, 40.0))
         self.assertAlmostEqual(pooled["vMean"], (30.0 * 28.0 + 10.0 * 20.0) / 40.0)
 
     def test_lag_blocks_add_step_by_step(self):
