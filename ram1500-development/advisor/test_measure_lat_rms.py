@@ -100,6 +100,32 @@ class LateralRmsCoreTests(unittest.TestCase):
         self.assertLess(rms(block), 1e-5)
         self.assertLess(rms(block, plan=True), 1e-5)
 
+    def test_the_band_is_fixed_in_samples_so_it_moves_with_the_loop_period(self):
+        # The filters count Samples, not seconds. What a steady sine reads follows from their design at the
+        # period the loop really ran at: a slower loop puts the whole band lower. Movement near the slow corner
+        # then reads higher and movement near the fast corner lower; only the middle of the band reads the
+        # same. So values from loops of different periods are not to be compared closely, and the service
+        # scores no window whose loop ran far from ten Samples a second.
+        def design(hz, period_s):
+            high = math.tan(math.pi * hz * period_s) / math.tan(math.pi * 0.10 / 10.0)
+            low = math.tan(math.pi * hz * period_s) / math.tan(math.pi * 1.0 / 10.0)
+            return high ** 2 / math.sqrt(1.0 + high ** 4) / math.sqrt(1.0 + low ** 4)
+
+        def reading(hz, period_ms):
+            block = feed(LateralRmsCore(), sine(0.05, hz), n=int(300_000 / period_ms), period_ms=period_ms,
+                         accept=lambda t_s: t_s >= 60.0)[0]
+            return rms(block)
+
+        for hz in (0.085, 0.2, 0.9):
+            for period_ms in (100, 105, 125):
+                with self.subTest(hz=hz, period_ms=period_ms):
+                    want = 0.05 / math.sqrt(2) * design(hz, period_ms / 1000)
+                    self.assertAlmostEqual(reading(hz, period_ms), want, delta=0.01 * want)
+        self.assertAlmostEqual(design(0.085, 0.125) / design(0.085, 0.100), 1.28, delta=0.01)
+        self.assertAlmostEqual(design(0.085, 0.105) / design(0.085, 0.100), 1.06, delta=0.01)
+        self.assertAlmostEqual(design(0.2, 0.125) / design(0.2, 0.100), 1.02, delta=0.01)
+        self.assertAlmostEqual(design(0.9, 0.125) / design(0.9, 0.100), 0.79, delta=0.01)
+
     def test_actual_and_planned_are_filtered_side_by_side(self):
         block = feed(LateralRmsCore(), sine(0.05, 0.2), planned=sine(0.10, 0.2), accept=lambda t_s: t_s >= 20.0)[0]
         self.assertAlmostEqual(rms(block, plan=True), 2 * rms(block), delta=1e-6)

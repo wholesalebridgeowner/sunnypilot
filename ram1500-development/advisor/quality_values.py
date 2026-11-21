@@ -65,7 +65,9 @@ def lat_accel_rms(block, loop_period_s=None, min_s: float = AY_MIN_S):
 
     `loop_period_s` is the window's own `windowS / n`. The filters behind the
     sums are made for about ten Samples a second, so a window whose loop ran
-    outside 0.095 to 0.125 s gives no value. Leave it out for a pooled block.
+    outside 0.095 to 0.125 s (both ends are inside) gives no value. Inside that
+    range the value still moves with the loop period (measure_lat_rms.py).
+    Leave it out for a pooled block.
     """
     if not block or block["n"] <= 0 or block["s"] < min_s:
         return None

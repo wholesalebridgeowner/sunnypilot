@@ -14,7 +14,10 @@ Per Sample, 6.0 s after its time stamp:
 
 The filters run on every Sample of a run, accepted or not, fed with the
 Samples as they come (they are made for about ten a second; the service does
-not score a window whose loop ran far from that). A run starts at the first
+not score a window whose loop ran far from that). The band is therefore fixed
+in Samples, not in seconds: a slower loop puts it lower, so slow movement
+reads higher and fast movement lower, and values from loops of different
+periods are not to be compared closely. A run starts at the first
 Sample after a missing curvature and at every gap, with the high-pass filter
 settled on the first value, so a steady cornering force gives no transient.
 Only Samples on straight road that the shared gates accept are summed.

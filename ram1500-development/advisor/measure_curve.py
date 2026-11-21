@@ -27,8 +27,12 @@ Per Sample, 6.0 s after its time stamp, with x = speed^2 x desired curvature
                                k = 0 to 10
 
 The earlier demand is read by time stamp: interpolated between the two Samples
-around the wanted time, so an uneven loop does not shift it. A gap drops the
-history. Nothing else is reset, at a gap or at a window boundary.
+around the wanted time, so an uneven loop does not shift it. Interpolating
+also smooths the noise the demand carries, at some steps back more than at
+others, so a fitted lag still moves a little with the loop period: lags from
+loops of different periods are not to be compared to the hundredth of a second.
+A gap drops the history. Nothing else is reset, at a gap or at a window
+boundary.
 
 The service turns the sums into values over a span (quality_values.py).
 

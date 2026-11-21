@@ -1,5 +1,6 @@
 """Curve sums and lag sums: actual cornering against what was commanded, and the sums behind a response lag."""
 import math
+import random
 import unittest
 from types import SimpleNamespace as ns
 
@@ -345,6 +346,30 @@ class LagCoreTests(unittest.TestCase):
                 lag, gain = quality_values.lag_fit(block)
                 self.assertAlmostEqual(lag, lag_s, delta=0.01)
                 self.assertAlmostEqual(gain, 0.9, delta=0.01)
+
+
+    def test_noise_on_the_demand_moves_the_fitted_lag_with_the_loop_period(self):
+        # Actual cornering follows the true demand 0.40 s late; the demand as it is read carries noise. The
+        # earlier demand is interpolated between Samples, which smooths that noise at some steps back and not
+        # at others, so the fit is pulled: up at a loop period of 0.105 s, down at 0.120 s. Without noise it is
+        # not. The pull stays under 0.04 s here; lags from loops of different periods are not to be compared
+        # more closely than that.
+        def true(t_s):
+            return 1.2 + 0.6 * math.sin(2 * math.pi * 0.2 * t_s) + 0.3 * math.sin(2 * math.pi * 0.07 * t_s + 1.0)
+
+        def fitted(period_ms, noise):
+            rng = random.Random(1)
+            block = lag_feed(lambda t_s: true(t_s) + rng.gauss(0.0, noise), lambda t_s: true(t_s - 0.40),
+                             n=int(600_000 / period_ms), period_ms=period_ms)[0]
+            return quality_values.lag_fit(block)[0]
+
+        for period_ms in (100, 105, 120):
+            with self.subTest(period_ms=period_ms, noise=0.0):
+                self.assertAlmostEqual(fitted(period_ms, 0.0), 0.40, delta=0.002)
+        even, slower, slowest = (fitted(period_ms, 0.15) for period_ms in (100, 105, 120))
+        self.assertAlmostEqual(even, 0.40, delta=0.01)
+        self.assertTrue(0.005 < slower - even < 0.04, slower - even)
+        self.assertTrue(0.005 < even - slowest < 0.04, even - slowest)
 
 
 class CurveMeasureTests(unittest.TestCase):
