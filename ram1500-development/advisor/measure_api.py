@@ -77,3 +77,25 @@ class Measure:
     def drive_end_fields(self) -> dict:
         """Other fields for `drive_end`."""
         return {}
+
+
+# --- helpers for measures that send a block of sums ---------------------------
+
+def closing_block(booked: dict):
+    """The one block booked while the closing window was open, or None.
+
+    `booked` is what a core hands over: {booking key: block}. A measure books
+    under the index of the open window, so at most one key can be there when
+    that window closes. More than one means the measure booked to a window it
+    was not in; that is a fault, and raising it switches the measure off.
+    """
+    if not booked:
+        return None
+    if len(booked) > 1:
+        raise RuntimeError("sums booked to more than one window")
+    return next(iter(booked.values()))
+
+
+def significant(value: float, digits: int = 5) -> float:
+    """Rounded to so many significant digits (a sum of squares has no fixed scale)."""
+    return float(f"{value:.{digits}g}") + 0.0

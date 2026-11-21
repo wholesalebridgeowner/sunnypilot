@@ -50,6 +50,10 @@ SHARP_DEMAND_MS2 = 1.5        # label on steering-limit events only
 CURVE_EVENT_GAP_S = 3.15      # a curve sample this long after the previous one starts a new curve
 LAG_TRAIL_S = 3.05            # lag samples continue this long after a curve
 
+CURVE_LOW_MIN_MS = 5.0        # low-speed curve line: from this speed up to the quality floor
+LAG_STEP_S = 0.1              # response lag: the demand is compared at whole steps of this ...
+LAG_STEPS = 10                # ... from none to this many
+
 # --- steering command at its limit, warnings -------------------------------------
 AT_LIMIT_TORQUE = 343         # 0.98 x 350, the truck's largest steering command
 ASK_LIMIT = 0.98              # of the full command asked for
@@ -59,6 +63,15 @@ LIMIT_EVENT_MIN_S = 0.4       # a shorter limit event is not recorded
 # --- driving time ------------------------------------------------------------------
 MOVING_ABOVE_MS = 0.5         # above this speed the truck is driving; "driving" always means this
 MIN_DRIVE_MOVING_S = 60       # service: a session with less movement is not a drive
+
+# --- service: least data behind a stored quality value ----------------------------
+LANE_MIN_SCORED_S = 20.0      # lane sway of a window
+SWING_MIN_STRAIGHT_S = 15.0   # swing rate of a window
+AY_MIN_S = 30.0               # lateral-motion RMS of a window ...
+AY_PERIOD_MIN_S = 0.095       # ... whose loop period (windowS / n) lies in this range
+AY_PERIOD_MAX_S = 0.125
+LAG_MIN_EVENTS = 30           # response lag of a span: curve events ...
+LAG_MIN_S = 200.0             # ... and seconds of lag data
 
 # --- model stream: fast (live, full-rate logs) or slow (decimated logs) ------------
 MODEL_SPEED_SPACINGS = 20     # stream speed: median of this many spacings between new messages
