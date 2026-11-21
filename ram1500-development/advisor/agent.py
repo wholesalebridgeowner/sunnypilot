@@ -145,10 +145,12 @@ class Agent:
             sample = self.builder.ingest(service, t_ns, msg)
             if sample is None:
                 continue
+            prev = None
             if self.minute is not None and sample.t - self.minute.start_t >= WINDOW_S:
+                prev = self.minute.last_sample
                 self._send_minute()
             if self.minute is None:
-                self.minute = MinuteSummary(start_t=sample.t)
+                self.minute = MinuteSummary(start_t=sample.t, prev=prev)
             self.minute.add(sample)
 
     def _send_minute(self) -> None:

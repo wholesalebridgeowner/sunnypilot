@@ -25,11 +25,13 @@ def summaries_from_events(events, *, sample_hz: float = 10.0, window_s: float = 
         sample = builder.ingest(service, t_ns, msg)
         if sample is None:
             continue
+        prev = None
         if current is not None and sample.t - current.start_t >= window_s:
+            prev = current.last_sample
             summaries.append(current.finish(sample_hz))
             current = None
         if current is None:
-            current = MinuteSummary(start_t=sample.t)
+            current = MinuteSummary(start_t=sample.t, prev=prev)
         current.add(sample)
     if current is not None and current.samples:
         summaries.append(current.finish(sample_hz))

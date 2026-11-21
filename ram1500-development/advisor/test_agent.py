@@ -150,6 +150,20 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(summaries[0]["data"]["engagedMinutes"], 1.0)
         self.assertFalse(summaries[0]["data"]["trialActive"])
 
+    def test_control_message_a_few_ms_newer_still_counts_as_engaged(self):
+        # Regression for the 11/20 test drive: engaged read ~0.5/min because carControl
+        # for the same cycle is a few ms newer than carState.
+        self.drive()
+        for i in range(605):
+            t = i * 100_000_000
+            self.socks["carState"].queue.append((t, ns(vEgo=30.0, aEgo=0.0, steeringRateDeg=0.0,
+                                                       steeringPressed=False, gearShifter="drive")))
+            self.socks["carControl"].queue.append((t + 5_000_000, ns(latActive=True, enabled=True)))
+            self.socks["controlsState"].queue.append((t + 6_000_000, ns(desiredCurvature=0.0, curvature=0.0)))
+            self.agent.tick()
+        summary = next(e for e in self.uplink.events if e["type"] == "summary")
+        self.assertEqual(summary["data"]["engagedMinutes"], 1.0)
+
     def test_decodes_only_newest_message_per_service(self):
         self.drive()
         for i in range(5):

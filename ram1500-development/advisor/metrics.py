@@ -30,7 +30,9 @@ class Sample:
 
 
 class MinuteSummary:
-    def __init__(self, start_t: float):
+    def __init__(self, start_t: float, prev: Sample | None = None):
+        """`prev` = last sample of the previous minute, so an event that spans the
+        boundary (lane change, warning, hard stop) is counted once, not twice."""
         self.start_t = start_t
         self.samples = 0
         self.engaged = 0
@@ -45,7 +47,11 @@ class MinuteSummary:
         self.hard_brakes = []
         self.speed_sum = 0.0
         self._rate_sign = 0
-        self._prev = None
+        self._prev = prev
+
+    @property
+    def last_sample(self) -> Sample | None:
+        return self._prev
 
     def add(self, s: Sample) -> None:
         prev = self._prev

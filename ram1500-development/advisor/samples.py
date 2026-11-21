@@ -10,6 +10,7 @@ import math
 from metrics import Sample
 
 FRESH_NS = 500_000_000
+FUTURE_TOLERANCE_NS = 100_000_000   # carControl/controlsState for the same cycle arrive a few ms after carState
 SCHEDULE_TOLERANCE = 0.25    # accept a sample up to 25% of an interval early (log timing jitter)
 LANE_CHANGE_OFF = {"off", "None", ""}
 RAM_STEER_LIMIT = 350
@@ -42,7 +43,7 @@ class SampleBuilder:
 
     def _fresh(self, service: str, t_ns: int):
         item = self.latest.get(service)
-        if item is None or not 0 <= t_ns - item[0] <= FRESH_NS:
+        if item is None or not -FUTURE_TOLERANCE_NS <= t_ns - item[0] <= FRESH_NS:
             return None
         return item[1]
 

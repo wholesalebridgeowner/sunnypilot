@@ -58,6 +58,14 @@ class MinuteSummaryTests(unittest.TestCase):
         self.assertEqual(out["laneChanges"], 1)
         self.assertEqual(out["hardBrakes"], [{"leadPresent": True, "leadDistanceM": 12.3, "speedMs": 25.0}])
 
+    def test_event_spanning_a_minute_boundary_counts_once(self):
+        first = MinuteSummary(start_t=0.0)
+        first.add(sample(59.9, lane_change=True, alerts=frozenset({"steerSaturated"}), a_ego=-4.0))
+        second = MinuteSummary(start_t=60.0, prev=first.last_sample)
+        second.add(sample(60.0, lane_change=True, alerts=frozenset({"steerSaturated"}), a_ego=-4.0))
+        out = second.finish(HZ)
+        self.assertEqual((out["laneChanges"], out["steerWarningEpisodes"], len(out["hardBrakes"])), (0, 0, 0))
+
     def test_disengaged_driving_does_not_count_for_steering(self):
         out = self.summarize([sample(i / HZ, lat_active=False,
                                      steering_rate_deg_s=5.0 if i % 20 < 10 else -5.0) for i in range(600)])

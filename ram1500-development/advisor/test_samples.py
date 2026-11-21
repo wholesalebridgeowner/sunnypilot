@@ -41,6 +41,20 @@ class SampleBuilderTests(unittest.TestCase):
         count = sum(b.ingest("carState", i * 10_000_000, CS) is not None for i in range(1000))
         self.assertAlmostEqual(count, 100, delta=1)
 
+    def test_control_message_slightly_newer_than_car_state_counts(self):
+        # Live: carControl for the same 100 Hz cycle is published a few ms AFTER carState.
+        b = SampleBuilder(sample_hz=10.0)
+        b.ingest("carControl", T0 + 5_000_000, ns(latActive=True))
+        b.ingest("controlsState", T0 + 6_000_000, ns(desiredCurvature=0.01, curvature=0.009))
+        s = b.ingest("carState", T0, CS)
+        self.assertTrue(s.lat_active)
+        self.assertEqual(s.desired_curvature, 0.01)
+
+    def test_message_far_in_the_future_is_not_used(self):
+        b = SampleBuilder(sample_hz=10.0)
+        b.ingest("carControl", T0 + 900_000_000, ns(latActive=True))
+        self.assertFalse(b.ingest("carState", T0, CS).lat_active)
+
     def test_stale_messages_are_ignored(self):
         b = SampleBuilder(sample_hz=10.0)
         b.ingest("carControl", 0, ns(latActive=True))
