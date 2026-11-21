@@ -92,13 +92,14 @@ class BrakeDetector:
             buf.popleft()
 
         v1 = self._speed_at(t_ns - _ONE_S_NS)
-        v2 = self._speed_at(t_ns - _TWO_S_NS)
         drop1 = 0.0 if v1 is None else v1 - v
-        drop2 = None if v2 is None else v2 - v
         ep = self._ep
+        if ep is None and drop1 < OPEN_DROP_MS:
+            return done                             # most Samples: nothing open, nothing to open
+        v2 = self._speed_at(t_ns - _TWO_S_NS)
+        drop2 = None if v2 is None else v2 - v
         if ep is None:
-            if drop1 >= OPEN_DROP_MS:
-                self._open(t_ns, drop1, drop2, v1, v2)
+            self._open(t_ns, drop1, drop2, v1, v2)
         elif drop1 < CLOSE_DROP_MS:
             done = self._close()
         else:
