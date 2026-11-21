@@ -1,0 +1,89 @@
+diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
+index 9ead933..267975f 100644
+--- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
++++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
+@@ -7,6 +7,8 @@
+ 
+ #include "selfdrive/ui/sunnypilot/qt/onroad/hud.h"
+ 
++#include <cmath>
++
+ #include "selfdrive/ui/qt/util.h"
+ 
+ 
+@@ -16,6 +18,11 @@ void HudRendererSP::updateState(const UIState &s) {
+   HudRenderer::updateState(s);
+ 
+   const SubMaster &sm = *(s.sm);
++  // RamPilot: speed limit the truck reports (carStateSP.speedLimit, m/s)
++  const auto car_state_sp = sm["carStateSP"].getCarStateSP();
++  speedLimitValid = sm.alive("carStateSP") && car_state_sp.getSpeedLimitValid() && car_state_sp.getSpeedLimit() > 0.f;
++  speedLimit = car_state_sp.getSpeedLimit() * (is_metric ? MS_TO_KPH : MS_TO_MPH);
++
+   const bool cs_alive = sm.alive("controlsState");
+   const auto cs = sm["controlsState"].getControlsState();
+   const auto car_state = sm["carState"].getCarState();
+@@ -80,6 +87,11 @@ void HudRendererSP::updateState(const UIState &s) {
+ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+   HudRenderer::draw(p, surface_rect);
+   if (!reversing) {
++    // RamPilot: speed limit sign under the MAX box
++    if (speedLimitValid) {
++      drawSpeedLimitSign(p, surface_rect);
++    }
++
+     // Bottom Dev UI
+     if (devUiInfo == 2) {
+       QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
+@@ -97,6 +109,36 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+   }
+ }
+ 
++// RamPilot: US-style rectangular sign in mph, round red-ring sign in km/h, under the MAX box
++void HudRendererSP::drawSpeedLimitSign(QPainter &p, const QRect &surface_rect) {
++  p.save();
++  const QString value = QString::number(std::nearbyint(speedLimit));
++  if (is_metric) {
++    const QRect r(60 + (172 - 184) / 2, 45 + 204 + 24, 184, 184);
++    p.setPen(QPen(QColor(0xe0, 0x1b, 0x24), 18));
++    p.setBrush(Qt::white);
++    p.drawEllipse(r.adjusted(9, 9, -9, -9));
++    p.setPen(Qt::black);
++    p.setFont(InterFont(value.length() > 2 ? 62 : 76, QFont::Bold));
++    p.drawText(r, Qt::AlignCenter, value);
++  } else {
++    const QRect r(60, 45 + 204 + 24, 172, 204);
++    p.setPen(QPen(Qt::black, 6));
++    p.setBrush(Qt::white);
++    p.drawRoundedRect(r.adjusted(3, 3, -3, -3), 18, 18);
++    p.setPen(QPen(Qt::black, 4));
++    p.setBrush(Qt::NoBrush);
++    p.drawRoundedRect(r.adjusted(14, 14, -14, -14), 10, 10);
++    p.setPen(Qt::black);
++    p.setFont(InterFont(34, QFont::Bold));
++    p.drawText(r.adjusted(0, 26, 0, 0), Qt::AlignTop | Qt::AlignHCenter, "SPEED");
++    p.drawText(r.adjusted(0, 64, 0, 0), Qt::AlignTop | Qt::AlignHCenter, "LIMIT");
++    p.setFont(InterFont(82, QFont::Bold));
++    p.drawText(r.adjusted(0, 96, 0, 0), Qt::AlignTop | Qt::AlignHCenter, value);
++  }
++  p.restore();
++}
++
+ void HudRendererSP::drawText(QPainter &p, int x, int y, const QString &text, QColor color) {
+   QRect real_rect = p.fontMetrics().boundingRect(text);
+   real_rect.moveCenter({x, y - real_rect.height() / 2});
+diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.h b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
+index 968789b..e49fbf7 100644
+--- a/selfdrive/ui/sunnypilot/qt/onroad/hud.h
++++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
+@@ -25,6 +25,10 @@ private:
+   int drawRightDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
+   int drawBottomDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
+   void drawBottomDevUI(QPainter &p, int x, int y);
++  void drawSpeedLimitSign(QPainter &p, const QRect &surface_rect);  // RamPilot
++
++  bool speedLimitValid = false;  // RamPilot: the truck reports a speed limit
++  float speedLimit = 0;          // RamPilot: in display units (mph or km/h)
+ 
+   bool lead_status;
+   float lead_d_rel;
