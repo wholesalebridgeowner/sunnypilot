@@ -1,8 +1,26 @@
-# RamPilot screen changes (comma three)
+# RamPilot screen build for comma three
 
-The comma three's screen is the compiled Qt program `selfdrive/ui/ui`. RamPilot changes it from sunnypilot's own source for the installed build (commit `737a6c42`), so the rebuilt program matches the rest of the installed software.
+The comma three runs the compiled Qt program `selfdrive/ui/ui`. The builder starts from sunnypilot source commit `737a6c4236e843034680c951005b38d15815363f` for the installed `1f7233cb` build. The `0001-rampilot-speed-limit-sign.patch` patch draws a speed-limit sign under MAX when `carStateSP.speedLimitValid` is set and the truck is outside Reverse. The sign uses the value in `carStateSP.speedLimit` (m/s).
 
-- `0001-rampilot-speed-limit-sign.patch` draws a speed-limit sign under the MAX box. In mph it is the US rectangular sign; in km/h it is the round red-ring sign. It shows only when `carStateSP.speedLimitValid` is set and the truck is not reversing. The value comes from `carStateSP.speedLimit` (m/s), which card fills from the truck's own speed-limit message once its decode is added in the Chrysler car code.
-- `build_ui_on_device.sh` builds the program on the comma itself, with the truck parked and offroad, after RamPilot is installed. It clones sunnypilot at `737a6c42`, applies these patches, copies the installed RamPilot schema, and runs `scons selfdrive/ui/ui`. It stages the result in `/data/ram-diag/rampilot/ui-<sha12>` and does not touch `/data/openpilot`.
+## Building
 
-The staged program is copied to the laptop and committed as `selfdrive/ui/ui`, with its SHA-256 in `rampilot/ALLOWED_BINARIES`. `rampilot/device.sh` accepts that one compiled file only when its SHA-256 matches the pin, and rollback restores the stock program.
+With approval for a parked build and the intended RamPilot cereal schemas installed, run `bash build_ui_on_device.sh` as the comma user. The builder requires a readable `IsOnroad` containing the single byte `0` and rechecks it before compilation and staging. It needs Git, SCons, clang++, qmake for the installed Qt version, GNU utilities, flock, access to the pinned source and submodules, and at least 6,000 MiB free on the build filesystem.
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `OP_DIR` | `/data/openpilot` | Source of the installed `cereal/*.capnp` files |
+| `PARAMS_DIR` | `/data/params/d` | Contains the offroad flag |
+| `WORK` | `/data/rampilot-ui-build` | Dedicated temporary build space |
+| `STATE_DIR` | `/data/ram-diag/rampilot` | Destination for completed artifacts |
+
+For an offline host fixture, point those variables to separate directories, set `SOURCE_URL` to a local Git source, and set `SOURCE_COMMIT` to its full lowercase 40-character commit ID. The fixture can run its own copy of this script beside its test patches.
+
+`WORK` must be empty on first use. Its marker identifies the canonical directory for subsequent builds. Both writable directories must be disjoint from one another, the installed checkout and the parameter directory, including through symlinks or parent directories. Every build checks out the pinned commit and submodules in a fresh private directory and uses a private SCons cache. The script removes its temporary files on normal exit and handled failures. A power loss can leave a private temporary directory behind. A retry creates a fresh one.
+
+## Artifact and manifest
+
+A successful build prints both paths under `STATE_DIR/ui-build-<manifest SHA-256>/`. The directory contains the executable `ui-<first 12 characters of output SHA-256>` and `manifest.txt`. The builder publishes them together. It reuses an existing matching pair after checking both files. A failed build leaves previous completed artifacts available.
+
+The manifest records the checked-out source commit, ordered patch filenames and hashes, installed schema filenames and hashes as copied into the build, the clang++ and Qt versions, and the full output SHA-256. Verify the manifest's hash against its directory name and the executable against `output_sha256` after copying both to the review machine. The digest and manifest identify the particular build for review.
+
+For a separately approved installation, record the reviewed executable's SHA-256 independently, commit the executable as `selfdrive/ui/ui` with Git mode `100755`, and add its digest to `rampilot/ALLOWED_BINARIES`. The installer requires that independent SHA-256 via `--ui-sha256` and checks it against the candidate. See [the installation instructions](../INSTALL.md).
