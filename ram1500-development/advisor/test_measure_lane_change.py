@@ -87,7 +87,7 @@ class Run:
     model     model(t) -> model values that differ (state, direction, left_y, right_y, left_prob, right_prob)
     no_model  no_model(t) -> True where the model message is left out
     slow      a 2 Hz model stream with the limits of a decimated log
-    model_early_ms  the model message of a tick is stamped this much before its carState
+    model_early_ms  the model message of a tick is stamped this much before its carState (negative: after it)
     """
 
     def __init__(self, changes=(), car=None, lat=None, accel=None, model=None, no_model=None, slow=False, n=450,
@@ -783,6 +783,14 @@ class BookingTests(unittest.TestCase):
         r = Run((LC(), LC(start=26.0, starting=1.0, finishing=0.0, cross=None)), n=600)
         self.assertEqual([x["outcome"] for x in r.records], ["cancelled", "completed"])
         self.assertEqual(r.sent_at, [301, 311])                        # 27.0 + 3 s, and 23.0 + 8 s
+
+    def test_model_messages_newer_than_the_car_state_of_their_tick_give_the_same_record(self):
+        # Live, a model message can be stamped after the carState it arrives with: it then waits for the next Sample.
+        plain = Run(LC(), car=PUSH, accel=lambda t: 0.8 if ms(21) <= t < ms(22) else 0.0)
+        held = Run(LC(), car=PUSH, accel=lambda t: 0.8 if ms(21) <= t < ms(22) else 0.0, model_early_ms=-30)
+        self.assertEqual(held.record, plain.record)
+        self.assertEqual(held.counts, plain.counts)
+        self.assertEqual((plain.sent_at, held.sent_at), ([311], [312]))
 
     def test_the_drive_ends_during_a_lane_change(self):
         r = Run(LC(), n=221)                                           # still starting
