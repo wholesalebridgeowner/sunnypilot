@@ -171,6 +171,19 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(any(recent[213:]))          # 2.05 s after it: no longer recent
 
 
+    def test_recent_lasts_across_a_stall(self):
+        # Driver steering on Samples 1 and 2, then a 0.3 s stall before Sample 6.
+        times = grid(6) + grid(30, start_ns=T0 + 5 * 100 * MS + 300 * MS)
+        pressed = [False, True, True] + [False] * 33
+        flags, _ = run(stream(times, lambda i, t: {"steering_pressed": pressed[i]}))
+        self.assertTrue(flags[6].sample.gap)
+        last_driver_ns = times[2]
+        for g, t_ns in zip(flags[2:], times[2:]):
+            self.assertEqual(g.driver_recent, t_ns - last_driver_ns < 2_050 * MS, msg=f"{(t_ns - T0) / 1e9:.1f} s")
+        self.assertTrue(flags[6].driver_recent)      # the gap Sample itself: 0.6 s after the press
+        self.assertFalse(flags[-1].driver_recent)
+
+
 class CleanTests(unittest.TestCase):
     """Nothing is clean from 2.0 s before a disturbed Sample to 5.0 s after it (closed, by time stamp)."""
     N = 300                                          # 30 s; disturbance in the middle, clear of both ends
