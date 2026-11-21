@@ -77,7 +77,11 @@ class ServiceLockTests(unittest.TestCase):
         self.assertEqual(self.stored("suggestions/") + self.stored("tokens/"), [])
         self.clock.t += 3700
         self.assertTrue(self.service.run_nightly())
-        self.assertIn("Nightly", self.notifier.sent[-1]["title"])
+        report = self.notifier.sent[-1]
+        self.assertIn("Nightly", report["title"])
+        self.assertIn("Hard stops: 7 (7 with a car close ahead).", report["message"])     # the fact stays
+        self.assertNotIn("following-distance", report["message"])                         # the advice does not
+        self.assertNotIn("Suggestion", report["message"])
         self.assertEqual(self.with_buttons(), [])
         self.assertEqual(self.stored("suggestions/") + self.stored("tokens/"), [])
         self.assertEqual(self.service.approvals_for_comma(), [])

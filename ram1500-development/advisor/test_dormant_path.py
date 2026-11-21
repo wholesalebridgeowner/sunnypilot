@@ -257,6 +257,16 @@ class DormantServiceTests(LocksOpen, test_service.ServiceFixture):
                                  used_nonces=set())
         self.assertEqual(fields["change"], {"NeuralNetworkLateralControl": True})
 
+    def test_nightly_report_carries_the_braking_advice(self):
+        self.start()
+        stop = {"leadPresent": True, "leadDistanceM": 9.0, "speedMs": 20.0}
+        for _ in range(3):
+            self.event("summary", data=test_service.minute(hardBrakes=[stop]))
+        self.event("drive_end")
+        self.clock.t += 3700
+        self.service.run_nightly()
+        self.assertIn("following-distance", self.notifier.sent[-1]["message"])
+
     def test_nightly_suggestions_can_be_switched_off(self):
         self.service.nightly_suggestions = False
         self.start()

@@ -33,7 +33,8 @@ TITLE_NIGHTLY = "Nightly review: Ram 1500"
 # Lock 1 of the suggestion path. A code constant: no constructor argument,
 # environment variable, file or request can open it. While it is False the
 # service creates no suggestion, answers "not found" on the approve and decline
-# links, and hands no approval to the Comma.
+# links, hands no approval to the Comma, and prints no advice in the nightly
+# review.
 SUGGESTIONS_BUILT_IN = False
 
 
@@ -261,7 +262,7 @@ class AdvisorService:
         lines = [f"{report['drives']} drive(s), {report['engagedMinutes']} min with steering on.",
                  f"Steering warnings: {report['steerWarnings']}. Lane changes: {report['laneChanges']}.",
                  f"Hard stops: {report['hardBrakes']} ({report['closeLeadHardBrakes']} with a car close ahead)."]
-        if report["brakingAdvice"]:
+        if report["brakingAdvice"] and SUGGESTIONS_BUILT_IN:
             lines.append(report["brakingAdvice"])
         for trial in report["trials"]:
             outcome = "improved" if trial["keep"] else "no clear gain"
