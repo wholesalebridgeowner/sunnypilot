@@ -28,6 +28,16 @@ g bundle create -q "$W/good.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$BADP"; g bundle create -q "$W/badp.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$BADB"; g bundle create -q "$W/badb.bundle" "$BASE..rampilot-tici" 2>/dev/null
 g branch -f rampilot-tici "$ORPH"; g bundle create -q "$W/orph.bundle" rampilot-tici 2>/dev/null
+# Screen-program binaries: pinned (accepted), wrong pin, and a pinned binary at a path that is not allowed
+pin() { printf '%s  %s\n' "$(sha256sum "$1" | cut -c1-64)" "$1" > rampilot/ALLOWED_BINARIES; }
+g checkout -qb ui-ok "$BASE"; mkdir -p selfdrive/ui rampilot; printf '\x7fELF\x00ui1' > selfdrive/ui/ui; pin selfdrive/ui/ui
+g add -A && g commit -qm ui; UIOK="$(git rev-parse HEAD)"
+g checkout -qb ui-badsha "$BASE"; mkdir -p selfdrive/ui rampilot; printf '\x7fELF\x00ui2' > selfdrive/ui/ui
+printf '%064d  selfdrive/ui/ui\n' 0 > rampilot/ALLOWED_BINARIES; g add -A && g commit -qm uibad; UIBAD="$(git rev-parse HEAD)"
+g checkout -qb bin-listed "$BASE"; mkdir -p selfdrive/x rampilot; printf '\x7fELF\x00x' > selfdrive/x/prog; pin selfdrive/x/prog
+g add -A && g commit -qm other; BINL="$(git rev-parse HEAD)"
+g checkout -q staging-tici
+for n in UIOK UIBAD BINL; do g branch -f rampilot-tici "${!n}"; g bundle create -q "$W/$n.bundle" "$BASE..rampilot-tici" 2>/dev/null; done
 g branch -f rampilot-tici "$GOOD"
 
 # Simulated device: only the baseline, params, a staged update
@@ -54,6 +64,11 @@ git -C "$OP_DIR" checkout -q -- selfdrive/a.py
 [ "$(head)" = "$BASE" ] && [ "$(cat "$PARAMS_DIR/DisableUpdates")" = 0 ] && [ -f "$STAGING_ROOT/finalized/.overlay_consistent" ] \
   && ok "refusals changed nothing" || bad "refusals changed nothing"
 
+expect_refused "install refused for an unpinned screen binary" "is not pinned" bash "$DEV" install "$W/UIBAD.bundle" "$UIBAD"
+expect_refused "install refused for a pinned binary at another path" "binary files: selfdrive/x/prog" bash "$DEV" install "$W/BINL.bundle" "$BINL"
+expect_ok "install accepts the pinned screen binary" bash "$DEV" install "$W/UIOK.bundle" "$UIOK"
+expect_ok "rollback after the screen binary" bash "$DEV" rollback
+[ "$(head)" = "$BASE" ] && [ ! -e "$OP_DIR/selfdrive/ui/ui" ] && ok "screen binary removed by rollback" || bad "screen binary removed by rollback"
 expect_ok "install succeeds" bash "$DEV" install "$W/good.bundle" "$GOOD"
 [ "$(head)" = "$GOOD" ] && ok "device is on the candidate" || bad "device is on the candidate"
 [ "$(git -C "$OP_DIR" rev-parse --abbrev-ref HEAD)" = rampilot-tici ] && ok "branch is rampilot-tici" || bad "branch is rampilot-tici"

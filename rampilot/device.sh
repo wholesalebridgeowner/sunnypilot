@@ -27,7 +27,10 @@ MIN_FREE_MB="${MIN_FREE_MB:-500}"
 # Paths a RamPilot change may never touch on this device.
 DENY_RE='^(panda/|opendbc_repo/opendbc/safety/|selfdrive/modeld/models/|sunnypilot/modeld/models/|third_party/|system/hardware/|tinygrad_repo/)|\.(so|bin|signed|elf|o|a|thneed|onnx|pkl|dlc)$'
 MARKER="$STAGING_ROOT/finalized/.overlay_consistent"
-VERIFY_PROCS="${VERIFY_PROCS:-selfdrive.controls.controlsd selfdrive.car.card selfdrive.selfdrived.selfdrived selfdrive.locationd.paramsd selfdrive.ui.soundd}"
+# The only compiled file a RamPilot change may replace: the screen program, pinned by SHA-256 in
+# rampilot/ALLOWED_BINARIES ("<sha256>  <path>") inside the candidate commit.
+ALLOWED_BINARY_PATHS="${ALLOWED_BINARY_PATHS:-selfdrive/ui/ui}"
+VERIFY_PROCS="${VERIFY_PROCS:-selfdrive.controls.controlsd selfdrive.car.card selfdrive.selfdrived.selfdrived selfdrive.locationd.paramsd selfdrive.ui.soundd ^\./ui$}"
 VERIFY_WAIT_S="${VERIFY_WAIT_S:-30}"
 LOG_DIR="${LOG_DIR:-/data/log}"
 
@@ -60,7 +63,14 @@ check_candidate() {  # $1 = sha already fetched
   bad="$(git_op diff --name-only "$BASELINE_SHA" "$sha" | grep -E "$DENY_RE" || true)"
   [ -z "$bad" ] || die "candidate touches protected paths: $(echo "$bad" | tr '\n' ' ')"
   binary="$(git_op diff --numstat "$BASELINE_SHA" "$sha" | awk '$1 == "-" || $2 == "-" {print $3}')"
-  [ -z "$binary" ] || die "candidate changes binary files: $(echo "$binary" | tr '\n' ' ')"
+  local b expected actual
+  for b in $binary; do
+    case " $ALLOWED_BINARY_PATHS " in *" $b "*) ;; *) die "candidate changes binary files: $b" ;; esac
+    expected="$(git_op show "$sha:rampilot/ALLOWED_BINARIES" 2>/dev/null | awk -v p="$b" '$2 == p {print $1}')"
+    actual="$(git_op show "$sha:$b" | sha256sum | cut -c1-64)"
+    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "binary $b (sha256 $actual) is not pinned in rampilot/ALLOWED_BINARIES"
+    say "pinned binary ok: $b sha256 $actual"
+  done
   say "changed files from baseline:"
   git_op diff --stat "$BASELINE_SHA" "$sha" | sed 's/^/  /'
 }
