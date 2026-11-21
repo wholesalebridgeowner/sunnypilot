@@ -39,7 +39,8 @@ def _car_state(r):
 
 
 def _car_control(r):
-    return ns(latActive=r[2] > 0.5, actuators=ns(torque=r[5]))
+    flag = r[2]
+    return ns(latActive=bool(flag) if flag in (0, 1) else None, actuators=ns(torque=r[5]))
 
 
 def _controls_state(r):

@@ -7,6 +7,7 @@ from device_params import blind_spot_enabled
 from measure_steering_loss import CAUSES, SteeringLoss
 from messages import drive_ready_data
 from pipeline import Pipeline, PipelineConfig
+from samples import event_payload
 from schema_v2 import DATA
 from synth import SEC
 
@@ -65,6 +66,37 @@ class TestSteeringLoss(unittest.TestCase):
 
     def test_steering_staying_on_gives_nothing(self):
         self.assertEqual(run(lambda t_s: {"carControl": {"lat": True}}), [])
+
+    def test_control_outage_does_not_create_an_edge_and_tracking_resumes(self):
+        for resume_active in (False, True):
+            with self.subTest(resume_active=resume_active):
+                def drive(t):
+                    if 5 <= t < 6:
+                        return {"skip": ("carControl",)}
+                    active = t < 5 or (t < 9 and resume_active) or 9 <= t < 10
+                    return {"carControl": {"lat": active}, "carState": {"brake": t >= 10}}
+                self.assertEqual([r["cause"] for r in run(drive)], ["brake"])
+
+    def test_gap_in_control_timestamps_can_end_between_two_car_state_ticks(self):
+        # At 5.5 s the 5.0 s control is still fresh. At 5.6 s a new False arrives.
+        def drive(t):
+            if 5 < t < 5.6:
+                return {"skip": ("carControl",)}
+            return {"carControl": {"lat": t <= 5}}
+        self.assertEqual(run(drive), [])
+
+    def test_invalid_control_delivered_on_an_intervening_tick_breaks_the_edge(self):
+        p = Pipeline(PipelineConfig(measures=(SteeringLoss,)))
+        batches = synth.drive(synth.ticks(25), lambda i, t: {"carControl": {"lat": i < 10}})
+        invalid = ns(logMonoTime=T0 + 950_000_000, valid=False, carControl=synth.car_control(lat=False))
+        batches.insert(10, {"carControl": (invalid.logMonoTime, event_payload(invalid, "carControl"))})
+        self.assertEqual([d for k, d in synth.run(p, batches) if k == "steering_loss"], [])
+
+    def test_missing_control_after_an_observed_fall_preserves_brake_evidence(self):
+        def drive(t):
+            return {"carControl": {"lat": t < 5}, "skip": ("carControl",) if t > 5 else (),
+                    "carState": {"brake": 5.1 <= t <= 5.2}}
+        self.assertEqual([r["cause"] for r in run(drive)], ["brake"])
 
     def test_saturation_warning_is_never_a_loss(self):
         recs = run(lambda t_s: {"carControl": {"lat": True},

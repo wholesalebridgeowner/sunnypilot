@@ -1,9 +1,10 @@
 """Steering losses: every time sunnypilot's steering switches off while the truck is moving, and what was
 happening around that moment.
 
-A loss is a falling edge of the steering-on flag (carControl.latActive, via the GateTracker) at a speed of
-at least 5 m/s on the last steering-on Sample, with no data gap between the two Samples. The evidence window runs from 0.3 s before the edge to 0.3 s
-after it. One `steering_loss` record is sent per loss:
+A loss requires adjacent Samples with observed carControl.latActive values of True then False at a speed of
+at least 5 m/s on the last steering-on Sample. A break in either the carState samples or the delivered
+control observations interrupts edge detection. Live and decimated inputs retain the newest control
+per tick. The evidence window extends 0.3 s before and after the edge. One `steering_loss` record is sent per loss:
 
     cause       the first of these that is in the evidence, in this order:
                 brake       the brake pedal was down
@@ -59,7 +60,8 @@ class SteeringLoss(Measure):
     def __init__(self):
         self._recent = deque()      # (t, evidence) of the last LOSS_WINDOW_S of evaluated Samples
         self._pending = []          # losses whose after-window is still open
-        self._prev_on = False
+        self._prev_on = None
+        self._prev_control_epoch = None
         self._prev_v = 0.0
         self._prev_cruise = False
 
@@ -82,9 +84,10 @@ class SteeringLoss(Measure):
             still_open.append(loss)
         self._pending = still_open
 
-        on = bool(g.lat_on)
+        on = s.lat_active
         # An edge across a data gap is not attributed: what happened in the unobserved stretch is unknown.
-        if self._prev_on and not on and not s.gap and self._prev_v >= LOSS_MIN_SPEED_MS:
+        if (self._prev_on is True and on is False and self._prev_control_epoch == s.control_epoch
+                and not s.gap and self._prev_v >= LOSS_MIN_SPEED_MS):
             before = set()
             for t_r, f_r in self._recent:
                 if t_r >= t - LOSS_WINDOW_S:
@@ -93,6 +96,7 @@ class SteeringLoss(Measure):
                 before.add("cruise_off")
             self._pending.append({"t": t, "v": self._prev_v, "evidence": before, "cruiseBefore": self._prev_cruise})
         self._prev_on, self._prev_v, self._prev_cruise = on, s.v_ego, s.cruise_enabled
+        self._prev_control_epoch = s.control_epoch
 
     def _send(self, ctx, loss, *, truncated: bool) -> None:
         evidence = loss["evidence"]
@@ -108,7 +112,7 @@ class SteeringLoss(Measure):
     def on_gap(self, ctx) -> None:
         self._flush(ctx)
         self._recent.clear()
-        self._prev_on, self._prev_v, self._prev_cruise = False, 0.0, False
+        self._prev_on, self._prev_v, self._prev_cruise = None, 0.0, False
 
     def on_drive_end(self, ctx) -> None:
         self._flush(ctx)

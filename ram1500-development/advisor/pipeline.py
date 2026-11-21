@@ -130,6 +130,9 @@ class Pipeline:
         return data
 
     # --- batches in ---------------------------------------------------------
+    def control_decode_failed(self) -> None:
+        self._joiner.invalidate_control()
+
     def ingest_tick(self, batch: dict) -> list:
         """Take one batch; returns the messages to send, as (type, data)."""
         if self._ended:

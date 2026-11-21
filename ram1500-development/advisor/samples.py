@@ -8,8 +8,8 @@ messages have a second path: every new one becomes a ModelMsg exactly once.
 Works on any objects with the cereal attribute names, so tests use
 SimpleNamespace and the Comma agent uses the real decoded messages. Numbers
 and flags may be plain Python values or numpy scalars. A flag is on only for
-a real True; any other value reads as off. A value that is not a finite
-number reads as unknown.
+a real True. The steering-active observation preserves unknown flags. A value
+that is not a finite number reads as unknown.
 """
 from __future__ import annotations
 
@@ -56,12 +56,24 @@ def number(value):
     return value if math.isfinite(value) else None
 
 
-def _true(value) -> bool:
-    """True only for a real True: Python's own, or numpy's."""
-    if value is True:
-        return True
+def _observed_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
     kind = type(value)
-    return kind.__module__ == "numpy" and kind.__name__ in ("bool", "bool_") and bool(value)
+    if kind.__module__ == "numpy" and kind.__name__ in ("bool", "bool_"):
+        return bool(value)
+    return None
+
+
+def _true(value) -> bool:
+    return _observed_bool(value) is True
+
+
+def event_payload(event, stream):
+    """Keep a timestamped unknown in the join when carControl is explicitly invalid."""
+    if stream == "carControl" and not event.valid:
+        return None
+    return getattr(event, stream)
 
 
 def _code(value, table):
@@ -91,7 +103,7 @@ class Sample:
     blinker: bool = False                     # left or right
     gas_pressed: bool = False
     steer_fault: bool = False                 # carState steerFaultTemporary or steerFaultPermanent
-    lat_active: bool | None = None            # None = carControl missing
+    lat_active: bool | None = None            # None = no fresh, observed steering-active flag
     actuators_torque: float | None = None     # -1..1
     desired_curvature: float | None = None    # 1/m; None = controlsState missing
     actual_curvature: float | None = None
@@ -101,6 +113,7 @@ class Sample:
     lane_change_state: int | None = None      # 0 off, 1 pre, 2 starting, 3 finishing; None = model stream missing
     alerts: frozenset | None = None           # alert names; None = no alert list for 5.0 s
     missing: tuple = ()                       # short names of the streams missing for this Sample
+    control_epoch: int = 0                    # changes when continuity of latActive observations breaks
 
 
 @dataclass(slots=True)
@@ -133,6 +146,8 @@ class StreamJoiner:
         self._future_ns = _ns(FUTURE_TOL_S)
         self._cap_ns = _ns(DT_CAP_S)
         self._latest = {}
+        self._control_epoch = 0
+        self._lat_active = None
         self._alerts = None                # alert names of the held alert list; None = it could not be read
         self._last_car_state_ns = None
         self._prev_sample_ns = None
@@ -148,7 +163,12 @@ class StreamJoiner:
         if held is not None and t_ns <= held[0]:
             return False
         self._latest[stream] = (t_ns, msg)
-        if stream == MODEL_STREAM:
+        if stream == "carControl":
+            self._lat_active = _observed_bool(get(msg, "latActive"))
+            if self._lat_active is None or (held is not None and t_ns - held[0] > self._fresh_ns[stream]):
+                # The interruption can fall entirely between two carState samples.
+                self._control_epoch += 1
+        elif stream == MODEL_STREAM:
             self._model_new = (t_ns, msg)
         elif stream == ALERT_STREAM:
             self._alerts = _alert_names(msg)       # read once, here: the list is used for up to 5.0 s
@@ -166,6 +186,14 @@ class StreamJoiner:
     def latest(self, stream: str):
         """(t_ns, msg) of the newest message held for `stream`, or None."""
         return self._latest.get(stream)
+
+    def invalidate_control(self) -> None:
+        """A failed decode has no event timestamp. Keep the last ordering watermark."""
+        self._lat_active = None
+        self._control_epoch += 1
+        previous = self._latest.get("carControl")
+        if previous is not None:
+            self._latest["carControl"] = (previous[0], None)
 
     def _fresh(self, stream: str, t_ns: int):
         held = self._latest.get(stream)
@@ -211,7 +239,8 @@ class StreamJoiner:
             blinker=_true(get(car_state, "leftBlinker")) or _true(get(car_state, "rightBlinker")),
             gas_pressed=_true(get(car_state, "gasPressed")),
             steer_fault=_true(get(car_state, "steerFaultTemporary")) or _true(get(car_state, "steerFaultPermanent")),
-            lat_active=None if control is None else _true(get(control, "latActive")),
+            lat_active=self._lat_active if control is not None else None,
+            control_epoch=self._control_epoch,
             actuators_torque=number(get(control, "actuators", "torque")),
             desired_curvature=number(get(controls_state, "desiredCurvature")),
             actual_curvature=number(get(controls_state, "curvature")),

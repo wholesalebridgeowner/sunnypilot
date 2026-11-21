@@ -43,7 +43,7 @@ from measure_delay import delay_record, trusted_delay_s
 from messages import drive_end_data, drive_ready_data, drive_start_data, envelope, fit
 import parking_live
 from pipeline import STREAMS, Pipeline, PipelineConfig
-from samples import get
+from samples import event_payload, get
 from settings_snapshot import changed_keys, nnlc_model_token, read_settings, reread_watched
 from uplink import Uplink
 
@@ -237,6 +237,9 @@ class Agent:
             try:
                 t_ns, msg = self.decode(stream, newest)
             except Exception:
+                if stream == "carControl":
+                    self.pipeline.control_decode_failed()
+                    self.latest_state.pop(stream, None)
                 continue                # this stream is missing for this tick
             batch[stream] = (t_ns, msg)
             if stream in ("carState", "carControl"):
@@ -395,7 +398,7 @@ def main() -> None:  # pragma: no cover - runs on the Comma
 
     def decode(service, raw):
         event = messaging.log_from_bytes(raw)
-        return event.logMonoTime, getattr(event, service)
+        return event.logMonoTime, event_payload(event, service)
 
     streams = STREAMS + ((parking_live.STREAM,) if parking_live.PARKING_LIVE_ENABLED else ())
 

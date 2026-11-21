@@ -26,6 +26,7 @@ import math
 
 import messages
 from pipeline import STREAMS, Pipeline, PipelineConfig
+from samples import event_payload
 from settings_snapshot import KEYS, model_bundle_id
 
 _TICK_STREAM = STREAMS[0]       # the stream whose every message makes a batch
@@ -122,7 +123,7 @@ def _log_events(paths, schema_dir, buffers: list):
         for event in log.Event.read_multiple_bytes(data):
             kind = event.which()
             if kind in STREAMS:
-                yield kind, event.logMonoTime, getattr(event, kind)
+                yield kind, event.logMonoTime, event_payload(event, kind)
 
 
 def main() -> None:
