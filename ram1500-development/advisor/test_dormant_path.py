@@ -113,10 +113,66 @@ class DormantApplierTests(LocksOpen, test_applier.ApplierFixture):
         self.assertFalse(self.applier.journal.is_open())
 
 
+class BuildGateTests(LocksOpen, test_applier.ApplierFixture):
+    """Lock 3: a change of the delay settings is refused unless the delay probe says a fixed delay steers."""
+
+    GATED = "refused:delay_inert_on_this_build"
+
+    def nothing_happened(self):
+        self.assertEqual(self.params.writes, [])
+        self.assertFalse(self.applier.journal.is_open())
+        self.assertEqual(self.applier.nonces.used(), set())            # the approval is not used up
+
+    def test_an_approved_delay_change_is_refused_on_this_build(self):
+        self.assertEqual(self.apply(self.approval(), probe="inert"), self.GATED)
+        self.nothing_happened()
+
+    def test_only_effective_opens_the_gate(self):
+        for probe in ("inert", "unknown", "not_run", None, "", "Effective", True, {"result": "effective"}):
+            with self.subTest(probe=probe):
+                self.assertEqual(self.apply(self.approval(), probe=probe), self.GATED)
+        self.nothing_happened()
+        self.assertEqual(self.apply(self.approval(), probe="effective"), "applied")
+
+    def test_without_a_probe_result_the_gate_is_closed(self):
+        result = self.applier.apply(self.approval(), test_applier.PARKED, now=1010.0, learned_delay_s=0.25,
+                                    base_actuator_delay_s=0.1)
+        self.assertEqual(result, self.GATED)
+        self.nothing_happened()
+
+    def test_any_change_that_names_a_delay_setting_is_gated(self):
+        for change in ({"LagdToggle": True}, {"LagdToggle": False, "LagdToggleDelay": 0.1},
+                       {"LagdToggleDelay": 0.1}, {"NeuralNetworkLateralControl": True, "LagdToggle": True}):
+            with self.subTest(change=change):
+                self.assertEqual(self.apply(self.approval(change=change, mode="nightly"), probe="inert"), self.GATED)
+        self.nothing_happened()
+
+    def test_a_change_without_a_delay_setting_is_not_gated(self):
+        approval = self.approval(change={"NeuralNetworkLateralControl": True}, mode="nightly")
+        self.assertEqual(self.apply(approval, probe="inert"), "applied")
+        self.assertIs(self.params.values["NeuralNetworkLateralControl"], True)
+
+    def test_the_gate_comes_after_the_approval_check_and_before_the_guard(self):
+        forged = self.approval()
+        forged["sig"] = "0" * 64
+        self.assertEqual(self.apply(forged, probe="inert"), "refused:bad_signature")
+        out_of_range = self.approval(change={"LagdToggle": False, "LagdToggleDelay": 0.4})
+        self.assertEqual(self.apply(out_of_range, probe="inert"), self.GATED)
+        self.assertEqual(self.apply(out_of_range, probe="effective"), "refused:delay_too_far_from_learned")
+        moving = VehicleState(in_park=False, speed_ms=20.0, engaged=True)
+        self.assertEqual(self.apply(self.approval(), state=moving, probe="inert"), self.GATED)
+        self.nothing_happened()
+
+
 class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
+    def setUp(self):
+        super().setUp()
+        self.agent.probe = {"result": "effective", "helperSha": None, "probeMs": 1}    # a build with the fix
+
     def test_start_restores_open_trial_when_offroad(self):
         self.assertEqual(self.applier.apply(self.approval(), self.agent.vehicle_state(), now=self.wall.t,
-                                            learned_delay_s=0.25, base_actuator_delay_s=0.1), "applied")
+                                            learned_delay_s=0.25, base_actuator_delay_s=0.1,
+                                            delay_probe="effective"), "applied")
         fresh = Agent(params=self.params, applier=Applier(self.params, self.applier.journal, self.applier.nonces, KEY),
                       uplink=self.uplink, socket_factory=self.make_sock, decode=self.decode, slot_check=lambda: True)
         fresh.start()
@@ -168,6 +224,17 @@ class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
         self.agent.tick()
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
         self.assertEqual(self.uplink.events[-1]["data"], {"restore": "restored"})
+
+    def test_an_approved_delay_change_is_refused_while_the_probe_reads_inert(self):
+        for probe in ({"result": "inert", "helperSha": "0123456789ab", "probeMs": 3}, None):
+            with self.subTest(probe=probe):
+                self.agent.probe = probe
+                self.uplink.incoming.append(self.approval())
+                self.agent.tick()
+                self.mono.t += 2
+                self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:delay_inert_on_this_build")
+        self.assertEqual(self.params.writes, [])
+        self.assertFalse(self.applier.journal.is_open())
 
 
 class DormantUplinkTests(LocksOpen, test_uplink.UplinkFixture):
@@ -286,6 +353,7 @@ class DormantServiceTests(LocksOpen, test_service.ServiceFixture):
 class DormantEndToEndTests(LocksOpen, unittest.TestCase):
     def test_weaving_drive_to_parked_apply_and_restore(self):
         loop = test_end_to_end.Loop(self)
+        loop.agent.probe = {"result": "effective", "helperSha": None, "probeMs": 1}    # a build with the fix
         loop.weaving_drive()
         live = loop.with_buttons()
         self.assertEqual(len(live), 1)

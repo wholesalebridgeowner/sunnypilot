@@ -45,9 +45,10 @@ class ApplierFixture(unittest.TestCase):
         return sign_approval(KEY, suggestion_id=f"s{self.count}", mode=mode, change=change,
                              issued_at=1000.0, nonce=f"{self.count:016d}")
 
-    def apply(self, approval, state=PARKED):
+    def apply(self, approval, state=PARKED, probe="effective"):
+        """`probe` is the delay probe's result; the default is that of a build on which a fixed delay steers."""
         return self.applier.apply(approval, state, now=1010.0, learned_delay_s=0.25,
-                                  base_actuator_delay_s=0.1)
+                                  base_actuator_delay_s=0.1, delay_probe=probe)
 
     def leave_trial_open(self):
         """The state an earlier version left behind: trial values in force and the journal open."""
@@ -80,6 +81,13 @@ class ApplyDisabledTests(ApplierFixture):
         self.apply(self.approval())
         self.assertEqual(self.applier.nonces.used(), set())
         self.assertFalse(self.applier.nonces.path.exists())
+
+    def test_the_lock_comes_before_the_build_gate(self):
+        for probe in ("effective", "inert", "unknown"):
+            with self.subTest(probe=probe):
+                self.assertEqual(self.apply(self.approval(), probe=probe), "refused:apply_disabled")
+        self.assertEqual(self.applier.apply(self.approval(), PARKED, now=1010.0, learned_delay_s=0.25,
+                                            base_actuator_delay_s=0.1), "refused:apply_disabled")
 
 
 class RestoreTests(ApplierFixture):

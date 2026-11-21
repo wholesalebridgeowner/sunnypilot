@@ -61,6 +61,7 @@ class Agent:
         self.next_apply_try = 0.0
         self.health = None
         self.cpu_breach = False
+        self.probe = None             # newest result of the delay probe; None = it has not run
 
     # --- events -------------------------------------------------------------
     def _event(self, kind: str, data: dict) -> None:
@@ -208,7 +209,8 @@ class Agent:
         state = self.vehicle_state()
         for nonce, approval in list(self.pending.items()):
             result = self.applier.apply(approval, state, now=self.wall_clock(),
-                                        learned_delay_s=learned, base_actuator_delay_s=base)
+                                        learned_delay_s=learned, base_actuator_delay_s=base,
+                                        delay_probe=(self.probe or {}).get("result", "unknown"))
             if result == "refused:not_parked":
                 continue   # retried until parked or expired
             del self.pending[nonce]

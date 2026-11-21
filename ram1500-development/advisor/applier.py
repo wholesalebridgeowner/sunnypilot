@@ -5,9 +5,10 @@ back what an earlier trial replaced: `restore` runs at agent start and at
 drive end.
 
 Order of checks in `apply`: the lock, then approval signature/expiry/replay,
-allowlist and range, parked state, one change at a time, live-trial limit. The
-approval is marked used and the journal is written BEFORE any setting changes,
-so a crash at any point can be undone and no approval can be replayed.
+the build gate, allowlist and range, parked state, one change at a time,
+live-trial limit. The approval is marked used and the journal is written
+BEFORE any setting changes, so a crash at any point can be undone and no
+approval can be replayed.
 """
 from __future__ import annotations
 
@@ -25,6 +26,13 @@ PARKED_SPEED_MS = 0.1
 # applier refuses every approval before looking at it, the agent does not
 # handle approvals, and the uplink does not ask the service for any.
 APPLY_ENABLED = False
+
+# Lock 3, for the day the two constants are opened: the build gate. On the build
+# this advisor was written for, a stored fixed delay does not reach steering, so
+# a change of the delay settings would do nothing. Such a change is refused
+# unless the delay probe (delay_probe.py) has found that it would steer.
+DELAY_KEYS = frozenset({"LagdToggle", "LagdToggleDelay"})
+PROBE_EFFECTIVE = "effective"
 
 
 @dataclass(frozen=True)
@@ -46,7 +54,8 @@ class Applier:
         self.live_trials_this_drive = 0
 
     def apply(self, approval: dict, state: VehicleState, *, now: float,
-              learned_delay_s: float, base_actuator_delay_s: float) -> str:
+              learned_delay_s: float, base_actuator_delay_s: float, delay_probe: str = "unknown") -> str:
+        """`delay_probe` is the result of the delay probe on the running build; without one the gate is closed."""
         if not APPLY_ENABLED:
             return "refused:apply_disabled"
         try:
@@ -54,6 +63,8 @@ class Applier:
         except ApprovalError as error:
             return f"refused:{error}"
         change, mode = fields["change"], fields["mode"]
+        if not DELAY_KEYS.isdisjoint(change) and not (isinstance(delay_probe, str) and delay_probe == PROBE_EFFECTIVE):
+            return "refused:delay_inert_on_this_build"
         try:
             validate_change(change, mode=mode, learned_delay_s=learned_delay_s,
                             base_actuator_delay_s=base_actuator_delay_s)
