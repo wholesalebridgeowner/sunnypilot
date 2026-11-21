@@ -228,8 +228,10 @@ class Pipeline:
         fields = {}
         for m in self._measures:
             self._merge(m, "window_fields", fields)
+        # unobservedS has two decimals, like tickMaxS: a 0.3 s stall leaves 0.05 s
+        # unobserved, which one decimal would show as nothing.
         data = {"w": win.w, "tMonoS": round((self._t0_ns + win.w * _WINDOW_NS) / 1e9, 1), "n": win.n,
-                "windowS": round(win.window_s, 1), "unobservedS": round(win.unobserved_s, 1),
+                "windowS": round(win.window_s, 1), "unobservedS": round(win.unobserved_s, 2),
                 "tickMaxS": round(win.tick_max_s, 2)}
         for key, value in fields.items():
             data.setdefault(key, value)         # a measure cannot replace the pipeline's own fields

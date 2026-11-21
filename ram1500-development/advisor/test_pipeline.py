@@ -161,7 +161,7 @@ class WindowGridTests(unittest.TestCase):
             self.assertEqual(s["tMonoS"], 1000.0 + 60 * s["w"])
         self.assertEqual(out[0]["n"], 551)
         self.assertEqual([s["health"]["gapN"] for s in out], [0, 1, 0, 0])
-        self.assertAlmostEqual(out[1]["unobservedS"], 69.75, delta=0.051)
+        self.assertEqual(out[1]["unobservedS"], 69.75)
         self.assertAlmostEqual(out[1]["tickMaxS"], 70.0, delta=0.11)
         self.assertEqual([s["unobservedS"] for s in (out[0], out[2], out[3])], [0.0, 0.0, 0.0])
         end = p.drive_end_fields()
@@ -173,7 +173,7 @@ class WindowGridTests(unittest.TestCase):
         out = synth.summaries(synth.run(make(), synth.drive(stalled(200, 1_000, 200))))
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["health"]["gapN"], 1)
-        self.assertAlmostEqual(out[0]["unobservedS"], 0.75, delta=0.051)
+        self.assertEqual(out[0]["unobservedS"], 0.75)
         self.assertAlmostEqual(out[0]["tickMaxS"], 1.0, delta=0.11)
         self.assertAlmostEqual(out[0]["windowS"], 399 * 0.1 + 0.25, delta=0.051)
 
@@ -182,7 +182,7 @@ class WindowGridTests(unittest.TestCase):
         probe = Probe()
         out = synth.summaries(synth.run(make(probe), synth.drive(times)))
         self.assertEqual(sum(s["health"]["gapN"] for s in out), 1)
-        self.assertAlmostEqual(sum(s["unobservedS"] for s in out), 0.05, delta=0.051)
+        self.assertEqual([s["unobservedS"] for s in out], [0.05, 0.0])     # two decimals: a short stall shows
         gap_t = times[300] / 1e9
         scored = [t for t, _, _, ok in probe.evaluated if ok]
         self.assertFalse([t for t in scored if gap_t - 2.0 <= t <= gap_t + 5.0])
