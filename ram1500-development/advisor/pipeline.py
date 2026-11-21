@@ -39,7 +39,9 @@ _HOOKS = ("on_stream", "on_sample", "on_model", "on_evaluate", "on_gap", "on_dri
 class PipelineConfig:
     fresh_model_s: float = FRESH_S          # freshness limit of the model stream
     fresh_lead_s: float = FRESH_S           # ... of the lead stream
-    t0_mono_s: float | None = None          # window grid start; None = the first Sample. Earlier messages are dropped
+    t0_mono_s: float | None = None          # window grid start; None = the first Sample. With a given start, no
+                                            # carState before it gives a Sample, and the other streams are kept
+                                            # from 1.0 s before it, as at a live start
     measures: tuple | None = None           # measure factories; None = the measures of this build (measure_set)
     health_source: object = None            # callable giving the agent's own health values (a dict) for a closing
                                             # window; when it raises or gives no dict, the values are left out
@@ -68,7 +70,10 @@ class Pipeline:
         self._gates = GateTracker()
         self._ctx = Context()
         self._t0_ns = None if config.t0_mono_s is None else int(round(config.t0_mono_s * 1e9))
-        self._floor_ns = self._t0_ns            # nothing older than this is taken
+        # Nothing older than the floor is taken. Live it is set by the first carState of the drive; with a given
+        # start time it is known at once. Either way it lies 1.0 s before the start, so that a replay lined up
+        # with a live drive gives its first Sample the same messages.
+        self._floor_ns = None if self._t0_ns is None else self._t0_ns - _KEEP_BEFORE_FIRST_NS
         self._win = None
         self._ended = False
         self._total_window_s = 0.0
@@ -125,6 +130,8 @@ class Pipeline:
             return []
         out = self._ctx.out = []
         car = batch.get("carState")
+        if car is not None and self._t0_ns is not None and car[0] < self._t0_ns:
+            car = None                          # stamped before the start of the window grid: no Sample
         if self._floor_ns is None and car is not None:
             # First carState of the drive: forget what was left over from before it.
             self._floor_ns = car[0] - _KEEP_BEFORE_FIRST_NS
@@ -134,7 +141,7 @@ class Pipeline:
             if stream in _OTHER_STREAMS and (floor is None or t_ns >= floor):
                 self._joiner.offer(stream, t_ns, msg)
         sample = None
-        if car is not None and car[0] >= floor:
+        if car is not None:
             sample = self._joiner.sample(car[0], car[1])       # carState goes last
         if sample is None:
             self._joiner.models_after(None)

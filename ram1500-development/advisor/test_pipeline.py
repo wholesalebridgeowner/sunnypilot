@@ -318,12 +318,35 @@ class JoinTests(unittest.TestCase):
         self.assertEqual(probe.total["forcedZeroS"], 0.0)
         self.assertAlmostEqual(probe.total["fzFallbackS"], 10.0, delta=0.15)
 
-    def test_given_start_time_drops_every_earlier_message(self):
-        probe = Probe()
-        def change(i, t_ns):
-            return {"onroadEvents": ["belowSteerSpeed"]} if i < 4 else {"skip": ("onroadEvents",)}
-        synth.run(make(probe, t0_mono_s=1000.32), synth.drive(synth.ticks(100, 100, T0), change))
-        self.assertEqual(probe.total["forcedZeroS"], 0.0)              # the alert lists were stamped before the start
+    def test_given_start_time_keeps_the_second_before_it_as_a_live_start_does(self):
+        for age_ms, expect_forced in ((3_000, 0.0), (500, 4.5)):
+            with self.subTest(age_ms=age_ms):
+                probe = Probe()
+                p = make(probe, t0_mono_s=T0 / 1e9)
+                p.ingest_tick({"onroadEvents": (T0 - age_ms * MS, synth.alerts("belowSteerSpeed"))})
+                batches = synth.drive(synth.ticks(100, 100, T0), lambda i, t: {"skip": ("onroadEvents",)})
+                synth.run(p, batches)
+                self.assertAlmostEqual(probe.total["forcedZeroS"], expect_forced, delta=0.15)
+
+    def test_replay_from_a_given_start_time_equals_the_live_start_at_that_car_state(self):
+        # As in a decimated log: the three control streams are stamped 95 ms before their carState.
+        def batches(first_i):
+            out = []
+            for i in range(first_i, 700):
+                b = synth.batch(T0 + i * 100 * MS, skip=("carControl", "controlsState", "carOutput"))
+                earlier = T0 + i * 100 * MS - 95 * MS
+                b.update(carControl=(earlier, synth.car_control()), controlsState=(earlier, synth.controls_state()),
+                         carOutput=(earlier, synth.car_output()))
+                out.append(b)
+            return out
+
+        live_probe, replay_probe = Probe(), Probe()
+        live = synth.summaries(synth.run(make(live_probe), batches(0)))     # the agent's first carState is at T0
+        replay = synth.summaries(synth.run(make(replay_probe, t0_mono_s=T0 / 1e9), batches(-20)))   # the log starts earlier
+        self.assertEqual(replay_probe.immediate, live_probe.immediate)      # no Sample from before the start time
+        self.assertEqual(replay, live)
+        self.assertEqual(replay[0]["latOnS"], 60.0)                         # the first Sample has its control message
+        self.assertEqual(replay[0]["health"]["staleS"], {})
 
     def test_unknown_stream_is_ignored(self):
         p = make(Probe())
