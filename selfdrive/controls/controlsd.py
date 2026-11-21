@@ -22,7 +22,6 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
-from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld.modeld_base import ModelStateBase
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
 
@@ -102,7 +101,7 @@ class Controls(ControlsExt, ModelStateBase):
 
       self.LaC.extension.update_model_v2(self.sm['modelV2'])
 
-      self.lat_delay = get_lat_delay(self.params, self.sm["liveDelay"].lateralDelay)
+      self.update_lat_delay(self.params, self.sm)
       self.LaC.extension.update_lateral_lag(self.lat_delay)
 
     long_plan = self.sm['longitudinalPlan']

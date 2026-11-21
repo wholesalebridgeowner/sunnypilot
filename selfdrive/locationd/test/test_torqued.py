@@ -1,5 +1,26 @@
-from cereal import car
+from unittest.mock import Mock
+
+import pytest
+from cereal import car, log
 from openpilot.selfdrive.locationd.torqued import TorqueEstimator
+
+
+def test_delay_before_and_after_first_live_event(monkeypatch):
+  params = Mock()
+  params.get.side_effect = lambda key, **kwargs: 0.31 if key == "LagdValueCache" else None
+  params.get_bool.return_value = True
+  monkeypatch.setattr("openpilot.selfdrive.locationd.torqued.Params", lambda: params)
+  est = TorqueEstimator(car.CarParams())
+  est.handle_log(10.0, "carControl", car.CarControl())
+  assert est.raw_points["carControl_t"][-1] == pytest.approx(10.31)
+
+  est.handle_log(11.0, "liveDelay", log.LiveDelayData.new_message(lateralDelay=0.46))
+  est.handle_log(12.0, "carControl", car.CarControl())
+  assert est.raw_points["carControl_t"][-1] == pytest.approx(12.46)
+
+  params.get_bool.return_value = False
+  est.handle_log(13.0, "liveDelay", log.LiveDelayData.new_message(lateralDelay=0.71))
+  assert est.lag == pytest.approx(0.31)
 
 
 def test_cal_percent():

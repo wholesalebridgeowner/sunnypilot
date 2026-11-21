@@ -55,7 +55,8 @@ class TorqueEstimator(ParameterEstimator):
     super().__init__()
     self.CP = CP
     self.hist_len = int(HISTORY / DT_MDL)
-    self.lag = 0.0
+    self.params = Params()
+    self.lag = get_lat_delay(self.params)
     self.track_all_points = track_all_points  # for offline analysis, without max lateral accel or max steer torque filters
     if decimated:
       self.min_bucket_points = MIN_BUCKET_POINTS / 10
@@ -97,10 +98,8 @@ class TorqueEstimator(ParameterEstimator):
     self.max_friction = (1.0 + self.friction_sanity) * self.offline_friction
 
     # try to restore cached params
-    params = Params()
-    self.params = params
-    params_cache = params.get("CarParamsPrevRoute")
-    torque_cache = params.get("LiveTorqueParameters")
+    params_cache = self.params.get("CarParamsPrevRoute")
+    torque_cache = self.params.get("LiveTorqueParameters")
     if params_cache is not None and torque_cache is not None:
       try:
         with log.Event.from_bytes(torque_cache) as log_evt:
@@ -120,7 +119,7 @@ class TorqueEstimator(ParameterEstimator):
           cloudlog.info("restored torque params from cache")
       except Exception:
         cloudlog.exception("failed to restore cached torque params")
-        params.remove("LiveTorqueParameters")
+        self.params.remove("LiveTorqueParameters")
 
     self.filtered_params = {}
     for param in initial_params:
