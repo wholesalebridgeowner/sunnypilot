@@ -16,13 +16,13 @@ import test_applier
 import test_end_to_end
 import test_service
 import test_uplink
-from agent import Agent
 from applier import Applier, VehicleState
 from approval import verify_approval
 from settings_guard import trial_values
-from test_end_to_end import BASE, LEARNED
+from test_agent import BASE, LEARNED, LIVE
 
 KEY = b"k" * 32
+EFFECTIVE = {"result": "effective", "helperSha": "ba9876543210", "probeMs": 12}    # a build with the upstream fix
 
 
 class LocksOpen:
@@ -165,42 +165,61 @@ class BuildGateTests(LocksOpen, test_applier.ApplierFixture):
 
 
 class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
+    """The agent's side of the apply path, as it would run on a build where a fixed delay steers."""
+
     def setUp(self):
         super().setUp()
-        self.agent.probe = {"result": "effective", "helperSha": None, "probeMs": 1}    # a build with the fix
+        self.probe_result = dict(EFFECTIVE)       # what the probe finds at the start of a drive
+        self.agent.probe = dict(EFFECTIVE)        # ... and found on an earlier drive of this boot
+
+    def moving(self, i=0, t_ns=0):
+        return {"carState": dict(v=20.0)}
 
     def test_start_restores_open_trial_when_offroad(self):
         self.assertEqual(self.applier.apply(self.approval(), self.agent.vehicle_state(), now=self.wall.t,
-                                            learned_delay_s=0.25, base_actuator_delay_s=0.1,
+                                            learned_delay_s=LEARNED, base_actuator_delay_s=BASE,
                                             delay_probe="effective"), "applied")
-        fresh = Agent(params=self.params, applier=Applier(self.params, self.applier.journal, self.applier.nonces, KEY),
-                      uplink=self.uplink, socket_factory=self.make_sock, decode=self.decode, slot_check=lambda: True)
+        fresh = self.make_agent(applier=Applier(self.params, self.applier.journal, self.applier.nonces, KEY))
         fresh.start()
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
         self.assertEqual(self.uplink.events[-1]["data"], {"restore": "restored"})
 
     def test_approval_waits_for_park_then_applies(self):
         self.drive()
-        self.feed(0, gear="drive", speed=20.0)
-        self.agent.tick()
+        self.play(self.ticks(1, change=self.moving))
+        self.uplink.incoming.append(self.approval())
+        self.play(self.ticks(1, change=self.moving))
+        self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
+        self.mono.t += 2
+        self.play(self.ticks(1, change=test_agent.parked))
+        self.assertEqual(self.params.values["LagdToggleDelay"], LIVE["LagdToggleDelay"])
+        self.assertIs(self.params.values["LagdToggle"], False)
+        self.assertEqual(self.uplink.events[-1]["type"], "apply_result")
+        self.assertEqual(self.uplink.events[-1]["data"]["status"], "applied")
+
+    def test_the_learned_delay_comes_from_the_learner_not_from_the_cache(self):
+        # The cache holds a stale total. Were it taken as the learned delay, the approved trial would be refused
+        # as too far from it; with the learner's own value the trial is one step away, as approved.
+        self.params.values["LagdValueCache"] = 0.55
         self.uplink.incoming.append(self.approval())
         self.agent.tick()
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
-        self.feed(100_000_000, gear="park", speed=0.0, enabled=False)
-        self.mono.t += 2
-        self.agent.tick()
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.1)
         self.assertEqual(self.uplink.events[-1]["data"]["status"], "applied")
+
+    def test_without_a_trusted_learned_delay_a_delay_change_is_refused(self):
+        self.params.values["LiveDelay"] = test_agent.stored_delay(LEARNED, status="unestimated")
+        self.uplink.incoming.append(self.approval())
+        self.agent.tick()
+        self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:invalid_delay_inputs")
+        self.assertEqual(self.params.writes, [])
 
     def test_unparked_approval_dropped_at_expiry(self):
         self.drive()
-        self.feed(0, gear="drive", speed=20.0)
+        self.play(self.ticks(1, change=self.moving))
         self.uplink.incoming.append(self.approval())
         self.agent.tick()
         self.wall.t += 601
         self.mono.t += 2
-        self.feed(100_000_000, gear="drive", speed=20.0)
-        self.agent.tick()
+        self.play(self.ticks(1, change=self.moving))
         self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:expired")
         self.assertEqual(self.agent.pending, {})
 
@@ -212,6 +231,7 @@ class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
     def test_owner_override_ends_trial(self):
         self.uplink.incoming.append(self.approval())
         self.agent.tick()
+        self.assertIs(self.params.values["LagdToggle"], False)
         self.params.values["LagdToggle"] = True
         self.agent.tick()
         self.assertIn("trial_ended", self.uplink.types())
@@ -220,10 +240,11 @@ class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
         self.uplink.incoming.append(self.approval())
         self.agent.tick()
         self.drive()
-        self.params.values["IsOnroad"] = False
-        self.agent.tick()
+        self.assertIs(self.uplink.data("drive_start")[0]["settings"]["lagdToggle"], False)
+        self.end()
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
-        self.assertEqual(self.uplink.events[-1]["data"], {"restore": "restored"})
+        self.assertEqual(self.uplink.events[-1]["type"], "drive_end")
+        self.assertEqual(self.uplink.events[-1]["data"]["restore"], "restored")
 
     def test_an_approved_delay_change_is_refused_while_the_probe_reads_inert(self):
         for probe in ({"result": "inert", "helperSha": "0123456789ab", "probeMs": 3}, None):
@@ -235,6 +256,13 @@ class DormantAgentTests(LocksOpen, test_agent.AgentFixture):
                 self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:delay_inert_on_this_build")
         self.assertEqual(self.params.writes, [])
         self.assertFalse(self.applier.journal.is_open())
+
+    def test_the_gate_reads_the_probe_of_the_newest_drive(self):
+        self.probe_result = {"result": "inert", "helperSha": "0123456789ab", "probeMs": 3}
+        self.drive()                               # this drive's probe replaces what an earlier drive found
+        self.uplink.incoming.append(self.approval())
+        self.play(self.ticks(1, change=test_agent.parked))
+        self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:delay_inert_on_this_build")
 
 
 class DormantUplinkTests(LocksOpen, test_uplink.UplinkFixture):
@@ -351,22 +379,21 @@ class DormantServiceTests(LocksOpen, test_service.ServiceFixture):
 
 
 class DormantEndToEndTests(LocksOpen, unittest.TestCase):
-    def test_weaving_drive_to_parked_apply_and_restore(self):
+    def test_approved_trial_to_parked_apply_and_restore(self):
         loop = test_end_to_end.Loop(self)
-        loop.agent.probe = {"result": "effective", "helperSha": None, "probeMs": 1}    # a build with the fix
-        loop.weaving_drive()
-        live = loop.with_buttons()
-        self.assertEqual(len(live), 1)
-        approve_token = dict(live[0]["actions"])["Approve"].rsplit("/", 1)[1]
-        self.assertEqual(loop.service.approve(approve_token)[0], 200)
+        loop.probe = dict(EFFECTIVE)               # a build on which a fixed delay steers
+        loop.weaving_drive(ticks=700)
+        drive_id = loop.stored("drives/")[0]["driveId"]
+        expected = trial_values(LEARNED, BASE, -1)                   # from a full-precision learned delay
+        record = loop.service._create_suggestion(mode="live", change=expected, reason="weaving_on_straight_road",
+                                                 drive_id=drive_id)
+        self.assertEqual(loop.service.approve(record["approveToken"])[0], 200)
 
         loop.uplink.run_once()           # agent receives the approval while still driving
-        loop.feed(3100)
-        loop.agent.tick()
+        loop.play(1, test_end_to_end.weaving)
         self.assertIs(loop.params.values["LagdToggle"], True)        # not applied while moving
 
-        loop.park(3101)
-        expected = trial_values(LEARNED, BASE, -1)                   # from a full-precision learned delay
+        loop.park()
         self.assertIs(loop.params.values["LagdToggle"], False)
         self.assertEqual(loop.params.values["LagdToggleDelay"], expected["LagdToggleDelay"])
         loop.uplink.run_once()
@@ -380,6 +407,23 @@ class DormantEndToEndTests(LocksOpen, unittest.TestCase):
         self.assertTrue(drives[0]["ended"])
         self.assertEqual(drives[0]["trial"]["reason"], "weaving_on_straight_road")
         self.assertEqual(drives[0]["restore"], "restored")
+        self.assertIn(("GET", "/v1/approvals"), loop.requests)
+
+    def test_the_same_trial_is_refused_while_the_probe_reads_inert(self):
+        loop = test_end_to_end.Loop(self)            # the probe of this build: inert
+        loop.weaving_drive(ticks=700)
+        record = loop.service._create_suggestion(mode="live", change=trial_values(LEARNED, BASE, -1),
+                                                 reason="weaving_on_straight_road",
+                                                 drive_id=loop.stored("drives/")[0]["driveId"])
+        self.assertEqual(loop.service.approve(record["approveToken"])[0], 200)
+        loop.uplink.run_once()
+        loop.park()
+        loop.uplink.run_once()
+        self.assertEqual(loop.params.writes, [])
+        self.assertFalse(loop.applier.journal.is_open())
+        result = [event for event in loop.sent if event["type"] == "apply_result"]
+        self.assertEqual([event["data"]["status"] for event in result], ["refused:delay_inert_on_this_build"])
+        self.assertEqual(loop.notifier.sent[-1]["title"], "Ram advisor: Not applied")
 
 
 if __name__ == "__main__":

@@ -56,20 +56,27 @@ def _whole(value):
     return int(value)
 
 
+def trusted_delay_s(msg):
+    """The learned delay of a liveDelay message at full precision, or None: it is trusted only when the
+    learner's status is `estimated` and the value is plausible."""
+    value = number(get(msg, "lateralDelay"))
+    if delay_status(get(msg, "status")) != ESTIMATED or value is None:
+        return None
+    return value if DELAY_TRUST_MIN_S < value < DELAY_TRUST_MAX_S else None
+
+
 def delay_record(msg, cache_s=None, base_actuator_s=None) -> dict:
     """The delay object of drive_start and drive_end, from a liveDelay message (or None when there is none)."""
-    status = delay_status(get(msg, "status"))
-    value = number(get(msg, "lateralDelay"))
-    trusted = status == ESTIMATED and value is not None and DELAY_TRUST_MIN_S < value < DELAY_TRUST_MAX_S
+    learned = trusted_delay_s(msg)
     return {
-        "learnedS": round(value, 4) if trusted else None,
+        "learnedS": _seconds(learned),
         "estimateS": _seconds(get(msg, "lateralDelayEstimate")),
         "estimateStdS": _seconds(get(msg, "lateralDelayEstimateStd")),
         "validBlocks": _whole(get(msg, "validBlocks")),
-        "status": status,
+        "status": delay_status(get(msg, "status")),
         "cacheS": _seconds(cache_s),
         "baseActuatorS": _seconds(base_actuator_s),
-        "outOfBand": bool(trusted and not DELAY_BAND_MIN_S <= value <= DELAY_BAND_MAX_S),
+        "outOfBand": learned is not None and not DELAY_BAND_MIN_S <= learned <= DELAY_BAND_MAX_S,
     }
 
 

@@ -32,20 +32,6 @@ class DeviceParams:
         return bool(self.p.get_bool("IsOnroad"))
 
 
-def _plausible_delay(value) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return None
-    return float(value) if 0.0 < value < 1.0 else None
-
-
-def learned_delay_s(params: DeviceParams) -> float | None:
-    """The truck's learned steering delay. Only trusted while live learning is on;
-    otherwise None, which makes the guard refuse live trials (fail closed)."""
-    if params.get("LagdToggle") is not True:
-        return None
-    return _plausible_delay(params.get("LagdValueCache"))
-
-
 def _is_float(value) -> bool:
     return isinstance(value, numbers.Real) and not isinstance(value, bool) and math.isfinite(value)
 

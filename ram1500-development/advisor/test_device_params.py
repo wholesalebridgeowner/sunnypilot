@@ -2,6 +2,7 @@
 import unittest
 from types import SimpleNamespace as ns
 
+import device_params
 from device_params import (DeviceParams, base_actuator_delay_s, cache_delay_s, nnlc_match, persisted_live_delay,
                            read_setting)
 
@@ -84,6 +85,9 @@ class ReadSettingTests(unittest.TestCase):
 
 
 class DelayReaderTests(unittest.TestCase):
+    def test_there_is_no_reader_of_the_learned_delay_from_the_cache(self):
+        self.assertFalse(hasattr(device_params, "learned_delay_s"))
+
     def test_the_cached_total_is_read_for_diagnosis_only(self):
         self.assertEqual(cache_delay_s(params({"LagdValueCache": 0.4})), 0.4)
         self.assertIsNone(cache_delay_s(params({"LagdValueCache": "0.4"})))

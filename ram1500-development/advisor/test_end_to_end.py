@@ -1,15 +1,19 @@
 """Whole loop in one process: agent -> uplink -> service -> owner.
 
-As built, a drive that the old rules would have acted on reaches no suggestion
-and no setting, even with an approval signed with the real key. The same loop
-with the locks patched open is in test_dormant_path.py.
+As built, a drive with a busy steering wheel (what the first version's rules
+acted on) reaches no suggestion and no setting, even with an approval signed
+with the real key. The same loop with the locks patched open is in
+test_dormant_path.py.
 """
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as ns
 
+import schema_v2
+import synth
 from agent import Agent
 from applier import Applier, VehicleState
 from approval import sign_approval
@@ -17,16 +21,23 @@ from journal import Journal, NonceLedger
 from service_app import AdvisorService, dispatch
 from service_store import MemoryStore
 from settings_guard import trial_values
-from test_agent import Clock, FakeParams, FakeSock
+from synth import SEC
+from test_agent import BASE, BEFORE, LEARNED, Clock, FakeParams, FakeSock, parked, stored_delay
 from test_service import FakeNotifier
+from test_settings_snapshot import BUNDLE
 from uplink import Uplink
 from wire import sign_request
 
 KEY = b"k" * 32
 URL = "https://advisor.example"
-LEARNED = 0.32812345678901234      # an invented value with the precision a learned delay really has
-BASE = 0.2
-START = {"LagdToggle": True, "LagdToggleDelay": 0.2, "NeuralNetworkLateralControl": False}
+T0 = 1_000 * SEC
+START = {**BEFORE, "NeuralNetworkLateralControl": False}
+INERT = {"result": "inert", "helperSha": "0123456789ab", "probeMs": 12}
+
+
+def weaving(i, t_ns):
+    """A straight at 25 m/s with the wheel swinging 3 degrees each way, four seconds a cycle."""
+    return {"carState": dict(angle=3.0 * math.sin(2 * math.pi * 0.25 * (t_ns - T0) / SEC))}
 
 
 class Loop:
@@ -39,56 +50,68 @@ class Loop:
         self.notifier = FakeNotifier()
         self.service = AdvisorService(MemoryStore(), self.notifier, KEY, URL, clock=self.wall)
         self.requests = []                 # (method, path) of everything the Comma side asked the service
-        self.sent_types = []               # type of every event it posted
+        self.sent = []                     # every event it posted
+        self.headers = []                  # the header names of every request
 
         def opener(method, url, headers, body, timeout):
             self.requests.append((method, url[len(URL):]))
+            self.headers.append(sorted(headers))
             if method == "POST":
-                self.sent_types.append(json.loads(body)["type"])
+                self.sent.append(json.loads(body))
             status, _, out = dispatch(self.service, method, url[len(URL):], headers, body)
             return status, out
 
-        self.uplink = Uplink(URL, KEY, opener=opener)
-        self.params = FakeParams({"IsOnroad": False, "LagdValueCache": LEARNED, "CarParams": str(BASE).encode(),
-                                  **START})
+        # The pacing of the uplink is tested on its own; here it never waits.
+        self.uplink = Uplink(URL, KEY, opener=opener, monotonic=self.mono, sleep=lambda seconds: None)
+        self.params = FakeParams({"IsOnroad": False, **START, "LagdValueCache": LEARNED, "AutoLaneChangeTimer": 0,
+                                  "ModelManager_ActiveBundle": dict(BUNDLE), "GitCommit": "0123456789abcdef",
+                                  "CarParams": str(BASE).encode(), "LiveDelay": stored_delay(LEARNED)})
         self.applier = Applier(self.params, Journal(Path(folder.name) / "trial.json"),
                                NonceLedger(Path(folder.name) / "nonces.json"), KEY)
         self.socks = {}
+        self.probe = dict(INERT)           # what the delay probe finds on this build
+        self.log_ns = T0
 
-        def make_sock(service_name):
-            self.socks[service_name] = FakeSock()
-            return self.socks[service_name]
+        def make_sock(stream):
+            self.socks[stream] = FakeSock()
+            return self.socks[stream]
+
+        def decode_delay(raw):
+            fields = json.loads(raw)
+            return synth.live_delay(delay=fields["delay"], status=fields["status"], blocks=fields["blocks"])
 
         self.agent = Agent(params=self.params, applier=self.applier, uplink=self.uplink, socket_factory=make_sock,
-                           decode=lambda service_name, raw: raw, slot_check=lambda: True,
+                           decode=lambda stream, raw: raw, slot_check=lambda: True,
                            car_params_decode=lambda raw: ns(steerActuatorDelay=float(raw.decode())),
+                           live_delay_decode=decode_delay, delay_probe=lambda: dict(self.probe),
                            wall_clock=self.wall, monotonic=self.mono, subscribe_delay_s=0.0)
 
-    def feed(self, i, gear="drive", speed=25.0, enabled=True):
-        t = i * 100_000_000
-        rate = 5.0 if (i // 10) % 2 == 0 else -5.0
-        self.socks["carControl"].queue.append((t, ns(latActive=enabled, enabled=enabled)))
-        self.socks["controlsState"].queue.append((t, ns(desiredCurvature=0.0, curvature=0.0)))
-        self.socks["carState"].queue.append((t, ns(vEgo=speed, aEgo=0.0, steeringRateDeg=rate,
-                                                   steeringPressed=False, gearShifter=gear)))
+    def sent_types(self):
+        return [event["type"] for event in self.sent]
+
+    def play(self, n, change=None):
+        """`n` ticks of driving; the uplink runs every five seconds, as on the Comma."""
+        times = synth.ticks(n, 100, self.log_ns)
+        self.log_ns = times[-1] + 100_000_000
+        for i, batch in enumerate(synth.drive(times, change)):
+            for stream, message in batch.items():
+                self.socks[stream].queue.append(message)
+            self.agent.tick()
+            self.mono.t = round(self.mono.t + 0.1, 6)
+            if i % 50 == 0:
+                self.uplink.run_once()
 
     def weaving_drive(self, ticks=3100):
-        """A little over 5 minutes of weaving at 10 Hz: what the old live rule acted on."""
+        """A little over 5 minutes with a busy steering wheel: what the old live rule acted on."""
         self.agent.start()
         self.params.values["IsOnroad"] = True
         self.agent.tick()
-        for i in range(ticks):
-            self.feed(i)
-            self.agent.tick()
-            self.mono.t += 0.1
-            if i % 50 == 0:
-                self.uplink.run_once()
+        self.play(ticks, weaving)
         self.uplink.run_once()
 
-    def park(self, i):
-        self.feed(i, gear="park", speed=0.0, enabled=False)
+    def park(self):
         self.mono.t += 2
-        self.agent.tick()
+        self.play(1, parked)
 
     def end_drive(self):
         self.params.values["IsOnroad"] = False
@@ -108,8 +131,8 @@ class EndToEndTests(unittest.TestCase):
         loop.weaving_drive()
         drive = loop.stored("drives/")[0]
         self.assertGreaterEqual(len(drive["summaries"]), 5)
-        self.assertGreater(drive["summaries"][-1]["weavePerStraightMinute"], 6.0)   # the old rule's condition holds
-        self.assertEqual(drive["learnedDelayS"], LEARNED)
+        busy = drive["summaries"][-1]["swings"]
+        self.assertGreater(busy["n"] / (busy["straightS"] / 60.0), 6.0)     # the wheel is as busy as the old rule asked
 
         # No suggestion record, no notification with buttons.
         self.assertEqual(loop.with_buttons(), [])
@@ -140,12 +163,13 @@ class EndToEndTests(unittest.TestCase):
         # The Comma never asks for approvals, and ignores one that is put in front of it, parked or not.
         loop.uplink.run_once()
         loop.uplink.inbox.append(approval)
-        loop.feed(3100)
-        loop.agent.tick()
-        loop.park(3101)
-        loop.park(3102)
+        loop.play(1, weaving)
+        loop.park()
+        loop.park()
+        self.assertTrue(loop.agent.vehicle_state().parked())
         self.assertEqual(loop.applier.apply(approval, VehicleState(in_park=True, speed_ms=0.0, engaged=False),
-                                            now=loop.wall.t, learned_delay_s=LEARNED, base_actuator_delay_s=BASE),
+                                            now=loop.wall.t, learned_delay_s=LEARNED, base_actuator_delay_s=BASE,
+                                            delay_probe="effective"),
                          "refused:apply_disabled")
         self.assertEqual(loop.params.writes, [])
         self.assertEqual({key: loop.params.values[key] for key in START}, START)
@@ -159,8 +183,25 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(drive["ended"])
         self.assertEqual(drive["restore"], "nothing_to_restore")
         self.assertIsNone(drive["trial"])
-        self.assertEqual(set(loop.sent_types), {"agent_start", "drive_start", "summary", "drive_end"})
+        self.assertEqual(set(loop.sent_types()), {"agent_start", "drive_start", "drive_ready", "summary", "drive_end"})
         self.assertEqual(loop.with_buttons(), [])
+
+    def test_what_reaches_the_service_is_schema_v2_and_nothing_else(self):
+        loop = Loop(self)
+        loop.weaving_drive(ticks=1300)
+        loop.end_drive()
+        self.assertEqual(loop.uplink.queue_len(), 0)                    # everything was delivered
+        self.assertEqual(loop.sent_types()[:3], ["agent_start", "drive_start", "drive_ready"])
+        self.assertEqual(loop.sent_types()[-1], "drive_end")
+        for event in loop.sent:
+            with self.subTest(type=event["type"], id=event["id"]):
+                self.assertEqual(schema_v2.problems(event), [])
+        # The only headers handed to the HTTP library.
+        self.assertEqual({tuple(names) for names in loop.headers}, {("Content-Type", "X-Advisor-Sig", "X-Advisor-Ts")})
+        start = next(e for e in loop.sent if e["type"] == "drive_start")["data"]
+        self.assertEqual((start["delay"]["learnedS"], start["agent"]["applyEnabled"]), (round(LEARNED, 4), False))
+        ready = next(e for e in loop.sent if e["type"] == "drive_ready")["data"]
+        self.assertEqual(ready["delayProbe"], INERT)
 
 
 if __name__ == "__main__":

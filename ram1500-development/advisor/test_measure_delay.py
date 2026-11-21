@@ -5,7 +5,7 @@ from types import SimpleNamespace as ns
 import measure_set
 import shared_rules
 import synth
-from measure_delay import LearnedDelay, delay_record, delay_status
+from measure_delay import LearnedDelay, delay_record, delay_status, trusted_delay_s
 from pipeline import Pipeline, PipelineConfig
 from synth import SEC
 
@@ -177,6 +177,12 @@ class RecordTests(unittest.TestCase):
                 self.assertIsNone(record["learnedS"])
                 self.assertIs(record["outOfBand"], False)
                 self.assertEqual(record["estimateS"], 0.33)            # the other fields are still recorded
+
+    def test_the_trusted_value_keeps_its_full_precision(self):
+        self.assertEqual(trusted_delay_s(synth.live_delay(delay=FULL)), FULL)
+        for msg in (None, synth.live_delay(delay=FULL, status="unestimated"), synth.live_delay(delay=0.95),
+                    synth.live_delay(delay=float("nan")), ns(lateralDelay=FULL)):
+            self.assertIsNone(trusted_delay_s(msg))
 
     def test_an_estimated_value_must_be_plausible(self):
         self.assertEqual((shared_rules.DELAY_TRUST_MIN_S, shared_rules.DELAY_TRUST_MAX_S), (0.05, 0.95))

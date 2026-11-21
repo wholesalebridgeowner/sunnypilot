@@ -63,9 +63,6 @@ EXPECTED = {
     "ALERT_STEER_SATURATED": "steerSaturated",
 }
 
-# Version 1 files that still carry their own numbers until they are rewritten on the pipeline.
-NOT_YET_REWRITTEN = {"agent.py"}
-
 
 class SharedRulesTests(unittest.TestCase):
     def test_values(self):
@@ -83,7 +80,7 @@ class SharedRulesTests(unittest.TestCase):
     def test_no_other_module_defines_its_own_copy(self):
         folder = Path(shared_rules.__file__).parent
         for path in sorted(folder.glob("*.py")):
-            if path.name == "shared_rules.py" or path.name.startswith("test_") or path.name in NOT_YET_REWRITTEN:
+            if path.name == "shared_rules.py" or path.name.startswith("test_"):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in tree.body:
