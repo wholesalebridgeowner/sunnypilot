@@ -436,24 +436,22 @@ class LaneSwayTests(unittest.TestCase):
         plain = run(n=700)[2]
         self.assertAlmostEqual(plain["eligibleS"] - pooled["eligibleS"], 7.2, delta=0.11)
 
-    def test_the_sample_a_message_comes_with_must_be_within_half_a_second(self):
-        # The model stream carries on through a 0.7 s stall of the agent's own loop; the message that waited
-        # for it comes with a Sample 0.6 s younger than itself.
+    def test_a_message_that_waited_through_a_stall_changes_nothing(self):
+        # The agent's loop stalls for 0.7 s. A model message stamped 0.1 s into the stall is read with the first
+        # Sample after it, 0.6 s younger than the message. That Sample starts a new run, so the message is not
+        # accepted, like the ones around it: the blocks are those of the same drive without that message.
         head = synth.ticks(300, 100, T0)
         times = head + synth.ticks(400, 100, head[-1] + 700 * MS)
-        late_model = {}
 
-        def batches_with_late_message():
+        def blocks(late_message):
             out = batches(times=times)
-            stamp = head[-1] + 100 * MS                               # a message stamped 0.1 s after the last tick
-            out[300]["drivingModelData"] = (stamp, synth.model())
-            late_model["t"] = stamp
-            return out
-        p = Pipeline(PipelineConfig(measures=(LaneSway,)))
-        out = synth.summaries(synth.run(p, batches_with_late_message()))
-        pooled = quality_values.pool("lane", [s.get("lane") for s in out])
-        self.assertEqual(sum(s["health"]["gapN"] for s in out), 1)
-        self.assertGreater(pooled["n"], 300)                          # and nothing breaks
+            if late_message:
+                out[300]["drivingModelData"] = (head[-1] + 100 * MS, synth.model())
+            p = Pipeline(PipelineConfig(measures=(LaneSway,)))
+            return [(s["health"]["gapN"], s.get("lane")) for s in synth.summaries(synth.run(p, out))]
+        self.assertEqual(blocks(True), blocks(False))
+        self.assertEqual(sum(gap_n for gap_n, _ in blocks(True)), 1)
+        self.assertGreater(sum(lane["n"] for _, lane in blocks(True)), 300)
 
     def test_a_message_over_half_a_second_older_than_its_sample_is_not_accepted(self):
         # As in a decimated log, where a model message stays fresh for 1.25 s: every message is stamped well
