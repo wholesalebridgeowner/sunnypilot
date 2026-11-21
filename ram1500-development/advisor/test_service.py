@@ -181,6 +181,13 @@ class DispatchTests(unittest.TestCase):
         status, _, out = dispatch(self.service, "GET", "/v1/status", sign_request(KEY, "GET", "/v1/status", b""), b"")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(out)["lastEventType"], "agent_start")
+        for event in ({"type": "drive_start", "driveId": "d9", "id": "x10", "data": {}},
+                      {"type": "summary", "driveId": "d9", "id": "x11", "data": {"engagedMinutes": 0.8, "samples": 600}}):
+            raw = json.dumps(event).encode()
+            dispatch(self.service, "POST", "/v1/events", sign_request(KEY, "POST", "/v1/events", raw), raw)
+        _, _, out = dispatch(self.service, "GET", "/v1/status", sign_request(KEY, "GET", "/v1/status", b""), b"")
+        drive = json.loads(out)["lastDrive"]
+        self.assertEqual((drive["summaries"], drive["last"]["engagedMinutes"]), (1, 0.8))
 
     def test_health_and_unknown_token(self):
         self.assertEqual(dispatch(self.service, "GET", "/healthz", {}, b"")[0], 200)

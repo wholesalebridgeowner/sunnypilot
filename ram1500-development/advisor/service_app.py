@@ -74,6 +74,7 @@ class AdvisorService:
                           "settings": data.get("settings") or {}, "startedAt": self.clock()})
             self._save_drive(drive)
             state["nightlyDue"] = None   # a new drive postpones the nightly review
+            state["lastDriveId"] = drive_id
         elif kind == "summary" and isinstance(drive_id, str):
             drive = self._drive(drive_id)
             drive["summaries"].append(data)
@@ -293,8 +294,20 @@ def dispatch(service: AdvisorService, method: str, path: str, headers, body: byt
             return as_json(200, {"approvals": service.approvals_for_comma()})
         if method == "GET" and path == "/v1/status":
             state = service._state()
+            last_drive = None
+            if state.get("lastDriveId"):
+                drive = service._drive(state["lastDriveId"])
+                last = drive["summaries"][-1] if drive["summaries"] else {}
+                note = drive["notes"][-1] if drive["notes"] else None
+                last_drive = {"summaries": len(drive["summaries"]), "ended": drive["ended"],
+                              "restore": drive.get("restore"),
+                              "lastNote": (note["type"] + ":" + str(note["data"].get("reason"))) if note else None,
+                              "last": {k: last.get(k) for k in ("engagedMinutes", "samples", "steerWarningEpisodes",
+                                                                "laneChanges", "weavePerStraightMinute",
+                                                                "curveRelError")} if last else None}
             return as_json(200, {"lastEventAt": state.get("lastEventAt"), "lastEventType": state.get("lastEventType"),
-                                 "pendingApprovals": len(state["approved"]), "nightlyDue": state.get("nightlyDue")})
+                                 "pendingApprovals": len(state["approved"]), "nightlyDue": state.get("nightlyDue"),
+                                 "lastDrive": last_drive})
         return text(405, "method not allowed")
     if method == "POST" and path.startswith("/a/"):
         return text(*service.approve(path[3:]))
