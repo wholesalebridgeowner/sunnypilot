@@ -142,4 +142,5 @@ class CarControlSP:
 
 @auto_dataclass
 class CarStateSP:
-  pass
+  speedLimit: float = auto_field()       # RamPilot: m/s, the limit the truck reports
+  speedLimitValid: bool = auto_field()   # RamPilot
