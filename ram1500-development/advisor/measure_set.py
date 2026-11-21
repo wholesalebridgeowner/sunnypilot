@@ -7,7 +7,8 @@ drive and runs the owner-facing ones first.
 """
 from __future__ import annotations
 
+from measure_brake import Braking
 from measure_limit import SteeringLimit
 from measure_steering import SteeringTime
 
-MEASURES = (SteeringTime, SteeringLimit)
+MEASURES = (SteeringTime, SteeringLimit, Braking)

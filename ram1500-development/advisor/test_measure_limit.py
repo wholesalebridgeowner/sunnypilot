@@ -538,7 +538,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertLessEqual(imported, {"__future__", "measure_api", "shared_rules"})
 
     def test_both_measures_fill_one_summary_without_sharing_a_field(self):
-        p = Pipeline()
+        p = Pipeline(PipelineConfig(measures=(SteeringTime, SteeringLimit)))
         out = synth.summaries(synth.run(p, synth.drive(synth.ticks(300, 100, T0),
                                                         lambda i, t: at_limit() if 100 <= i < 120 else None)))
         self.assertEqual((out[0]["steeringS"], out[0]["limitS"], out[0]["limitNoneS"]), (30.0, 2.0, 2.0))
