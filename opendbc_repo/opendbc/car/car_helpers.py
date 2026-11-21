@@ -4,6 +4,8 @@ import time
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
 from opendbc.car.carlog import carlog
+from opendbc.car.chrysler.rampilot_bsm import wait_for_late_bsm  # RamPilot
+from opendbc.car.chrysler.values import CAR as CHRYSLER_CAR  # RamPilot
 from opendbc.car.structs import CarParams, CarParamsT
 from opendbc.car.fingerprints import eliminate_incompatible_cars, all_legacy_fingerprint_cars
 from opendbc.car.fw_versions import ObdCallback, get_fw_versions_ordered, get_present_ecus, match_fw_to_car
@@ -160,6 +162,12 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
   if candidate is None:
     carlog.error({"event": "car doesn't match any fingerprints", "fingerprints": repr(fingerprints)})
     candidate = "MOCK"
+
+  # RamPilot: BSM_1 can start just after the one-second CAN fingerprint; wait briefly for it (chrysler/rampilot_bsm.py)
+  if candidate == CHRYSLER_CAR.RAM_1500_5TH_GEN:
+    bsm_wait = wait_for_late_bsm(can_recv, fingerprints)
+    carlog.warning({"event": "rampilot late BSM check", "bsm_in_fingerprint": bsm_wait is not None,
+                    "waited_s": bsm_wait})
 
   CarInterface = interfaces[candidate]
   CP: CarParams = CarInterface.get_params(candidate, fingerprints, car_fw, alpha_long_allowed, is_release, docs=False)
