@@ -14,6 +14,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.rampilot_lane_change import LaneChangeSmoother  # RamPilot
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -54,6 +55,7 @@ class Controls(ControlsExt, ModelStateBase):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lc_smoother = LaneChangeSmoother()  # RamPilot: gentler lane changes
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -138,6 +140,12 @@ class Controls(ControlsExt, ModelStateBase):
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
     new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+    # RamPilot: during a lane change only the RATE of the request is limited (selfdrive/controls/lib/rampilot_lane_change.py)
+    if CC.latActive:
+      in_lane_change = model_v2.meta.laneChangeState in (LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing)
+      new_desired_curvature = self.lc_smoother.update(in_lane_change, CS.vEgo, self.desired_curvature, new_desired_curvature)
+    else:
+      self.lc_smoother.reset()
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
 
     actuators.curvature = self.desired_curvature
