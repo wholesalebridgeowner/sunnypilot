@@ -7,13 +7,13 @@ above LC_MIN_SPEED. It continues for LC_TAIL_S after the flag clears. Dropping
 below LC_MIN_SPEED immediately clears the tail and passes through the request.
 Disabling lateral control also resets the smoother.
 
-The rate setting is a candidate for offline comparison. Replaying recorded model
+The 0.75 m/s³ rate is the candidate selected for an initial supervised test. Replaying recorded model
 inputs measures changes to steering requests. The effect on the truck's path,
 lane completion time, driver comfort and warnings remains unmeasured.
 """
 from __future__ import annotations
 
-LC_MAX_LAT_JERK = 0.5   # m/s^3 while a lane change is active (stock limit everywhere: 5.0)
+LC_MAX_LAT_JERK = 0.75   # m/s^3 while a lane change is active (stock limit everywhere: 5.0)
 LC_TAIL_S = 1.0         # the gentler limit stays this long after the lane change ends
 LC_MIN_SPEED = 9.0      # m/s (about 20 mph); below this the stock behaviour is unchanged
 MIN_SPEED = 1.0         # same floor as drive_helpers.MIN_SPEED

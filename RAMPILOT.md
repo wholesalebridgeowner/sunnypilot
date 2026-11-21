@@ -14,9 +14,9 @@ The lane-change work is a local candidate in the `rampilot-tici` checkout. The o
 
 Two drivers described a swing into the target lane followed by a correction. The baseline derives its request from the model's planned heading and initial yaw rate. In `drive_helpers.curv_from_psis`, it doubles the average curvature over the look-ahead interval and subtracts the initial yaw rate divided by speed.
 
-The candidate smoother runs in `controlsd.py` before stock curvature clipping. It limits the change per control tick in the requested curvature using a lateral jerk setting of 0.5 m/s³. It activates at or above 9 m/s during the model's starting and finishing states and has a one-second tail. The first tick below 9 m/s clears that tail and passes through the stock request.
+The candidate smoother runs in `controlsd.py` before stock curvature clipping. It limits the change per control tick in the requested curvature using the 0.75 m/s³ setting selected for the first supervised test. It activates at or above 9 m/s during the model's starting and finishing states and has a one-second tail. The first tick below 9 m/s clears that tail and passes through the stock request.
 
-**Offline review.** The original 38-event comparison used a recorded request sampled at 50 Hz after stock clipping. The live smoother receives the model's pre-clip request at 100 Hz. The owner's shared review handoff tracks the replay using the live hook's input and cadence. Open-loop comparisons measure requested curvature and its timing. Vehicle response, lane completion, driver comfort and warning behavior under the candidate remain unmeasured.
+**Offline review.** The original 38-event comparison used a recorded request sampled at 50 Hz after stock clipping. The live smoother receives the model's pre-clip request at 100 Hz. Across 38 maneuvers replayed with the live hook's input at 100 Hz, this setting reduced the median entry request from 0.84 to 0.70 m/s². The median time to reach 90% of the entry peak increased from 0.41 to 0.96 seconds. Open-loop comparisons measure requested curvature and its timing. Vehicle response, lane completion, driver comfort and warning behavior under the candidate remain unmeasured.
 
 The threshold and tail regression tests run offline in `selfdrive/controls/lib/tests/test_rampilot_lane_change.py`.
 

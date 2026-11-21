@@ -17,6 +17,12 @@ STEP = rlc.LC_MAX_LAT_JERK / V ** 2 * rlc.DT_CTRL
 
 
 class SmootherTests(unittest.TestCase):
+    def test_default_rate_for_first_supervised_candidate(self):
+        smoother = LaneChangeSmoother()
+        for target in (-0.004, 0.004):
+            requested = smoother.update(True, V, 0.0, target)
+            self.assertAlmostEqual(requested * V ** 2 / rlc.DT_CTRL, math.copysign(0.75, target))
+
     def test_outside_a_lane_change_the_request_passes_unchanged(self):
         s = LaneChangeSmoother()
         self.assertEqual(s.update(False, V, 0.0, 0.004), 0.004)
