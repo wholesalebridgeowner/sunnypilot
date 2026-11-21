@@ -8,6 +8,21 @@ AlertStatus = log.SelfdriveState.AlertStatus
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 EventNameSP = custom.OnroadEventSP.EventName
+RAMPILOT_BSM_TITLE = "Comma Blind-Spot Data Unavailable"
+
+
+def rampilot_bsm_unavailable(CP: car.CarParams) -> bool:
+  return CP.carFingerprint == "RAM_1500_5TH_GEN" and not CP.enableBsm
+
+
+def pre_lane_change_alert(prompt: str) -> AlertCallbackType:
+  def alert(CP, CS, sm, metric, soft_disable_time, personality):
+    if rampilot_bsm_unavailable(CP):
+      title, body, size = RAMPILOT_BSM_TITLE, prompt, AlertSize.mid
+    else:
+      title, body, size = prompt, "", AlertSize.small
+    return Alert(title, body, AlertStatus.normal, size, Priority.LOW, VisualAlert.none, AudibleAlert.none, .1)
+  return alert
 
 
 # get event name from enum
@@ -136,7 +151,7 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   # RamPilot: blind-spot support did not start for this drive (opendbc car/chrysler/rampilot_bsm.py)
   EventNameSP.rampilotBlindSpotUnavailable: {
-    ET.PERMANENT: NormalPermanentAlert("Blind Spot Monitoring Off", "Check mirrors before changing lanes", duration=1.0),
+    ET.PERMANENT: NormalPermanentAlert(RAMPILOT_BSM_TITLE, "Check mirrors before changing lanes", duration=1.0),
   },
 
   EventNameSP.laneTurnLeft: {

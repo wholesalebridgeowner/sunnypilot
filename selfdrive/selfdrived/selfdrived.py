@@ -27,7 +27,7 @@ from openpilot.system.version import get_build_metadata
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
-from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP, rampilot_bsm_unavailable
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
@@ -45,7 +45,7 @@ ButtonType = car.CarState.ButtonEvent.Type
 SafetyModel = car.CarParams.SafetyModel
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
-RAMPILOT_BSM_NOTICE_S = 15.  # RamPilot: seconds the blind-spot-off notice shows after startup
+RAMPILOT_BSM_NOTICE_S = 15.  # initial notice when the Comma lacks blind-spot data
 
 
 class SelfdriveD(CruiseHelper):
@@ -63,7 +63,7 @@ class SelfdriveD(CruiseHelper):
       self.CP = CP
 
     # RamPilot: this drive started without blind-spot support (BSM_1 not seen at startup)
-    self.rampilot_bsm_off = self.CP.carFingerprint == "RAM_1500_5TH_GEN" and not self.CP.enableBsm
+    self.rampilot_bsm_off = rampilot_bsm_unavailable(self.CP)
 
     if CP_SP is None:
       cloudlog.info("selfdrived is waiting for CarParamsSP")

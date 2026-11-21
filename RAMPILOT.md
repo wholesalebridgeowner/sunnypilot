@@ -38,9 +38,9 @@ RamPilot keeps listening for up to 3 s more, only on `RAM_1500_5TH_GEN` and only
 
 Replaying the logged CAN after each recorded start: the missed start would have enabled blind-spot support after 0.31 s. The 19 other logged starts were unchanged and waited 0 s. Tests: `opendbc/car/chrysler/tests/test_rampilot_bsm.py`, including the real `get_car` path with simulated CAN.
 
-## Blind-spot-off notice
+## Missing blind-spot data notice
 
-When blind-spot support did not start for a drive, a "Blind Spot Monitoring Off / Check mirrors before changing lanes" notice shows for the first 15 seconds and whenever a lane change is pending. This applies only on `RAM_1500_5TH_GEN`. It is display only: no sound, and it does not block or end engagement. It adds `rampilotBlindSpotUnavailable` (19) at the end of sunnypilot's event list in `cereal/custom.capnp`; older readers see an unknown number. Logs recorded with RamPilot need RamPilot's schema to name that event. Tests: `selfdrive/selfdrived/tests/test_rampilot_bsm_alert.py`.
+When a `RAM_1500_5TH_GEN` starts without blind-spot data for the Comma, the first 15 seconds include a “Comma Blind-Spot Data Unavailable” notice with a reminder to check mirrors. During a left or right lane-change prompt, the same title appears above the original directional instruction. Both displays are silent and give way to higher-priority alerts. The notice has no role in engagement decisions. RamPilot's schema names the recorded event `rampilotBlindSpotUnavailable` (19) in `cereal/custom.capnp`. Older readers see an unknown event number. Coverage is in `selfdrive/selfdrived/tests/test_rampilot_bsm_alert.py`.
 
 ## No calibration learning in reverse (openpilot #38573 backport)
 
