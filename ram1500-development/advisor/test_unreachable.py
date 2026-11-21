@@ -148,6 +148,10 @@ def _ways_to_set(tree, name):
             found.append("global")
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
             found.append("defined")
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name == name:
+            found.append("bound by a statement")
+        elif isinstance(node, ast.MatchMapping) and node.rest == name:
+            found.append("bound by a statement")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and name in node.value \
                 and id(node) not in skip:
             found.append("named in a string")
@@ -189,6 +193,11 @@ class SourceScanTests(unittest.TestCase):
                 ("import mod\nsetattr(mod, 'LOCK', True)\n", ["named in a string"]),
                 ("def build(LOCK=True):\n    return LOCK\n", ["argument"]),
                 ("def build():\n    global LOCK\n    LOCK = True\n", ["assigned", "global"]),
+                ("for LOCK in (True,):\n    pass\n", ["assigned"]),
+                ("LOCK = False\nLOCK |= True\n", ["assigned", "assigned"]),
+                ("try:\n    pass\nexcept Exception as LOCK:\n    pass\n", ["bound by a statement"]),
+                ("match True:\n    case LOCK:\n        pass\n", ["bound by a statement"]),
+                ("class Settings:\n    LOCK = True\n", ["assigned"]),
                 ('"""LOCK is described here."""\nimport mod\nopen_now = mod.LOCK\n', []),
         ):
             with self.subTest(source=source):
