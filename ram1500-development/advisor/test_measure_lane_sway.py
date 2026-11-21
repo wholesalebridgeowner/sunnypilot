@@ -4,7 +4,7 @@ import unittest
 
 import quality_values
 import synth
-from measure_lane_sway import LaneSway, LaneSwayCore
+from measure_lane_sway import JUMP_M, LaneSway, LaneSwayCore
 from measure_steering import SteeringTime
 from pipeline import Pipeline, PipelineConfig
 from synth import MS, SEC
@@ -172,6 +172,19 @@ class LaneSwayCoreTests(unittest.TestCase):
         over = feed(LaneSwayCore(), lambda t_s: 0.31 if t_s >= 15.0 else 0.0, n=400)[0]
         self.assertAlmostEqual(over["validS"], 39.9 - 3.1, places=9)
 
+    def test_a_change_of_exactly_0_30_m_is_not_a_jump(self):
+        # The lane centre moves by exactly the limit, then by the smallest step more. The lines stand so that
+        # their middle can sit on the limit to the last bit; the lane is 2.6 m wide before and 2.56 m after.
+        # (The width has no such case: two widths of 2.5 to 4.5 m never differ by exactly 0.30 as floats.)
+        on_the_limit = 0.6 - 1.58
+        just_over = math.nextafter(on_the_limit, 0.0)
+        self.assertEqual((on_the_limit + 1.58) / 2, JUMP_M)
+        self.assertEqual((just_over + 1.58) / 2, math.nextafter(JUMP_M, 1.0))
+        for left, lost_s in ((on_the_limit, 0.0), (just_over, 3.1)):
+            with self.subTest(left=left):
+                block = feed(LaneSwayCore(), lines=lambda t_s: (left, 1.58) if t_s >= 15.0 else (-1.3, 1.3), n=400)[0]
+                self.assertAlmostEqual(block["validS"], 39.9 - lost_s, places=9)
+
     def test_the_reach_of_a_jump_is_1_0_s_back_and_2_0_s_on(self):
         # Messages every 0.102 s: the tenth before the jump is 1.02 s back, the twentieth after it 2.04 s on.
         block = feed(LaneSwayCore(), lambda t_s: 0.4 if t_s >= 200 * 0.102 - 0.01 else 0.0, n=400, period_ms=102)[0]
@@ -234,6 +247,14 @@ class LaneSwayCoreTests(unittest.TestCase):
     def test_the_mean_speed_is_that_of_the_scored_messages(self):
         block = feed(LaneSwayCore(), v=lambda t_s: 20.0 if t_s < 15.0 else 30.0, straight=lambda t_s: t_s >= 10.0)[0]
         self.assertAlmostEqual(block["vMean"], (50 * 20.0 + 149 * 30.0) / 199, places=9)
+
+    def test_the_mean_speed_is_over_the_scored_messages_not_over_their_time(self):
+        # 150 messages 0.1 s apart at 20 m/s, then 150 messages 0.2 s apart at 30 m/s.
+        times = [T0 + i * 100 * MS for i in range(150)] + [T0 + (14900 + (i + 1) * 200) * MS for i in range(150)]
+        block = feed(LaneSwayCore(), times=times, v=lambda t_s: 20.0 if t_s < 15.0 else 30.0)[0]
+        self.assertEqual(block["n"], 298)                             # 149 at each speed
+        self.assertAlmostEqual(block["scoredS"], 14.9 + 29.8, places=9)
+        self.assertAlmostEqual(block["vMean"], 25.0, places=9)        # weighted by time it would read 26.7
 
     def test_nothing_accepted_books_nothing(self):
         self.assertEqual(feed(LaneSwayCore(), accept=lambda t_s: False), {})

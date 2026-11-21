@@ -175,6 +175,18 @@ class SwingCoreTests(unittest.TestCase):
         self.assertAlmostEqual(booked[0]["straightS"], 15.0, places=6)
         self.assertIn(booked[0]["n"], (6, 7))
 
+    def test_the_mean_speed_is_weighted_by_time(self):
+        # Ten Samples of 0.1 s at 20 m/s, then ten of 0.2 s at 30 m/s: 3 s in all, two thirds of it at 30 m/s.
+        core = SwingCore()
+        t_ns = T0
+        for v, dt in [(20.0, 0.1)] * 10 + [(30.0, 0.2)] * 10:
+            t_ns += round(dt * SEC)
+            core.see(t_ns, 0.0)
+            core.add(t_ns, (0.0, v, dt), True, 0)
+        block = core.flush()[0]
+        self.assertAlmostEqual(block["straightS"], 3.0, places=9)
+        self.assertAlmostEqual(block["vMean"], 80.0 / 3.0, places=9)  # a mean over the Samples would read 25.0
+
     def test_nothing_accepted_books_nothing(self):
         self.assertEqual(feed(SwingCore(), wave(3.0, 0.25), accept=lambda t_s: False), {})
 
@@ -242,6 +254,16 @@ class WheelSwingsTests(unittest.TestCase):
         out, blocks = run(wave(3.0, 0.25), n=1200, period_ms=103.0)
         self.assertEqual(blocks[0]["straightS"], 48.9)                # 475 Samples of 0.103 s: 48.925 s
         self.assertEqual(blocks[1]["straightS"], 60.0)                # 583 of them: 60.049 s
+
+    def test_the_mean_speed_on_an_uneven_loop(self):
+        # 30 s at 20 m/s with a Sample every 0.100 s, then 30 m/s with one every 0.125 s. Evaluated in the
+        # first minute: 249 Samples at 20 m/s (24.9 s) and 192 at 30 m/s (24.0 s). The block has no count of
+        # Samples, so its mean speed goes by time: 24.9 m/s. Over the Samples it would read 24.4.
+        head = synth.ticks(300, 100, T0)
+        times = head + synth.ticks(400, 125, head[-1] + 125 * MS)
+        out, blocks = run(wave(3.0, 0.25), times=times,
+                          extra=lambda t_s: {"carState": dict(v=20.0 if t_s < 30.0 else 30.0)})
+        self.assertEqual((blocks[0]["straightS"], blocks[0]["vMean"]), (48.9, 24.9))
 
     def test_a_swing_is_booked_six_seconds_late(self):
         # One left-right of the wheel at 56 s: evaluated after the first minute has closed.

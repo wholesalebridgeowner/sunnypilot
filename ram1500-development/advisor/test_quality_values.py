@@ -60,6 +60,12 @@ class PoolTests(unittest.TestCase):
         self.assertEqual((pooled["n"], pooled["straightS"]), (11, 40.0))
         self.assertAlmostEqual(pooled["vMean"], (30.0 * 28.0 + 10.0 * 20.0) / 40.0)
 
+    def test_lateral_rms_blocks_pool_their_speed_by_sample(self):
+        pooled = qv.pool("ay", [AY, {"n": 100, "s": 20.0, "sumSq": 0.04, "planSumSq": 0.1, "vMean": 20.0}])
+        self.assertEqual((pooled["n"], pooled["s"]), (500, 60.0))
+        self.assertAlmostEqual(pooled["sumSq"], 0.40)
+        self.assertAlmostEqual(pooled["vMean"], (400 * 30.0 + 100 * 20.0) / 500)       # by accepted Samples
+
     def test_lag_blocks_add_step_by_step(self):
         a, b = lag_block(n=300), lag_block(n=200)
         pooled = qv.pool("lag", [a, b])

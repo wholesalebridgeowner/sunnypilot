@@ -113,6 +113,18 @@ class LateralRmsCoreTests(unittest.TestCase):
         self.assertEqual(part[0]["sumSq"], whole[True]["sumSq"])
         self.assertEqual(part[0]["n"], 600)
 
+    def test_the_mean_speed_is_over_the_accepted_samples_not_over_their_time(self):
+        # Ten Samples of 0.1 s at 20 m/s, then ten of 0.2 s at 30 m/s: half of the Samples at each speed.
+        core = LateralRmsCore()
+        t_ns = T0
+        for v, dt in [(20.0, 0.1)] * 10 + [(30.0, 0.2)] * 10:
+            t_ns += round(dt * SEC)
+            core.add(t_ns, (v, 0.0, 0.0, dt), True, 0)
+        block = core.flush()[0]
+        self.assertEqual(block["n"], 20)
+        self.assertAlmostEqual(block["s"], 3.0, places=9)
+        self.assertAlmostEqual(block["vMean"], 25.0, places=9)        # weighted by time it would read 26.7
+
     def test_nothing_accepted_books_nothing(self):
         self.assertEqual(feed(LateralRmsCore(), sine(0.05, 0.2), accept=lambda t_s: False), {})
 
@@ -187,6 +199,15 @@ class LateralRmsTests(unittest.TestCase):
         out, blocks = run(sine(0.05, 0.2), n=1200, period_ms=103.0)
         self.assertEqual((blocks[0]["n"], blocks[0]["s"]), (475, 48.9))           # 48.925 s
         self.assertEqual((blocks[1]["n"], blocks[1]["s"]), (583, 60.0))           # 60.049 s
+
+    def test_the_mean_speed_on_an_uneven_loop(self):
+        # 30 s at 20 m/s with a Sample every 0.100 s, then 30 m/s with one every 0.125 s. Accepted in the first
+        # minute: 249 Samples at 20 m/s (24.9 s) and 192 at 30 m/s (24.0 s). The block counts its Samples, so
+        # its mean speed is the mean over them: 24.4 m/s. Weighted by time it would read 24.9.
+        head = synth.ticks(300, 100, T0)
+        times = head + synth.ticks(400, 125, head[-1] + 125 * MS)
+        out, blocks = run(times=times, extra=lambda t_s: {"carState": dict(v=20.0 if t_s < 30.0 else 30.0)})
+        self.assertEqual((blocks[0]["n"], blocks[0]["s"], blocks[0]["vMean"]), (441, 48.9, 24.4))
 
     def test_the_value_holds_at_any_loop_period(self):
         for period_ms in (100.0, 105.0, 125.0):
