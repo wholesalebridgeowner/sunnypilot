@@ -93,8 +93,9 @@ class ServiceLockTests(unittest.TestCase):
         self.assertEqual(report["title"], "Ram drive report")
         self.assertEqual(report["message"].splitlines(),
                          ["3 drives, 30 min, steering on 27 min.", "Steering-limit warnings: 21.",
-                          "Steering turned off while moving: none.", "Lane changes: none.", "Hard braking: none.",
-                          "Recording: complete.", "No changes are suggested. This report only measures."])
+                          "Hard braking: 7 (7 from older summaries).",
+                          "Recording: partial. 3 ended drives with incomplete coverage. Gaps: missing summary windows.",
+                          "No changes are suggested. This report only measures."])
         for advice in ("following-distance", "Suggestion", "Trial", "neural-network", "Pull over", "Park"):
             self.assertNotIn(advice, report["message"])
         self.assertEqual(self.with_buttons(), [])

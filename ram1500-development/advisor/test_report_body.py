@@ -1,4 +1,5 @@
 """Nightly report lines (report_body.py)."""
+import math
 import unittest
 
 from report_body import report_lines
@@ -8,16 +9,26 @@ ADVICE = ("following-distance", "Suggestion", "Trial", "neural-network", "Pull o
 
 
 def drive(window_s=3600.0, steering_s=3000.0, bsm=True, warn=(0,), events=(), failed=(), listening=True, end=True):
-    d = {"driveId": "x", "ready": {"blindSpot": bsm}, "summaries": [{"warnEvents": w} for w in warn],
+    windows = math.ceil(window_s / 60)
+    summaries = [{"w": i, "windowS": min(60, window_s - i * 60), "unobservedS": 0, "warnEvents": warn[i] if i < len(warn) else 0}
+                 for i in range(windows)]
+    d = {"driveId": "x", "start": {"agent": {"measures": ["steeringLoss", "laneChange", "brake", "limit"]}},
+         "ready": {"blindSpot": bsm}, "summaries": summaries,
          "events": [{"type": t, "data": data} for t, data in events]}
     if end:
-        d["end"] = {"totals": {"windowS": window_s, "steeringS": steering_s}, "failed": list(failed), "listening": listening}
+        d["ended"] = True
+        d["end"] = {"windows": windows, "totals": {"windowS": window_s, "steeringS": steering_s, "unobservedS": 0},
+                    "truncatedLaneChanges": 0, "failed": list(failed), "listening": listening}
     return d
 
 
 class ReportBodyTests(unittest.TestCase):
-    def test_old_records_keep_the_short_form(self):
-        self.assertEqual(report_lines([{}, {}, {}], CLOSE), ["3 drives recorded.", CLOSE])
+    def test_drive_records_without_an_end_are_reported(self):
+        lines = report_lines([{}, {}, {}], CLOSE)
+        self.assertEqual((lines[0], lines[-1]), ("3 drives recorded.", CLOSE))
+        recording = next(line for line in lines if line.startswith("Recording:"))
+        self.assertTrue(recording.startswith("Recording: partial"))
+        self.assertIn("3 drives without an end record", recording)
 
     def test_a_full_night(self):
         d1 = drive(window_s=5400, steering_s=4800, warn=(2, 1), events=[
@@ -47,8 +58,81 @@ class ReportBodyTests(unittest.TestCase):
 
     def test_recording_gaps_are_named(self):
         lines = report_lines([drive(failed=("lane",), listening=False), drive(end=False)], CLOSE)
-        self.assertIn("Recording: listening off on 1 drive; measures stopped: lane; 1 drive without an end record.", lines)
+        recording = next(line for line in lines if line.startswith("Recording:"))
+        for detail in ("Recording: partial", "listening off", "lane", "1 drive without an end record"):
+            self.assertIn(detail, recording)
         self.assertEqual(lines[0], "2 drives recorded.")          # one drive has no totals
+
+    def test_ended_with_one_of_three_windows_and_unobserved_time(self):
+        row = drive(window_s=180, steering_s=150, bsm=False)
+        row["summaries"] = [{"w": 0, "warnEvents": 1, "windowS": 60, "unobservedS": 0}]
+        row["end"]["totals"]["unobservedS"] = 60
+        row["end"]["truncatedLaneChanges"] = 1
+        lines = report_lines([row], CLOSE)
+        recording = next(line for line in lines if line.startswith("Recording:"))
+        self.assertTrue(recording.startswith("Recording: partial"), recording)
+        self.assertIn("ended drive", recording)
+        self.assertIn("window", recording)
+        self.assertIn("unobserved", recording)
+        self.assertNotIn("without an end", recording)
+        for negative in ("Steering turned off while moving: none.", "Lane changes: none.", "Hard braking: none."):
+            self.assertNotIn(negative, lines)
+
+    def test_duplicate_index_cannot_hide_a_missing_window(self):
+        row = drive(window_s=180, steering_s=150)
+        row["summaries"][1]["w"] = 0
+        lines = report_lines([row], CLOSE)
+        self.assertTrue(any(line.startswith("Recording: partial") and "window" in line for line in lines), lines)
+
+    def test_unobserved_time_alone_is_partial_even_with_every_window(self):
+        row = drive(window_s=120, steering_s=90)
+        row["summaries"][1]["unobservedS"] = row["end"]["totals"]["unobservedS"] = 1.5
+        lines = report_lines([row], CLOSE)
+        recording = next(line for line in lines if line.startswith("Recording:"))
+        self.assertTrue(recording.startswith("Recording: partial") and "unobserved" in recording, recording)
+        self.assertNotIn("missing summary windows", recording)
+
+    def test_missing_or_contradictory_window_duration_does_not_certify_coverage(self):
+        for kind in ("absent_duration", "inconsistent_duration", "unknown_listening"):
+            with self.subTest(kind=kind):
+                row = drive(window_s=120, steering_s=90)
+                if kind == "absent_duration":
+                    del row["summaries"][1]["windowS"]
+                elif kind == "inconsistent_duration":
+                    for summary in row["summaries"]:
+                        summary["windowS"] = 5
+                else:
+                    del row["end"]["listening"]
+                self.assertTrue(any(line.startswith("Recording: partial") for line in report_lines([row], CLOSE)))
+
+    def test_window_duration_rounding_does_not_make_a_complete_drive_partial(self):
+        row = drive(window_s=120, steering_s=90)
+        row["end"]["totals"]["windowS"] = 120.1
+        self.assertIn("Recording: complete.", report_lines([row], CLOSE))
+
+    def test_v1_summary_counts_are_distinct_from_v2_events_and_wheel_touches(self):
+        old = {"ended": True, "summaries": [{"steerWarningEpisodes": 2, "laneChanges": 3, "overrideEpisodes": 7,
+                                              "hardBrakes": [{"speedMs": 12.0}, {"speedMs": 18.0}]}]}
+        lines = report_lines([old], CLOSE)
+        for metric, value in (("Steering-limit warnings", 2), ("Lane changes", 3), ("Hard braking", 2)):
+            self.assertTrue(any(line.startswith(f"{metric}: {value}") for line in lines), lines)
+        self.assertFalse(any(line.startswith("Steering turned off while moving:") and ("7" in line or "none" in line) for line in lines), lines)
+        recording = next(line for line in lines if line.startswith("Recording:"))
+        self.assertTrue(recording.startswith("Recording: partial"), recording)
+        self.assertNotIn("without an end", recording)
+        self.assertIn("ended drive", recording)
+
+        # Detailed v2 data take precedence for that drive. Older drives on the same night still contribute.
+        new = drive(events=[("lane_change", {"outcome": "completed"}), ("brake", {"peakDrop1s": 3.6, "who": "driver"})])
+        new["summaries"][0].update(laneChanges=17, hardBrakes=[{}] * 8)
+        mixed = report_lines([old, new], CLOSE)
+        self.assertTrue(any(line.startswith("Lane changes: 4") for line in mixed), mixed)
+        self.assertTrue(any(line.startswith("Hard braking: 3") for line in mixed), mixed)
+
+        old["events"] = [{"type": "lane_change", "data": {"outcome": "completed"}}]
+        partial_detail = report_lines([old], CLOSE)
+        self.assertTrue(any(line.startswith("Lane changes: 1") for line in partial_detail), partial_detail)
+        self.assertTrue(any(line.startswith("Hard braking: 2") for line in partial_detail), partial_detail)
 
     def test_unknown_blind_spot_is_not_reported_as_on_or_off(self):
         lines = report_lines([drive(bsm=True), drive(bsm=None)], CLOSE)

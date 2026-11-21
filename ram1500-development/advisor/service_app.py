@@ -41,6 +41,7 @@ class AdvisorService:
         self.key = key
         self.public_url = public_url.rstrip("/")
         self.clock = clock
+        self._confirmed_report = None  # retain an acknowledgement if the first store write must retry
 
     # --- records -----------------------------------------------------------
     def _state(self) -> dict:
@@ -49,9 +50,26 @@ class AdvisorService:
 
     def _drive(self, drive_id: str) -> dict:
         """One drive: what drive_start, drive_ready and drive_end said, every summary and every other record."""
-        return self.store.get_json(f"drives/{drive_id}.json") or {
+        defaults = {
             "driveId": drive_id, "start": None, "ready": None, "summaries": [], "events": [], "end": None,
             "ended": False, "restore": None, "trial": None, "declinedReasons": []}
+        return {**defaults, **(self.store.get_json(f"drives/{drive_id}.json") or {})}
+
+    def _report_state(self) -> dict:
+        """Adopt the last known unfinished drive from the old end-only scheduler."""
+        state = self._state()
+        if state.get("nightlyTracking") != 2:
+            pending = state.setdefault("nightlyDrives", [])
+            last = state.get("lastDriveId")
+            if last and last not in pending:
+                drive = self._drive(last)
+                if not drive.get("ended") and drive.get("reportedAt") is None:
+                    pending.append(last)
+            if pending and state.get("nightlyDue") is None:
+                state["nightlyDue"] = state.get("lastEventAt", self.clock()) + NIGHTLY_DELAY_S
+            state["nightlyTracking"] = 2
+            self.store.put_json("state.json", state)
+        return state
 
     def _save_drive(self, drive: dict) -> None:
         self.store.put_json(f"drives/{drive['driveId']}.json", drive)
@@ -66,42 +84,48 @@ class AdvisorService:
     def handle_event(self, event: dict) -> dict:
         if not isinstance(event, dict) or not isinstance(event.get("id"), str) or not isinstance(event.get("type"), str):
             return {"ok": False, "error": "malformed"}
-        state = self._state()
+        state = self._report_state()
         if event["id"] in state["seen"]:
             return {"ok": True, "duplicate": True}
         state["seen"] = (state["seen"] + [event["id"]])[-SEEN_EVENTS_KEPT:]
         state["lastEventAt"], state["lastEventType"] = self.clock(), event["type"]
         kind, drive_id = event["type"], event.get("driveId")
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        if kind == "drive_start" and isinstance(drive_id, str):
-            drive = self._drive(drive_id)
-            drive.update({"start": data, "startedAt": self.clock()})
-            self._save_drive(drive)
-            state["nightlyDue"] = None   # a new drive postpones the report
-            state["lastDriveId"] = drive_id
-        elif kind == "drive_ready" and isinstance(drive_id, str):
-            drive = self._drive(drive_id)
-            drive["ready"] = data
-            self._save_drive(drive)
-        elif kind == "summary" and isinstance(drive_id, str):
-            drive = self._drive(drive_id)
-            drive["summaries"].append(data)
-            self._save_drive(drive)
-        elif kind == "drive_end" and isinstance(drive_id, str):
-            drive = self._drive(drive_id)
-            drive.update({"end": data, "ended": True, "endedAt": self.clock(), "restore": data.get("restore")})
-            self._save_drive(drive)
-            if drive_id not in state["nightlyDrives"]:
-                state["nightlyDrives"].append(drive_id)
-            state["nightlyDue"] = self.clock() + NIGHTLY_DELAY_S
-        elif kind == "apply_result":
+        if kind == "apply_result":
             self._apply_result(state, data)
         elif isinstance(drive_id, str):
-            # Every other record of the drive (braking, lane change, limit event, settings change, listening
-            # disabled) is kept, however long the drive is.
             drive = self._drive(drive_id)
-            drive["events"].append({"type": kind, "data": data})
-            self._save_drive(drive)
+            pending = state["nightlyDrives"]
+            # Older completed drives have endedAt and lastReportAt, but no per-drive receipt.
+            reported = drive.get("reportedAt") is not None or drive_id in (state.get("nightlyReceipt") or {}).get("drives", [])
+            if ("receivedIds" not in drive and drive_id not in pending and drive.get("endedAt") is not None and
+                    state.get("lastReportAt") is not None and drive["endedAt"] <= state["lastReportAt"]):
+                reported = True
+            received = drive.setdefault("receivedIds", [])
+            if event["id"] not in received:
+                if kind == "drive_start":
+                    drive["start"] = data
+                    drive.setdefault("startedAt", self.clock())
+                    if not reported and not drive.get("ended"):
+                        state["lastDriveId"] = drive_id
+                elif kind == "drive_ready":
+                    drive["ready"] = data
+                elif kind == "summary":
+                    drive.setdefault("summaries", []).append(data)
+                elif kind == "drive_end":
+                    drive.update({"end": data, "ended": True, "restore": data.get("restore")})
+                    drive.setdefault("endedAt", self.clock())
+                else:
+                    drive.setdefault("events", []).append({"type": kind, "data": data})
+                if reported:
+                    drive.setdefault("reportedAt", state.get("lastReportAt"))
+                drive["lastRecordAt"] = self.clock()
+                received.append(event["id"])
+                self._save_drive(drive)
+            if not reported:
+                if drive_id not in pending:
+                    pending.append(drive_id)
+                state["nightlyDue"] = max(state.get("nightlyDue") or 0, drive["lastRecordAt"] + NIGHTLY_DELAY_S)
         self.store.put_json("state.json", state)
         return {"ok": True}
 
@@ -212,6 +236,19 @@ class AdvisorService:
         return out
 
     # --- report ---------------------------------------------------------------------
+    def _archive_report(self, state: dict) -> None:
+        receipt = state.get("nightlyReceipt")
+        if receipt is None:
+            return
+        for drive_id in receipt["drives"]:
+            drive = self._drive(drive_id)
+            if drive.get("reportedAt") is None:
+                drive["reportedAt"] = receipt["at"]
+                self._save_drive(drive)
+        self.store.put_json(f"reports/{int(receipt['at'])}.json", {"drives": receipt["drives"]})
+        del state["nightlyReceipt"]
+        self.store.put_json("state.json", state)
+
     def run_nightly(self) -> bool:
         """Send the report when it is due. It carries no button and no advice.
 
@@ -219,22 +256,30 @@ class AdvisorService:
         availability, steering-limit warnings, steering turned off while moving and why, lane changes, hard
         braking, recording completeness, and the closing line.
         """
-        state = self._state()
+        state = self._report_state()
+        self._archive_report(state)
         due = state.get("nightlyDue")
-        if due is None or self.clock() < due or not state["nightlyDrives"]:
-            return False
-        lines = report_lines([self._drive(d) for d in state["nightlyDrives"]], REPORT_CLOSING_LINE)
-        # Send first. The pending report is cleared only after the notifier confirms delivery, so a failed
-        # send is retried on the next run instead of being lost.
-        try:
-            sent = bool(self.notifier.send(TITLE_REPORT, "\n".join(lines), priority=3, actions=None))
-        except Exception:
-            sent = False
-        if not sent:
-            return False
-        self.store.put_json(f"reports/{int(self.clock())}.json", {"drives": list(state["nightlyDrives"])})
-        state.update({"nightlyDue": None, "nightlyDrives": [], "lastReportAt": self.clock()})
+        if self._confirmed_report is None:
+            if due is None or self.clock() < due or not state["nightlyDrives"]:
+                return False
+            ids = list(state["nightlyDrives"])
+            lines = report_lines([self._drive(d) for d in ids], REPORT_CLOSING_LINE)
+            try:
+                sent = self.notifier.send(TITLE_REPORT, "\n".join(lines), priority=3, actions=None)
+            except Exception:
+                sent = False
+            if not sent:
+                return False
+            self._confirmed_report = {"drives": ids, "at": self.clock()}
+        receipt = self._confirmed_report
+        state["nightlyDrives"] = [d for d in state["nightlyDrives"] if d not in receipt["drives"]]
+        if not state["nightlyDrives"]:
+            state["nightlyDue"] = None
+        # Record delivery and dequeue in one write before any optional archive writes.
+        state.update({"nightlyReceipt": receipt, "lastReportAt": receipt["at"]})
         self.store.put_json("state.json", state)
+        self._confirmed_report = None
+        self._archive_report(state)
         return True
 
 

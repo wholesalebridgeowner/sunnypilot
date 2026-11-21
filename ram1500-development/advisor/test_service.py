@@ -7,6 +7,7 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import service_app
 from service_app import AdvisorService, dispatch
@@ -160,6 +161,82 @@ class ServiceTests(ServiceFixture):
         self.service.run_nightly()
         self.assertEqual([n["title"] for n in self.notifier.sent], ["Ram drive report"])
         self.assertIn("2 drives", self.notifier.sent[0]["message"])
+
+    def test_inactive_drive_reported_once_when_end_arrives_late(self):
+        self.start()
+        self.clock.t += 3500
+        self.minutes(1)
+        self.clock.t += 3599
+        self.assertFalse(self.service.run_nightly())
+        self.clock.t += 1
+        self.assertTrue(self.service.run_nightly())
+        first = self.notifier.sent[-1]["message"]
+        self.assertIn("Recording: partial", first)
+        self.assertIn("without an end record", first)
+
+        self.event("drive_end", data=END)
+        self.assertTrue(self.stored()["ended"])
+        self.service = AdvisorService(self.service.store, self.notifier, KEY, URL, clock=self.clock)
+        self.clock.t += 3700
+        self.assertFalse(self.service.run_nightly())
+        self.assertEqual(len(self.notifier.sent), 1)
+
+    def test_ended_with_gaps_and_never_ended_share_one_inactivity_report(self):
+        self.start("ended")
+        self.minutes(1, drive="ended")
+        self.event("drive_end", drive="ended", data=END)
+        self.start("unfinished")
+        self.minutes(1, drive="unfinished")
+        self.clock.t += 3600
+        self.assertTrue(self.service.run_nightly())
+        body = self.notifier.sent[-1]["message"]
+        for phrase in ("2 drives", "Recording: partial", "1 ended drive with incomplete coverage", "1 drive without an end record"):
+            self.assertIn(phrase, body)
+
+    def test_out_of_order_summary_and_retry_after_end_appear_in_one_report(self):
+        self.event("drive_start", data={**START, "agent": {**START["agent"], "measures": ["steeringLoss", "laneChange", "brake", "limit"]}})
+        self.event("drive_end", data=END)
+        self.clock.t += 3500
+        self.minutes(10, warnEvents=1)
+        self.clock.t += 101
+        self.assertFalse(self.service.run_nightly())
+        self.clock.t += 3500
+
+        self.service.notifier.send = lambda *args, **kwargs: False
+        self.assertFalse(self.service.run_nightly())
+        del self.service.notifier.send
+        self.assertTrue(self.service.run_nightly())
+        self.assertEqual(len(self.notifier.sent), 1)
+        lines = self.notifier.sent[0]["message"].splitlines()
+        self.assertIn("Steering-limit warnings: 10.", lines)
+        self.assertIn("Recording: complete.", lines)
+        self.assertFalse(self.service.run_nightly())
+
+    def test_retry_after_confirmed_send_and_storage_error_does_not_resend(self):
+        for write in ("state", "archive"):
+            with self.subTest(write=write):
+                store, sender = MemoryStore(), FakeNotifier()
+                service = AdvisorService(store, sender, KEY, URL, clock=self.clock)
+                service.handle_event({"v": 2, "type": "drive_end", "driveId": "a", "id": "end", "data": END})
+                self.clock.t += 3600
+                original = store.put_json
+
+                def fail_write(key, value):
+                    if (write == "state" and key == "state.json") or (write == "archive" and key.startswith("reports/")):
+                        raise OSError("fixture storage unavailable")
+                    original(key, value)
+
+                with patch.object(store, "put_json", side_effect=fail_write):
+                    try:
+                        service.run_nightly()
+                    except OSError:
+                        pass
+                self.assertEqual(len(sender.sent), 1)
+                if write == "archive":
+                    service = AdvisorService(store, sender, KEY, URL, clock=self.clock)
+                service.run_nightly()
+                self.assertFalse(service.run_nightly())
+                self.assertEqual(len(sender.sent), 1)
 
     def test_the_report_holds_no_advice_and_nothing_of_the_first_version(self):
         self.start()
