@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Drive Advisor Railway service.
 
-Receives signed events from the Comma agent, runs the live suggestion rule,
-notifies the owner through ntfy with Approve/Decline buttons, signs approved
-changes for the Comma, and sends a nightly review about an hour after the last
-drive. The Comma re-checks every approval against its own guard and Park rule.
+Receives signed events from the Comma agent and sends a nightly review about
+an hour after the last drive.
+
+The suggestion path (a live suggestion rule, Approve/Decline buttons through
+ntfy, signed approvals for the Comma) is kept for a future build and is locked
+on this one: see the lock constant below.
 """
 from __future__ import annotations
 
@@ -27,6 +29,12 @@ REASON_TEXT = {
 }
 TITLE_LIVE = "Ram steering suggestion"
 TITLE_NIGHTLY = "Nightly review: Ram 1500"
+
+# Lock 1 of the suggestion path. A code constant: no constructor argument,
+# environment variable, file or request can open it. While it is False the
+# service creates no suggestion, answers "not found" on the approve and decline
+# links, and hands no approval to the Comma.
+SUGGESTIONS_BUILT_IN = False
 
 
 class AdvisorService:
@@ -110,6 +118,8 @@ class AdvisorService:
         return suggestion["status"] in ("pending", "approved")
 
     def _maybe_suggest_live(self, drive: dict, data: dict) -> None:
+        if not SUGGESTIONS_BUILT_IN:
+            return
         learned, base = drive.get("learnedDelayS"), drive.get("baseActuatorDelayS")
         if not self.live_enabled or learned is None or base is None or self._open_live_suggestion(drive):
             return
@@ -132,6 +142,8 @@ class AdvisorService:
         self.notifier.send(TITLE_LIVE, message, priority=4, actions=self._actions(record))
 
     def _create_suggestion(self, *, mode: str, change: dict, reason: str, drive_id: str | None) -> dict:
+        if not SUGGESTIONS_BUILT_IN:
+            raise RuntimeError("suggestions are not built in")
         record = {"id": secrets.token_hex(8), "mode": mode, "change": change, "reason": reason,
                   "driveId": drive_id, "created": self.clock(), "status": "pending", "approval": None,
                   "approveToken": secrets.token_urlsafe(24), "declineToken": secrets.token_urlsafe(24)}
@@ -178,7 +190,7 @@ class AdvisorService:
         return self._suggestion(entry["sid"])
 
     def approve(self, token: str):
-        suggestion = self._token(token, "approve")
+        suggestion = self._token(token, "approve") if SUGGESTIONS_BUILT_IN else None
         if suggestion is None:
             return 404, "Unknown approval link."
         if suggestion["status"] != "pending":
@@ -201,7 +213,7 @@ class AdvisorService:
         return 200, "Approved. The Comma applies it while the truck is parked, before your next drive."
 
     def decline(self, token: str):
-        suggestion = self._token(token, "decline")
+        suggestion = self._token(token, "decline") if SUGGESTIONS_BUILT_IN else None
         if suggestion is None:
             return 404, "Unknown link."
         if suggestion["status"] != "pending":
@@ -216,6 +228,8 @@ class AdvisorService:
 
     # --- Comma polling -----------------------------------------------------------
     def approvals_for_comma(self) -> list:
+        if not SUGGESTIONS_BUILT_IN:
+            return []
         state = self._state()
         now, out, keep = self.clock(), [], []
         for sid in state["approved"]:
@@ -253,7 +267,7 @@ class AdvisorService:
             outcome = "improved" if trial["keep"] else "no clear gain"
             lines.append(f"Trial ({REASON_TEXT.get(trial['reason'], trial['reason'])}): {outcome}.")
         actions = None
-        suggestion = report["suggestion"] if self.nightly_suggestions else None
+        suggestion = report["suggestion"] if SUGGESTIONS_BUILT_IN and self.nightly_suggestions else None
         if suggestion:
             record = self._create_suggestion(mode="nightly", change=suggestion["change"],
                                              reason=suggestion["reason"], drive_id=None)

@@ -1,4 +1,5 @@
-"""Uplink sends signed events in order, retries failures, and collects approvals."""
+"""Uplink sends signed events in order and retries failures. It asks for no approvals:
+that request belongs to the apply path (test_dormant_path.py)."""
 import json
 import unittest
 
@@ -14,11 +15,13 @@ class FakeServer:
         self.fail = False
         self.approvals = []
         self.paths = []
+        self.methods = []
 
     def __call__(self, method, url, headers, body, timeout):
         path = url.split("example.test", 1)[1]
         verify_request(KEY, method, path, body, headers)
         self.paths.append(path)
+        self.methods.append(method)
         if self.fail:
             raise OSError("offline")
         if method == "POST":
@@ -27,11 +30,13 @@ class FakeServer:
         return 200, json.dumps({"approvals": self.approvals}).encode()
 
 
-class UplinkTests(unittest.TestCase):
+class UplinkFixture(unittest.TestCase):
     def setUp(self):
         self.server = FakeServer()
         self.uplink = Uplink("https://example.test/", KEY, opener=self.server)
 
+
+class UplinkTests(UplinkFixture):
     def test_events_sent_in_order_and_cleared(self):
         for i in range(3):
             self.uplink.send({"id": str(i)})
@@ -55,16 +60,19 @@ class UplinkTests(unittest.TestCase):
         small.run_once()
         self.assertEqual([e["id"] for e in self.server.events], ["1", "2"])
 
-    def test_approvals_collected_once(self):
-        self.server.approvals = [{"nonce": "n" * 16}]
-        self.uplink.run_once()
-        self.assertEqual(self.uplink.approvals(), [{"nonce": "n" * 16}])
-        self.assertEqual(self.uplink.approvals(), [])
-
     def test_requests_use_expected_paths(self):
         self.uplink.send({"id": "a"})
         self.uplink.run_once()
-        self.assertEqual(self.server.paths, ["/v1/events", "/v1/approvals"])
+        self.assertEqual(self.server.paths, ["/v1/events"])
+
+    def test_no_approvals_are_asked_for(self):
+        self.server.approvals = [{"nonce": "n" * 16}]            # waiting on the service
+        for i in range(3):
+            self.uplink.send({"id": str(i)})
+            self.uplink.run_once()
+        self.uplink.run_once()                                       # a round with nothing to send
+        self.assertEqual(self.server.methods, ["POST"] * 3)          # not one GET
+        self.assertEqual(self.uplink.approvals(), [])
 
 
 if __name__ == "__main__":

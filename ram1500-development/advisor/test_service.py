@@ -1,11 +1,13 @@
-"""Railway service: signed ingest, live suggestions, approvals, nightly report."""
+"""Railway service as it is built: signed ingest and the nightly report, with no suggestion.
+
+The suggestion path is tested in test_dormant_path.py, with the lock patched open,
+and its lock in test_unreachable.py.
+"""
 import json
 import unittest
 
-from approval import verify_approval
 from service_app import AdvisorService, dispatch
 from service_store import MemoryStore
-from settings_guard import trial_values
 from wire import sign_request
 
 KEY = b"k" * 32
@@ -38,7 +40,7 @@ def minute(weave=1.0, **overrides):
     return values
 
 
-class ServiceTests(unittest.TestCase):
+class ServiceFixture(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.notifier = FakeNotifier()
@@ -63,62 +65,13 @@ class ServiceTests(unittest.TestCase):
         url = dict(actions)[label]
         return url.rsplit("/", 1)[1]
 
-    def test_weaving_creates_one_live_suggestion_with_sound(self):
+
+class ServiceTests(ServiceFixture):
+    def test_weaving_minutes_are_stored_and_nothing_is_suggested(self):
         self.start()
         self.weave_minutes(7)
-        suggestions = [n for n in self.notifier.sent if n["actions"]]
-        self.assertEqual(len(suggestions), 1)
-        self.assertEqual(suggestions[0]["priority"], 4)
-        self.assertEqual([label for label, _ in suggestions[0]["actions"]], ["Approve", "Decline"])
-        self.assertIn("Park", suggestions[0]["message"])
-
-    def test_approve_signs_the_guarded_change_once(self):
-        self.start()
-        self.weave_minutes(5)
-        token = self.token("Approve")
-        self.assertEqual(self.service.approve(token)[0], 200)
-        approvals = self.service.approvals_for_comma()
-        self.assertEqual(len(approvals), 1)
-        fields = verify_approval(KEY, approvals[0], now=self.clock.t, used_nonces=set())
-        self.assertEqual(fields["change"], trial_values(0.25, 0.1, -1))
-        self.assertEqual(fields["mode"], "live")
-        self.assertEqual(self.service.approve(token)[0], 409)
-
-    def test_decline_blocks_the_same_reason_for_this_drive(self):
-        self.start()
-        self.weave_minutes(5)
-        self.assertEqual(self.service.decline(self.token("Decline"))[0], 200)
-        self.weave_minutes(10)
-        self.assertEqual(len([n for n in self.notifier.sent if n["actions"]]), 1)
-        self.assertEqual(self.service.approvals_for_comma(), [])
-
-    def test_live_suggestions_can_be_switched_off(self):
-        self.service.live_enabled = False
-        self.start()
-        self.weave_minutes(7)
-        self.assertEqual([n for n in self.notifier.sent if n["actions"]], [])
-
-    def test_no_live_suggestion_without_learned_delay(self):
-        self.start(learned=None)
-        self.weave_minutes(7)
-        self.assertEqual([n for n in self.notifier.sent if n["actions"]], [])
-
-    def test_apply_result_records_trial_and_confirms(self):
-        self.start()
-        self.weave_minutes(5)
-        self.service.approve(self.token("Approve"))
-        sid = self.service.approvals_for_comma()[0]["suggestion_id"]
-        self.event("apply_result", data={"suggestionId": sid, "status": "applied"})
-        self.assertEqual(self.service.approvals_for_comma(), [])
-        self.assertIn("Applied", self.notifier.sent[-1]["title"])
-        self.assertEqual(self.service.store.get_json("drives/d1.json")["trial"]["reason"], "weaving_on_straight_road")
-
-    def test_approvals_expire_for_the_comma(self):
-        self.start()
-        self.weave_minutes(5)
-        self.service.approve(self.token("Approve"))
-        self.clock.t += 601
-        self.assertEqual(self.service.approvals_for_comma(), [])
+        self.assertEqual(len(self.service.store.get_json("drives/d1.json")["summaries"]), 7)
+        self.assertEqual(self.notifier.sent, [])
 
     def test_duplicate_events_ignored(self):
         self.start()
@@ -141,24 +94,7 @@ class ServiceTests(unittest.TestCase):
         self.service.run_nightly()
         report = self.notifier.sent[-1]
         self.assertIn("Nightly", report["title"])
-        self.assertEqual([label for label, _ in report["actions"]], ["Approve", "Decline"])
-        self.service.approve(self.token("Approve"))
-        fields = verify_approval(KEY, self.service.approvals_for_comma()[0], now=self.clock.t + 11 * 3600,
-                                 used_nonces=set())
-        self.assertEqual(fields["change"], {"NeuralNetworkLateralControl": True})
-
-    def test_nightly_suggestions_can_be_switched_off(self):
-        self.service.nightly_suggestions = False
-        self.start()
-        self.event("summary", data=minute(steerWarningEpisodes=1))
-        for _ in range(9):
-            self.event("summary", data=minute())
-        self.event("drive_end")
-        self.clock.t += 3700
-        self.service.run_nightly()
-        report = self.notifier.sent[-1]
-        self.assertIn("Nightly", report["title"])
-        self.assertEqual(report["actions"], [])
+        self.assertEqual(report["actions"], [])                      # a report, with no button
         self.assertIn("No change suggested", report["message"])
         self.assertEqual(self.service.approvals_for_comma(), [])
 

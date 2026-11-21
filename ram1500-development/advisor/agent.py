@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Drive Advisor agent on the Comma.
 
-Listens to existing sunnypilot messages (never publishes, never sends CAN),
-sends one summary per minute, and applies only owner-approved settings through
-the Applier. All device imports are inside main(), so Agent is testable off
-the Comma with fakes.
+Listens to existing sunnypilot messages (never publishes, never sends CAN) and
+sends one summary per minute. It changes no setting: applying owner-approved
+settings through the Applier is locked on this build (applier.py). All device
+imports are inside main(), so Agent is testable off the Comma with fakes.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
+import applier as apply_lock
 from applier import VehicleState
 from device_params import base_actuator_delay_s, learned_delay_s
 from metrics import MinuteSummary
@@ -195,6 +196,8 @@ class Agent:
                             engaged=engaged)
 
     def _handle_approvals(self, now: float) -> None:
+        if not apply_lock.APPLY_ENABLED:
+            return
         for approval in self.uplink.approvals():
             if isinstance(approval, dict) and isinstance(approval.get("nonce"), str):
                 self.pending[approval["nonce"]] = approval

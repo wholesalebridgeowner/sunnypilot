@@ -2,7 +2,8 @@
 
 Events wait in a bounded queue (oldest dropped first) and go out oldest-first
 over signed HTTPS. A failed send stops the round and is retried next round.
-Approvals are fetched each round. Nothing here blocks the agent loop.
+Approvals are fetched each round only while applying is enabled (applier.py);
+on this build no such request is made. Nothing here blocks the agent loop.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import time
 import urllib.request
 from collections import deque
 
+import applier as apply_lock
 from wire import sign_request
 
 MAX_RESPONSE_BYTES = 1_000_000
@@ -65,6 +67,8 @@ class Uplink:
             with self.lock:
                 if self.queue and self.queue[0] is event:
                     self.queue.popleft()
+        if not apply_lock.APPLY_ENABLED:
+            return
         payload = self._request("GET", "/v1/approvals", b"")
         if payload is None:
             return

@@ -1,4 +1,7 @@
-"""Applier enforces every design rule before writing a setting."""
+"""Applier as it is built: it applies nothing, and still puts back what an earlier trial replaced.
+
+The rules of the apply path itself are tested in test_dormant_path.py, with the lock patched open.
+"""
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,7 +29,9 @@ class FakeParams:
         self.writes.append((key, value))
 
 
-class ApplierTests(unittest.TestCase):
+class ApplierFixture(unittest.TestCase):
+    """Fake settings, with a journal and a nonce ledger in a temporary folder."""
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -44,78 +49,74 @@ class ApplierTests(unittest.TestCase):
         return self.applier.apply(approval, state, now=1010.0, learned_delay_s=0.25,
                                   base_actuator_delay_s=0.1)
 
-    def test_live_trial_applies_in_park_and_journals_previous(self):
-        self.assertEqual(self.apply(self.approval()), "applied")
-        self.assertIs(self.params.values["LagdToggle"], False)
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.1)
-        self.assertEqual(self.applier.journal.load()["previous"], {"LagdToggle": True, "LagdToggleDelay": 0.2})
+    def leave_trial_open(self):
+        """The state an earlier version left behind: trial values in force and the journal open."""
+        self.applier.journal.open_trial(suggestion_id="s0", written=dict(LIVE),
+                                        previous={key: START[key] for key in LIVE})
+        self.params.values.update(LIVE)
 
-    def test_refused_unless_parked(self):
-        for state in (VehicleState(True, 0.5, False), VehicleState(False, 0.0, False),
-                      VehicleState(True, 0.0, True)):
-            with self.subTest(state=state):
-                self.assertEqual(self.apply(self.approval(), state=state), "refused:not_parked")
+
+class ApplyDisabledTests(ApplierFixture):
+    def test_valid_approval_in_park_is_refused(self):
+        self.assertEqual(self.apply(self.approval()), "refused:apply_disabled")
+        self.assertEqual(self.apply(self.approval(change={"NeuralNetworkLateralControl": True}, mode="nightly")),
+                         "refused:apply_disabled")
         self.assertEqual(self.params.writes, [])
-
-    def test_bad_signature_changes_nothing(self):
-        approval = self.approval()
-        approval["sig"] = "0" * 64
-        self.assertEqual(self.apply(approval), "refused:bad_signature")
-        self.assertEqual(self.params.writes, [])
-
-    def test_out_of_range_refused_even_when_signed(self):
-        bad = {"LagdToggle": False, "LagdToggleDelay": 0.4}
-        self.assertEqual(self.apply(self.approval(change=bad)), "refused:delay_too_far_from_learned")
-
-    def test_same_approval_cannot_be_used_twice(self):
-        approval = self.approval()
-        self.assertEqual(self.apply(approval), "applied")
-        self.applier.restore(onroad=False)
-        self.assertEqual(self.apply(approval), "refused:already_used")
-
-    def test_one_trial_at_a_time(self):
-        self.apply(self.approval())
-        self.assertEqual(self.apply(self.approval()), "refused:trial_already_active")
-
-    def test_at_most_two_live_trials_per_drive(self):
-        for _ in range(2):
-            self.assertEqual(self.apply(self.approval()), "applied")
-            self.applier.restore(onroad=False)
-        self.assertEqual(self.apply(self.approval()), "refused:live_trial_limit")
-        self.applier.new_drive()
-        self.assertEqual(self.apply(self.approval()), "applied")
-
-    def test_restore_puts_previous_values_back(self):
-        self.apply(self.approval())
-        self.assertEqual(self.applier.restore(onroad=False), "restored")
-        self.assertIs(self.params.values["LagdToggle"], True)
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
+        self.assertEqual(self.params.values, START)
         self.assertFalse(self.applier.journal.is_open())
 
-    def test_restore_waits_while_driving(self):
+    def test_refusal_comes_before_every_other_check(self):
+        forged = self.approval()
+        forged["sig"] = "0" * 64
+        moving = VehicleState(in_park=False, speed_ms=20.0, engaged=True)
+        out_of_range = self.approval(change={"LagdToggle": False, "LagdToggleDelay": 0.4})
+        for approval, state in ((forged, PARKED), (self.approval(), moving), (out_of_range, PARKED),
+                                ("not an approval", PARKED)):
+            with self.subTest(approval=approval, state=state):
+                self.assertEqual(self.apply(approval, state=state), "refused:apply_disabled")
+        self.assertEqual(self.params.writes, [])
+
+    def test_refused_approval_is_not_marked_used(self):
         self.apply(self.approval())
+        self.assertEqual(self.applier.nonces.used(), set())
+        self.assertFalse(self.applier.nonces.path.exists())
+
+
+class RestoreTests(ApplierFixture):
+    """Restore still runs: a trial left open by an earlier version is put back."""
+
+    def test_restore_puts_previous_values_back_once(self):
+        self.leave_trial_open()
+        self.assertEqual(self.applier.restore(onroad=False), "restored")
+        self.assertEqual(self.params.values, START)
+        self.assertEqual(sorted(self.params.writes), [("LagdToggle", True), ("LagdToggleDelay", 0.2)])
+        self.assertFalse(self.applier.journal.is_open())
+        self.assertEqual(self.applier.restore(onroad=False), "nothing_to_restore")
+        self.assertEqual(len(self.params.writes), 2)
+
+    def test_restore_waits_while_driving(self):
+        self.leave_trial_open()
         self.assertEqual(self.applier.restore(onroad=True), "deferred_until_drive_end")
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.1)
+        self.assertTrue(self.applier.journal.is_open())
 
     def test_owner_change_wins(self):
-        self.apply(self.approval())
+        self.leave_trial_open()
         self.params.values["LagdToggle"] = True
-        self.assertEqual(self.applier.check_owner_override(), "trial_ended_owner_changed")
-        self.assertEqual(self.applier.restore(onroad=False), "nothing_to_restore")
-        self.assertIs(self.params.values["LagdToggle"], True)
+        self.assertEqual(self.applier.restore(onroad=False), "owner_changed:LagdToggle")
+        self.assertEqual(self.params.writes, [])
+        self.assertFalse(self.applier.journal.is_open())
 
     def test_restore_after_agent_restart(self):
-        self.apply(self.approval())
+        self.leave_trial_open()
         fresh = Applier(self.params, Journal(self.applier.journal.path),
                         NonceLedger(self.applier.nonces.path), KEY)
         self.assertEqual(fresh.restore(onroad=False), "restored")
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
 
-    def test_nightly_change_is_kept_not_journaled(self):
-        approval = self.approval(change={"NeuralNetworkLateralControl": True}, mode="nightly")
-        self.assertEqual(self.apply(approval), "applied")
-        self.assertIs(self.params.values["NeuralNetworkLateralControl"], True)
-        self.assertFalse(self.applier.journal.is_open())
+    def test_nothing_to_restore(self):
+        self.assertEqual(self.applier.restore(onroad=False), "nothing_to_restore")
+        self.assertEqual(self.params.writes, [])
 
 
 if __name__ == "__main__":

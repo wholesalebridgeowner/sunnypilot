@@ -16,12 +16,14 @@ LIVE = {"LagdToggle": False, "LagdToggleDelay": 0.1}
 class FakeParams:
     def __init__(self, values):
         self.values = dict(values)
+        self.writes = []
 
     def get(self, key):
         return self.values.get(key)
 
     def put(self, key, value):
         self.values[key] = value
+        self.writes.append((key, value))
 
     def onroad(self):
         return self.values.get("IsOnroad") is True
@@ -31,11 +33,13 @@ class FakeUplink:
     def __init__(self):
         self.events = []
         self.incoming = []
+        self.asked = 0
 
     def send(self, event):
         self.events.append(event)
 
     def approvals(self):
+        self.asked += 1
         out, self.incoming = self.incoming, []
         return out
 
@@ -59,7 +63,9 @@ class Clock:
         return self.t
 
 
-class AgentTests(unittest.TestCase):
+class AgentFixture(unittest.TestCase):
+    """An Agent over fake settings, sockets, uplink and clocks."""
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -106,14 +112,24 @@ class AgentTests(unittest.TestCase):
         self.socks["carState"].queue.append((t_ns, ns(vEgo=speed, aEgo=0.0, steeringRateDeg=0.0,
                                                       steeringPressed=False, gearShifter=gear)))
 
-    def test_start_restores_open_trial_when_offroad(self):
-        self.assertEqual(self.applier.apply(self.approval(), self.agent.vehicle_state(), now=self.wall.t,
-                                            learned_delay_s=0.25, base_actuator_delay_s=0.1), "applied")
-        fresh = Agent(params=self.params, applier=Applier(self.params, self.applier.journal, self.applier.nonces, KEY),
-                      uplink=self.uplink, socket_factory=self.make_sock, decode=self.decode, slot_check=lambda: True)
-        fresh.start()
+    def leave_trial_open(self):
+        """The state an earlier version left behind: trial values in force and the journal open."""
+        self.applier.journal.open_trial(suggestion_id="s0", written=dict(LIVE),
+                                        previous={"LagdToggle": True, "LagdToggleDelay": 0.2})
+        self.params.values.update(LIVE)
+
+
+class AgentTests(AgentFixture):
+    def test_start_restores_a_trial_left_open_when_offroad(self):
+        self.leave_trial_open()
+        self.agent.start()
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
+        self.assertIs(self.params.values["LagdToggle"], True)
+        self.assertEqual(sorted(self.params.writes), [("LagdToggle", True), ("LagdToggleDelay", 0.2)])
+        self.assertFalse(self.applier.journal.is_open())
         self.assertEqual(self.uplink.events[-1]["data"], {"restore": "restored"})
+        self.agent.tick()
+        self.assertEqual(self.uplink.types(), ["agent_start"])       # no trial_ended, no apply_result
 
     def test_drive_start_and_end(self):
         self.drive()
@@ -171,30 +187,27 @@ class AgentTests(unittest.TestCase):
         self.agent.tick()
         self.assertEqual(self.decoded.count("carState"), 1)
 
-    def test_approval_waits_for_park_then_applies(self):
-        self.drive()
-        self.feed(0, gear="drive", speed=20.0)
-        self.agent.tick()
+    def test_signed_approval_is_never_looked_at(self):
+        # Parked with the ignition off, and an approval signed with the real key is waiting.
         self.uplink.incoming.append(self.approval())
-        self.agent.tick()
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
-        self.feed(100_000_000, gear="park", speed=0.0, enabled=False)
-        self.mono.t += 2
-        self.agent.tick()
-        self.assertEqual(self.params.values["LagdToggleDelay"], 0.1)
-        self.assertEqual(self.uplink.events[-1]["data"]["status"], "applied")
-
-    def test_unparked_approval_dropped_at_expiry(self):
-        self.drive()
-        self.feed(0, gear="drive", speed=20.0)
-        self.uplink.incoming.append(self.approval())
-        self.agent.tick()
-        self.wall.t += 601
-        self.mono.t += 2
-        self.feed(100_000_000, gear="drive", speed=20.0)
-        self.agent.tick()
-        self.assertEqual(self.uplink.events[-1]["data"]["status"], "refused:expired")
+        self.uplink.incoming.append(self.approval(change={"NeuralNetworkLateralControl": True}, mode="nightly"))
+        for _ in range(3):
+            self.agent.tick()
+            self.mono.t += 2
+        self.assertEqual(self.uplink.asked, 0)
         self.assertEqual(self.agent.pending, {})
+        self.assertEqual(self.params.writes, [])
+        self.assertEqual(self.uplink.types(), [])                    # no apply_result either
+        self.assertFalse(self.applier.journal.is_open())
+
+    def test_signed_approval_is_ignored_in_park_during_a_drive(self):
+        self.drive()
+        self.uplink.incoming.append(self.approval())
+        self.feed(0, gear="park", speed=0.0, enabled=False)
+        self.mono.t += 2
+        self.agent.tick()
+        self.assertEqual(self.params.writes, [])
+        self.assertNotIn("apply_result", self.uplink.types())
 
     def test_stale_vehicle_state_is_not_parked(self):
         self.drive()
@@ -203,26 +216,18 @@ class AgentTests(unittest.TestCase):
         self.mono.t += 5
         self.assertFalse(self.agent.vehicle_state().parked())
 
-    def test_offroad_counts_as_parked_for_nightly(self):
-        self.uplink.incoming.append(self.approval(change={"NeuralNetworkLateralControl": True}, mode="nightly"))
+    def test_drive_end_restores_a_trial_left_open(self):
+        self.leave_trial_open()
+        self.params.values["IsOnroad"] = True
+        self.agent.start()                                           # started in mid-drive: restore has to wait
+        self.assertEqual(self.uplink.events[-1]["data"], {"restore": "deferred_until_drive_end"})
         self.agent.tick()
-        self.assertIs(self.params.values["NeuralNetworkLateralControl"], True)
-
-    def test_owner_override_ends_trial(self):
-        self.uplink.incoming.append(self.approval())
-        self.agent.tick()
-        self.params.values["LagdToggle"] = True
-        self.agent.tick()
-        self.assertIn("trial_ended", self.uplink.types())
-
-    def test_drive_end_restores_trial(self):
-        self.uplink.incoming.append(self.approval())
-        self.agent.tick()
-        self.drive()
+        self.assertEqual(self.params.values["LagdToggleDelay"], 0.1)
         self.params.values["IsOnroad"] = False
         self.agent.tick()
         self.assertEqual(self.params.values["LagdToggleDelay"], 0.2)
         self.assertEqual(self.uplink.events[-1]["data"], {"restore": "restored"})
+        self.assertNotIn("apply_result", self.uplink.types())
 
     def test_cpu_limit_stops_listening(self):
         self.drive()

@@ -1,9 +1,13 @@
 """The only Drive Advisor component that writes settings.
 
-Order of checks: approval signature/expiry/replay, allowlist and range,
-parked state, one change at a time, live-trial limit. The approval is marked
-used and the journal is written BEFORE any setting changes, so a crash at any
-point can be undone and no approval can be replayed.
+On this build it applies nothing (see the lock constant below). It still puts
+back what an earlier trial replaced: `restore` runs at agent start and at
+drive end.
+
+Order of checks in `apply`: the lock, then approval signature/expiry/replay,
+allowlist and range, parked state, one change at a time, live-trial limit. The
+approval is marked used and the journal is written BEFORE any setting changes,
+so a crash at any point can be undone and no approval can be replayed.
 """
 from __future__ import annotations
 
@@ -15,6 +19,12 @@ from settings_guard import GuardError, validate_change
 
 MAX_LIVE_TRIALS_PER_DRIVE = 2
 PARKED_SPEED_MS = 0.1
+
+# Lock 2 of the suggestion path. A code constant: no constructor argument,
+# environment variable, file or request can open it. While it is False the
+# applier refuses every approval before looking at it, the agent does not
+# handle approvals, and the uplink does not ask the service for any.
+APPLY_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +47,8 @@ class Applier:
 
     def apply(self, approval: dict, state: VehicleState, *, now: float,
               learned_delay_s: float, base_actuator_delay_s: float) -> str:
+        if not APPLY_ENABLED:
+            return "refused:apply_disabled"
         try:
             fields = verify_approval(self.key, approval, now=now, used_nonces=self.nonces.used())
         except ApprovalError as error:
