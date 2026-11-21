@@ -1103,7 +1103,9 @@ class PrivacyTests(AgentFixture):
 
     def test_every_message_holds_only_what_the_schema_allows(self):
         events = self.everything()
-        self.assertEqual({e["type"] for e in events}, set(schema_v2.DATA))     # every message type was sent
+        # Every message type was sent, except parking_raw: its live path is switched off in this build
+        # (parking_live.PARKING_LIVE_ENABLED); test_parking_live checks that record against the schema.
+        self.assertEqual({e["type"] for e in events}, set(schema_v2.DATA) - {"parking_raw"})
         for event in events:
             with self.subTest(type=event["type"], id=event["id"]):
                 self.assertEqual(schema_v2.problems(event), [])

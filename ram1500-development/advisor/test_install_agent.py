@@ -184,7 +184,7 @@ class PayloadTests(unittest.TestCase):
         not_for_the_comma = {"service_app.py", "service_store.py", "service_notify.py", "replay_report.py",
                              "npz_input.py", "quality_values.py", "port_adapters.py", "synth.py",
                              "acceptance_data.py", "schema_v2.py", "install_agent.py",
-                             "parking_raw.py", "parking_report.py"}     # experimental, offline only
+                             "parking_report.py"}     # experimental, offline only
         self.assertFalse(not_for_the_comma & set(AGENT_PAYLOAD))
         on_disk = {p.name for p in ADVISOR.glob("*.py") if not p.name.startswith("test_")}
         self.assertEqual(on_disk - set(AGENT_PAYLOAD), not_for_the_comma)       # every module is one or the other

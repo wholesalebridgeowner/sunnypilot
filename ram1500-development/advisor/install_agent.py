@@ -59,6 +59,8 @@ AGENT_PAYLOAD = (
     "measure_steering_loss.py",
     "measure_swings.py",
     "messages.py",
+    "parking_live.py",
+    "parking_raw.py",
     "pipeline.py",
     "samples.py",
     "settings_guard.py",

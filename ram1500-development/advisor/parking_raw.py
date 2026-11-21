@@ -1,6 +1,7 @@
-"""EXPERIMENTAL offline parking telemetry: raw counts of two candidate parking messages, meaning unconfirmed.
+"""EXPERIMENTAL parking telemetry: raw counts of two candidate parking messages, meaning unconfirmed.
 
-Not installed on the Comma and not part of the agent. Reads recorded CAN frames only (offline tools). The
+The decode library for the offline report (parking_report.py) and for the live path (parking_live.py), which
+is SWITCHED OFF in this build. Standard library only. The
 truck's parking-sensor data reaches the Comma's harness only as raw CAN on bus 0; nothing in the build parses
 it, so on the device it would need the full `can` stream, which is held back until its CPU cost is measured
 on the truck (owner's go).

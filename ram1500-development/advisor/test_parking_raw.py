@@ -96,10 +96,12 @@ class ParkingLogTests(unittest.TestCase):
 
 
 class NotOnTheComma(unittest.TestCase):
-    def test_parking_modules_are_offline_only(self):
+    def test_the_report_is_offline_only_and_the_live_path_is_off(self):
+        import parking_live
         from install_agent import AGENT_PAYLOAD
-        self.assertNotIn("parking_raw.py", AGENT_PAYLOAD)
         self.assertNotIn("parking_report.py", AGENT_PAYLOAD)
+        self.assertIn("parking_raw.py", AGENT_PAYLOAD)          # the decode library, used by the switched-off live path
+        self.assertIs(parking_live.PARKING_LIVE_ENABLED, False)
 
 
 if __name__ == "__main__":

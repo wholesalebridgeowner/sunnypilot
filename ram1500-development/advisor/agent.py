@@ -41,6 +41,7 @@ from device_params import (DeviceParams, base_actuator_delay_s, blind_spot_enabl
 from journal import Journal, NonceLedger
 from measure_delay import delay_record, trusted_delay_s
 from messages import drive_end_data, drive_ready_data, drive_start_data, envelope, fit
+import parking_live
 from pipeline import STREAMS, Pipeline, PipelineConfig
 from samples import get
 from settings_snapshot import changed_keys, nnlc_model_token, read_settings, reread_watched
@@ -62,7 +63,7 @@ class Agent:
     def __init__(self, *, params, applier, uplink, socket_factory, decode, slot_check,
                  car_params_decode=None, car_params_sp_decode=None, live_delay_decode=None, delay_probe=None,
                  wall_clock=time.time, monotonic=time.monotonic, resource_probe=None,
-                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None):
+                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None):
         self.params = params
         self.applier = applier
         self.uplink = uplink
@@ -77,6 +78,7 @@ class Agent:
         self.resource_probe = resource_probe
         self.subscribe_delay_s = subscribe_delay_s
         self.on_tick_error = on_tick_error
+        self.can_decode = can_decode    # raw `can` message -> (t_ns, frames); used only if parking_live is on
         self.boot_id = uuid.uuid4().hex[:12]
         self.seq = 0
         self.onroad = False
@@ -93,6 +95,8 @@ class Agent:
         self.onroad_since = None
         self.pipeline = None
         self.socks = None
+        self.can_sock = None            # experimental parking telemetry (parking_live.py); None while it is off
+        self.parking = None
         self.listening = True
         self.health = None              # (time, CPU seconds) of the newest reading
         self.cpu_breach = False
@@ -195,6 +199,7 @@ class Agent:
         fields = self.pipeline.drive_end_fields()
         # The delay record comes from the learner's newest message of the drive (the pipeline holds it).
         delay = self._with_stored_delays(fields.get("delay") or delay_record(None))
+        self._send_parking()
         self._event("drive_end", drive_end_data(fields, listening=self.listening, restore=status,
                                                 settings=self.settings, delay=delay, probe=self.drive_probe))
         self._close_sockets()
@@ -211,6 +216,9 @@ class Agent:
             self._stop_listening("subscriber_slots_full")
             return
         self.socks = {stream: self.socket_factory(stream) for stream in STREAMS}
+        if parking_live.PARKING_LIVE_ENABLED and self.can_decode is not None:
+            self.can_sock = self.socket_factory(parking_live.STREAM)
+            self.parking = parking_live.ParkingLive(self.can_decode)
         self.drive_probe = self.probe = dict(self.delay_probe()) if self.delay_probe else dict(PROBE_NOT_AVAILABLE)
         name, fuzzy = self._decoded(nnlc_match, "car_sp")
         self._event("drive_ready", drive_ready_data(probe=self.drive_probe, nnlc_model=nnlc_model_token(name),
@@ -233,19 +241,38 @@ class Agent:
             batch[stream] = (t_ns, msg)
             if stream in ("carState", "carControl"):
                 self.latest_state[stream] = (now, msg)
+        if self.parking is not None:
+            self._drain_can(now, batch.get("carState"))
         if batch:
             self._send(self.pipeline.ingest_tick(batch))
+
+    def _drain_can(self, now: float, car_state) -> None:
+        """Experimental parking telemetry: empty the `can` socket every tick, decode only while the gate is open."""
+        if car_state is not None:
+            msg = car_state[1]
+            self.parking.context(now, get(msg, "vEgo"), get(msg, "gearShifter"))
+        raws = []
+        while (raw := self.can_sock.receive(non_blocking=True)) is not None:
+            raws.append(raw)
+        self.parking.consume(now, raws)
+
+    def _send_parking(self) -> None:
+        if self.parking is not None:
+            parking, self.parking = self.parking, None
+            self._event("parking_raw", parking.record())
 
     def _stop_listening(self, reason: str, cpu_pct=None, rss_mb=None) -> None:
         """No further samples on this drive. What was measured so far is sent at once."""
         self.listening = False
         self._send(self.pipeline.end())
+        self._send_parking()
         self._close_sockets()
         self._event("listening_disabled", {"reason": reason, "cpuPct": _round1(cpu_pct), "rssMb": _round1(rss_mb)})
 
     def _close_sockets(self) -> None:
         socks, self.socks = self.socks, None
-        for sock in (socks or {}).values():
+        can_sock, self.can_sock = self.can_sock, None
+        for sock in list((socks or {}).values()) + ([can_sock] if can_sock is not None else []):
             close = getattr(sock, "close", None)
             if callable(close):
                 try:
@@ -370,8 +397,14 @@ def main() -> None:  # pragma: no cover - runs on the Comma
         event = messaging.log_from_bytes(raw)
         return event.logMonoTime, getattr(event, service)
 
+    streams = STREAMS + ((parking_live.STREAM,) if parking_live.PARKING_LIVE_ENABLED else ())
+
     def slot_check():
-        return not device_telemetry.slot_problems(device_telemetry.msgq_reader_counts(STREAMS))
+        return not device_telemetry.slot_problems(device_telemetry.msgq_reader_counts(streams))
+
+    def can_decode(raw):
+        event = messaging.log_from_bytes(raw)
+        return event.logMonoTime, event.can
 
     log_path = home / "agent.log"
 
@@ -382,7 +415,7 @@ def main() -> None:  # pragma: no cover - runs on the Comma
 
     agent = Agent(params=params, applier=applier, uplink=uplink, socket_factory=messaging.sub_sock,
                   decode=decode, slot_check=slot_check, delay_probe=DelayProbe().run,
-                  resource_probe=_resource_probe, on_tick_error=log_error)
+                  resource_probe=_resource_probe, on_tick_error=log_error, can_decode=can_decode)
     agent.start()
     while True:
         time.sleep(agent.step())
