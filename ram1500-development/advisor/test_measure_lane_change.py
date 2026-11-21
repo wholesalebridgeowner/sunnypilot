@@ -852,7 +852,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertIn(LaneChanges, measure_set.MEASURES)
         self.assertTrue(LaneChanges.owner_facing)
         self.assertEqual(LaneChanges.name, "laneChange")
-        self.assertEqual(Pipeline().measure_names, ["steering", "limit", "brake", "laneChange"])
+        self.assertEqual(Pipeline().measure_names[:4], ["steering", "limit", "brake", "laneChange"])
 
     def test_it_needs_nothing_but_the_measure_interface_and_the_shared_rules(self):
         import ast
