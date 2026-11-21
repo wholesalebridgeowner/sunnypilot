@@ -11,7 +11,7 @@ Small Python-only fixes that carry back to the comma three, each to be its own r
 | # | Upstream change | What it fixes |
 |---|---|---|
 | A1 | sunnypilot #1716 (7a43e2cb) | `controlsd` updates `steer_limited_by_safety` only while cruise is engaged. In steering-only mode the flag freezes at its last value, which affects the steering-limit warning and the torque integrator. The fix gates it on lateral-active. Verified: the installed build gates on `selfdriveState.active`, and newer sunnypilot gates on `get_lat_active`, which the installed build already has. Built in `rampilot-tici` (reuses the value from `state_control()`); the recorded-drive replay found no added warning on this truck. |
-| A2 | sunnypilot #1717 (538e1e8a) | The "stopped responding" sound also covers steering-only mode. |
+| A2 | sunnypilot #1717 (538e1e8a) | The "stopped responding" sound also covers steering-only mode. Built in `rampilot-tici` with upstream's test and an offline test. |
 | A3 | opendbc #3782 (057aee25) | Faster Chrysler checksum, same result. |
 | A4 | openpilot #38573 (612d97cf) | No steer-ratio or offset learning while reversing. |
 | A5 | openpilot lagd series | Steadier learned steering delay. It changes lane-change entry too, so the old and new estimators are compared over recorded drives first. |
@@ -20,7 +20,7 @@ Small Python-only fixes that carry back to the comma three, each to be its own r
 
 Larger or newer-hardware items: the steering controller rewrite, Blendful lane centering, cruise-button speed control (needs a Panda safety change), and newer driving models. The WD40 model's runtime path was removed from newer sunnypilot, so WD40 does not carry forward unchanged.
 
-Newer code adds nothing for the blind-spot startup miss or for lane-change smoothness.
+Newer code adds nothing for the blind-spot startup miss or for lane-change smoothness. RamPilot's own blind-spot startup wait (`opendbc/car/chrysler/rampilot_bsm.py`) carries over as long as newer opendbc still sets `enableBsm` from the startup fingerprint; check that before porting.
 
 ## What is verified so far (2026-11-21)
 

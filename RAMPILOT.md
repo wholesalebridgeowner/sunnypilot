@@ -26,6 +26,18 @@ The installed build updates `steer_limited_by_safety` only while cruise is engag
 
 A replay of the recorded drives found no warning the fix would have added. On this truck the flag is on most of the time even when fully engaged, because the torque sent trails the request by more than its 1% threshold. Tests: `selfdrive/controls/lib/tests/test_rampilot_steer_limited.py`.
 
+## Timeout sound in steering-only mode (sunnypilot #1717 backport)
+
+If the driving software stops responding, the "stopped responding" warning sounded only when cruise was engaged. RamPilot also sounds it when steering-only mode was engaged, as newer sunnypilot does (538e1e8a). No full-rate recorded drive showed a gap of over 1 s in the driving state while engaged. Tests: `selfdrive/ui/tests/test_rampilot_timeout_sound.py`, plus upstream's messaging test in `test_soundd.py`.
+
+## Blind-spot startup
+
+Blind-spot support turns on only if the blind-spot message (BSM_1, address 720) is seen during the startup fingerprint, which listens for about a second. On this truck BSM_1 arrives every 0.5 s, and on one recorded start its first frame came 0.31 s after the window closed. Blind-spot support then stayed off for the whole drive, so sunnypilot could start a lane change with a vehicle in the blind spot. The truck's own blind-spot lights kept working.
+
+RamPilot keeps listening for up to 3 s more, only on `RAM_1500_5TH_GEN` and only when BSM_1 is missing, before the car settings are built (`opendbc/car/chrysler/rampilot_bsm.py`, called from `car_helpers.get_car`). Once enabled, the stock checks apply: if BSM_1 stops, CAN validity fails as before. If BSM_1 never arrives, blind-spot support stays off as before and a log line records it.
+
+Replaying the logged CAN after each recorded start: the missed start would have enabled blind-spot support after 0.31 s. The 19 other logged starts were unchanged and waited 0 s. Tests: `opendbc/car/chrysler/tests/test_rampilot_bsm.py`, including the real `get_car` path with simulated CAN.
+
 ## 3X and four
 
 The comma four is on order. Newer sunnypilot already includes features the comma three build lacks:
