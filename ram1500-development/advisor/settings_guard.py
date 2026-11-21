@@ -11,6 +11,11 @@ STEP_S = 0.05
 MAX_OFFSET_S = 0.10
 MIN_TOTAL_S = 0.10
 MAX_TOTAL_S = 0.50
+MIN_SOFTWARE_S = 0.05         # the settings screen's own range for the software delay
+MAX_SOFTWARE_S = 0.50
+# trial_values rounds the total to 0.001 s while a learned delay has full
+# precision, so a valid trial sits up to 0.0005 s off its step.
+ROUNDING_ALLOWANCE_S = 0.00051
 LIVE_KEYS = frozenset({"LagdToggle", "LagdToggleDelay"})
 NIGHTLY_KEYS = LIVE_KEYS | {"NeuralNetworkLateralControl"}
 BOOL_KEYS = frozenset({"LagdToggle", "NeuralNetworkLateralControl"})
@@ -63,11 +68,13 @@ def validate_change(change: dict, *, mode: str, learned_delay_s: float,
         raise GuardError("fixed_delay_requires_learning_off")
     if not (_finite(learned_delay_s) and _finite(base_actuator_delay_s)):
         raise GuardError("invalid_delay_inputs")
+    if not (MIN_SOFTWARE_S - _EPS <= software <= MAX_SOFTWARE_S + _EPS):
+        raise GuardError("software_delay_outside_screen_range")
     total = base_actuator_delay_s + software
     if not (MIN_TOTAL_S - _EPS <= total <= MAX_TOTAL_S + _EPS):
         raise GuardError("total_delay_out_of_range")
-    if abs(total - learned_delay_s) > MAX_OFFSET_S + _EPS:
+    if abs(total - learned_delay_s) > MAX_OFFSET_S + ROUNDING_ALLOWANCE_S:
         raise GuardError("delay_too_far_from_learned")
-    steps = (total - learned_delay_s) / STEP_S
-    if abs(steps - round(steps)) > 1e-6:
+    nearest_step = learned_delay_s + round((total - learned_delay_s) / STEP_S) * STEP_S
+    if abs(total - nearest_step) > ROUNDING_ALLOWANCE_S:
         raise GuardError("delay_not_on_step")
