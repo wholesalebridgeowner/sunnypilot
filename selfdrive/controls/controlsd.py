@@ -53,6 +53,7 @@ class Controls(ControlsExt, ModelStateBase):
     self.pm = messaging.PubMaster(['carControl', 'controlsState'] + self.pm_services_ext)
 
     self.steer_limited_by_safety = False
+    self.lat_active_for_limits = False  # RamPilot: sunnypilot #1716, see publish()
     self.curvature = 0.0
     self.desired_curvature = 0.0
     self.lc_smoother = LaneChangeSmoother()  # RamPilot: gentler lane changes
@@ -115,6 +116,7 @@ class Controls(ControlsExt, ModelStateBase):
 
     # Get which state to use for active lateral control
     _lat_active = self.get_lat_active(self.sm)
+    self.lat_active_for_limits = _lat_active  # RamPilot: reused in publish() instead of a second get_lat_active() call
 
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
@@ -194,7 +196,9 @@ class Controls(ControlsExt, ModelStateBase):
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
 
-    if self.sm['selfdriveState'].active:
+    # RamPilot (sunnypilot #1716, 7a43e2cb): update the flag whenever steering is active, including
+    # steering-only mode. Gating on selfdriveState.active froze it once cruise was off.
+    if self.lat_active_for_limits:
       CO = self.sm['carOutput']
       if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
         self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
