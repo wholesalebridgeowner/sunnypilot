@@ -147,6 +147,21 @@ class ServiceTests(unittest.TestCase):
                                  used_nonces=set())
         self.assertEqual(fields["change"], {"NeuralNetworkLateralControl": True})
 
+    def test_nightly_suggestions_can_be_switched_off(self):
+        self.service.nightly_suggestions = False
+        self.start()
+        self.event("summary", data=minute(steerWarningEpisodes=1))
+        for _ in range(9):
+            self.event("summary", data=minute())
+        self.event("drive_end")
+        self.clock.t += 3700
+        self.service.run_nightly()
+        report = self.notifier.sent[-1]
+        self.assertIn("Nightly", report["title"])
+        self.assertEqual(report["actions"], [])
+        self.assertIn("No change suggested", report["message"])
+        self.assertEqual(self.service.approvals_for_comma(), [])
+
     def test_new_drive_postpones_nightly_report(self):
         self.start()
         self.event("summary", data=minute())

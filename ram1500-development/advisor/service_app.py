@@ -30,13 +30,15 @@ TITLE_NIGHTLY = "Nightly review: Ram 1500"
 
 
 class AdvisorService:
-    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time, live_enabled: bool = True):
+    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time, live_enabled: bool = True,
+                 nightly_suggestions: bool = True):
         self.store = store
         self.notifier = notifier
         self.key = key
         self.public_url = public_url.rstrip("/")
         self.clock = clock
         self.live_enabled = live_enabled   # off until the live metrics are calibrated on real drives
+        self.nightly_suggestions = nightly_suggestions   # off: the report is sent without any suggested change
 
     # --- records -----------------------------------------------------------
     def _state(self) -> dict:
@@ -251,7 +253,7 @@ class AdvisorService:
             outcome = "improved" if trial["keep"] else "no clear gain"
             lines.append(f"Trial ({REASON_TEXT.get(trial['reason'], trial['reason'])}): {outcome}.")
         actions = None
-        suggestion = report["suggestion"]
+        suggestion = report["suggestion"] if self.nightly_suggestions else None
         if suggestion:
             record = self._create_suggestion(mode="nightly", change=suggestion["change"],
                                              reason=suggestion["reason"], drive_id=None)
@@ -333,7 +335,8 @@ def serve() -> None:  # pragma: no cover - runs on Railway
                           config=Config(s3={"addressing_style": "virtual"}))
     service = AdvisorService(S3Store(client, env["S3_BUCKET"]), Notifier(env["NTFY_TOPIC"]),
                              bytes.fromhex(env["ADVISOR_KEY"]), env["PUBLIC_URL"],
-                             live_enabled=env.get("LIVE_SUGGESTIONS", "on").lower() != "off")
+                             live_enabled=env.get("LIVE_SUGGESTIONS", "on").lower() != "off",
+                             nightly_suggestions=env.get("NIGHTLY_SUGGESTIONS", "on").lower() != "off")
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
