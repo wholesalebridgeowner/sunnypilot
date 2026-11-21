@@ -92,6 +92,12 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len([n for n in self.notifier.sent if n["actions"]]), 1)
         self.assertEqual(self.service.approvals_for_comma(), [])
 
+    def test_live_suggestions_can_be_switched_off(self):
+        self.service.live_enabled = False
+        self.start()
+        self.weave_minutes(7)
+        self.assertEqual([n for n in self.notifier.sent if n["actions"]], [])
+
     def test_no_live_suggestion_without_learned_delay(self):
         self.start(learned=None)
         self.weave_minutes(7)

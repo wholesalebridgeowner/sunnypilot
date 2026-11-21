@@ -30,12 +30,13 @@ TITLE_NIGHTLY = "Nightly review: Ram 1500"
 
 
 class AdvisorService:
-    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time):
+    def __init__(self, store, notifier, key: bytes, public_url: str, *, clock=time.time, live_enabled: bool = True):
         self.store = store
         self.notifier = notifier
         self.key = key
         self.public_url = public_url.rstrip("/")
         self.clock = clock
+        self.live_enabled = live_enabled   # off until the live metrics are calibrated on real drives
 
     # --- records -----------------------------------------------------------
     def _state(self) -> dict:
@@ -108,7 +109,7 @@ class AdvisorService:
 
     def _maybe_suggest_live(self, drive: dict, data: dict) -> None:
         learned, base = drive.get("learnedDelayS"), drive.get("baseActuatorDelayS")
-        if learned is None or base is None or self._open_live_suggestion(drive):
+        if not self.live_enabled or learned is None or base is None or self._open_live_suggestion(drive):
             return
         suggestion = live_suggestion(drive["summaries"], trials_this_drive=int(data.get("trialsThisDrive") or 0),
                                      trial_active=bool(data.get("trialActive")))
@@ -331,7 +332,8 @@ def serve() -> None:  # pragma: no cover - runs on Railway
                           aws_secret_access_key=env["S3_SECRET_ACCESS_KEY"], region_name=env.get("S3_REGION") or "auto",
                           config=Config(s3={"addressing_style": "virtual"}))
     service = AdvisorService(S3Store(client, env["S3_BUCKET"]), Notifier(env["NTFY_TOPIC"]),
-                             bytes.fromhex(env["ADVISOR_KEY"]), env["PUBLIC_URL"])
+                             bytes.fromhex(env["ADVISOR_KEY"]), env["PUBLIC_URL"],
+                             live_enabled=env.get("LIVE_SUGGESTIONS", "on").lower() != "off")
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
