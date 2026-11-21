@@ -1,9 +1,11 @@
 """Curve sums and lag sums: actual cornering against what was commanded, and the sums behind a response lag."""
 import math
 import unittest
+from types import SimpleNamespace as ns
 
 import quality_values
 import synth
+from measure_api import Context
 from measure_curve import CurveCore, CurveLag, CurveSums, LagCore
 from measure_steering import SteeringTime
 from pipeline import Pipeline, PipelineConfig
@@ -414,6 +416,47 @@ class CurveMeasureTests(unittest.TestCase):
         self.assertAlmostEqual(curve["lowS"], 10.0, delta=0.05)
         self.assertEqual(curve["lowLimitS"], 0.0)
         self.assertEqual(out[0]["health"]["staleS"]["co"], out[0]["windowS"])
+
+    def curve_sample(self, t_ms, dt, v=V, demand=1.0):
+        """A Sample in a curve of 1.0 m/s^2 with actual cornering a tenth below, as the measure is handed it."""
+        return ns(t_ns=T0 + t_ms * MS, eligible=v >= 15.0, clean=True, at_limit=False,
+                  sample=ns(v_ego=v, desired_curvature=demand / v ** 2, actual_curvature=0.9 * demand / v ** 2, dt=dt))
+
+    def test_no_curve_block_when_all_its_times_read_zero(self):
+        # A curve whose last Sample, 0.01 s long as in a full-rate log, is all that a window holds of it: its
+        # time is sent as 0.0, and a block whose three times are 0 is left out.
+        measure, ctx = CurveSums(), Context()
+        measure.on_evaluate(ctx, self.curve_sample(0, 0.1))
+        self.assertEqual(measure.window_fields()["curve"]["events"], 1)
+        measure.on_evaluate(ctx, self.curve_sample(10, 0.01))
+        self.assertEqual(measure.window_fields(), {})
+        # The same on the low-speed line, which counts no curves.
+        measure = CurveSums()
+        for i in range(3):
+            measure.on_evaluate(ctx, self.curve_sample(10 * i, 0.01, v=10.0))
+        self.assertEqual(measure.window_fields(), {})
+
+    def test_any_one_of_its_times_keeps_the_curve_block(self):
+        measure, ctx = CurveSums(), Context()
+        times = lambda block: (block["s"], block["s04"], block["lowS"], block["events"])
+        measure.on_evaluate(ctx, self.curve_sample(0, 0.1))                       # a curve begins
+        self.assertEqual(times(measure.window_fields()["curve"]), (0.1, 0.0, 0.0, 1))
+        measure.on_evaluate(ctx, self.curve_sample(500, 0.1, demand=0.0))         # straight; 0.4 s ago it was not
+        self.assertEqual(times(measure.window_fields()["curve"]), (0.0, 0.1, 0.0, 0))
+        measure.on_evaluate(ctx, self.curve_sample(1000, 0.1))                    # the same curve; 0.4 s ago straight
+        self.assertEqual(times(measure.window_fields()["curve"]), (0.1, 0.0, 0.0, 0))
+        measure.on_evaluate(ctx, self.curve_sample(1100, 0.1, v=10.0))            # and slowly
+        self.assertEqual(times(measure.window_fields()["curve"]), (0.0, 0.0, 0.1, 0))
+        self.assertEqual(measure.window_fields(), {})
+
+    def test_the_start_of_a_curve_is_never_left_out_with_its_block(self):
+        # Two Samples of 0.01 s that begin a curve: left out for its time, the curve would never be counted.
+        measure, ctx = CurveSums(), Context()
+        for i in range(2):
+            measure.on_evaluate(ctx, self.curve_sample(10 * i, 0.01))
+        block = measure.window_fields()["curve"]
+        self.assertEqual((block["s"], block["s04"], block["lowS"], block["events"]), (0.0, 0.0, 0.0, 1))
+        self.assertEqual(block["belowSum"], 0.002)
 
     def test_a_stall_drops_the_earlier_demands_held(self):
         sums, lag_sums = CurveSums(), CurveLag()

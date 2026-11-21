@@ -18,7 +18,8 @@ other Sample empties the swing state. A Sample without a wheel angle is not
 in the trend and takes no part either. A gap ends the run: the wheel angles
 held and the swing state are dropped. Nothing is reset at a window boundary.
 
-The block of a window (left out when no Sample of it took part):
+The block of a window (left out when its time, as sent, is zero and it holds
+no swing):
 
     n          swings counted
     straightS  time of the Samples that took part, s
@@ -191,4 +192,8 @@ class WheelSwings(Measure):
 
     def window_fields(self) -> dict:
         block = closing_block(self._core.flush())
-        return {} if block is None else {self.name: rounded(block)}
+        if block is None:
+            return {}
+        sent = rounded(block)
+        # Left out when the time it would show is zero. A swing is never left out with it.
+        return {self.name: sent} if sent["straightS"] or sent["n"] else {}

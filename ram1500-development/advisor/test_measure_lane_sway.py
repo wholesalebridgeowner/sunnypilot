@@ -1,9 +1,11 @@
 """Lane sway: slow side-to-side drift of the truck between the lane lines on straight road."""
 import math
 import unittest
+from types import SimpleNamespace as ns
 
 import quality_values
 import synth
+from measure_api import Context
 from measure_lane_sway import JUMP_M, LaneSway, LaneSwayCore
 from measure_steering import SteeringTime
 from pipeline import Pipeline, PipelineConfig
@@ -555,6 +557,37 @@ class LaneSwayTests(unittest.TestCase):
         self.assertEqual(pooled["eligibleS"], 32.9)
         self.assertEqual(pooled["scoredS"], 27.0)
         self.assertEqual(sorted(blocks), [0])
+
+    def gated(self, t_ns):
+        """A Sample on straight road that the shared gates accept, as the measure is handed it."""
+        return ns(t_ns=t_ns, eligible=True, straight=True, sample=ns(v_ego=25.0))
+
+    def message(self, t_ns, dt_m):
+        return ns(t_m=t_ns / SEC, dt_m=dt_m, left_y=-HALF_WIDTH, right_y=HALF_WIDTH, left_prob=0.95, right_prob=0.95,
+                  slow=False)
+
+    def test_no_block_when_its_time_reads_zero(self):
+        # One accepted message that stands for 0.04 s, as in a full-rate log, is all a window holds: its time
+        # is sent as 0.0, and a block whose accepted time is 0 is left out.
+        measure, ctx = LaneSway(), Context()
+        measure.on_model(ctx, self.message(T0, 0.04), self.gated(T0))
+        measure.on_drive_end(ctx)
+        self.assertEqual(measure.window_fields(), {})
+
+    def test_a_scored_message_is_never_left_out_with_its_block(self):
+        # Messages every 0.1 s for 12 s, and one more only 0.04 s after the message at 6.0 s. That one is
+        # scored alone while a window is open: left out for its time, a scored message would be lost.
+        measure, ctx = LaneSway(), Context()
+        times = sorted([T0 + i * 100 * MS for i in range(120)] + [T0 + 6040 * MS])
+        for i, t_ns in enumerate(times):
+            measure.on_model(ctx, self.message(t_ns, (t_ns - times[i - 1]) / SEC if i else 0.0), self.gated(t_ns))
+            measure.on_sample(ctx, self.gated(t_ns))
+        measure.on_sample(ctx, self.gated(T0 + (6000 + 8600) * MS))   # everything up to the message at 6.0 s
+        self.assertEqual(measure.window_fields()["lane"]["n"], 60)    # all but the first
+        ctx.w = 1
+        measure.on_sample(ctx, self.gated(T0 + (6040 + 8600) * MS))   # the message at 6.04 s
+        block = measure.window_fields()["lane"]
+        self.assertEqual((block["n"], block["scoredS"], block["eligibleS"], block["vMean"]), (1, 0.0, 0.0, 25.0))
 
     def test_blocks_only_where_a_message_was_accepted(self):
         out, blocks, pooled = run(n=1300, extra=lambda t_s: {"carControl": dict(lat=t_s >= 70.0)})

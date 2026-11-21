@@ -10,7 +10,7 @@ works on.
 Per Sample, 6.0 s after its time stamp, with x = speed^2 x desired curvature
 (the demand) and y = speed^2 x actual curvature, m/s^2:
 
-  curve block (left out when its three times are all zero)
+  curve block (left out when its three times, as sent, are all zero and no curve began)
     s, belowSum, aboveSum      curve Samples (accepted by the shared gates, |x| at least 0.5): their
                                time, and the time-weighted distance of y below and above x
     events                     curves: a curve Sample more than 3.15 s after the one before it
@@ -271,9 +271,11 @@ class CurveSums(Measure):
 
     def window_fields(self) -> dict:
         block = closing_block(self._core.flush())
-        if block is None or not (block["s"] or block["s04"] or block["lowS"]):
+        if block is None:
             return {}
-        return {self.name: rounded_curve(block)}
+        sent = rounded_curve(block)
+        # Left out when the times it would show are all zero. The start of a curve is never left out with it.
+        return {self.name: sent} if sent["s"] or sent["s04"] or sent["lowS"] or sent["events"] else {}
 
 
 class CurveLag(Measure):

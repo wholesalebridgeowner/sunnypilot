@@ -1,9 +1,11 @@
 """Wheel swings: back-and-forth movements of the steering wheel on straight road, counted by time stamp."""
 import math
 import unittest
+from types import SimpleNamespace as ns
 
 import quality_values
 import synth
+from measure_api import Context
 from measure_steering import SteeringTime
 from measure_swings import SWING_AMPLITUDE, CentredMean, SwingCore, WheelSwings
 from pipeline import Pipeline, PipelineConfig
@@ -181,6 +183,9 @@ class SwingCoreTests(unittest.TestCase):
         # Like any Sample that is left out, it empties the swing state.
         self.assertEqual(count([0.0, 1.0, 2.0, 0.9, 2.0, 0.9]), 3)
         self.assertEqual(count([0.0, 1.0, 2.0, None, 2.0, 0.9]), 0)
+        core = SwingCore()
+        core.see(T0, None)
+        self.assertEqual(core.held, 0)                                # nothing is held for the trend in its place
 
     def test_time_and_speed_are_only_summed_over_accepted_samples(self):
         booked = feed(SwingCore(), wave(3.0, 0.25), accept=lambda t_s: t_s >= 45.0)
@@ -314,6 +319,26 @@ class WheelSwingsTests(unittest.TestCase):
         self.assertEqual(blocks[0]["n"], 0)
         self.assertEqual(blocks[0]["straightS"], 48.8)                # 48.9 s less that one Sample
         self.assertNotIn("failed", out[0]["health"])
+
+    def short_window(self, angles):
+        """The block of a window in which only these Samples took part, each 0.01 s long as in a full-rate log."""
+        measure, ctx = WheelSwings(), Context()
+        samples = [ns(t_ns=T0 + i * 10 * MS, straight_eligible=True,
+                      sample=ns(steering_angle_deg=angle, v_ego=25.0, dt=0.01)) for i, angle in enumerate(angles)]
+        for g in samples:
+            measure.on_sample(ctx, g)
+        for g in samples:
+            measure.on_evaluate(ctx, g)
+        return measure.window_fields()
+
+    def test_no_block_when_its_time_reads_zero(self):
+        # 0.03 s is sent as 0.0, and a block whose straight time is 0 is left out.
+        self.assertEqual(self.short_window([0.0, 0.0, 0.0]), {})
+        self.assertEqual(self.short_window([0.0] * 6), {"swings": {"n": 0, "straightS": 0.1, "vMean": 25.0}})
+
+    def test_a_swing_is_never_left_out_with_its_block(self):
+        # The same 0.03 s with a swing in them: left out for its time, the swing would be lost for good.
+        self.assertEqual(self.short_window([0.0, 1.5, 0.0]), {"swings": {"n": 1, "straightS": 0.0, "vMean": 25.0}})
 
     def test_a_press_on_the_wheel_stops_the_count_around_it(self):
         pressed = lambda t_s: {"carState": dict(pressed=30.0 <= t_s < 30.3)}

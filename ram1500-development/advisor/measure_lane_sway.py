@@ -23,7 +23,8 @@ Per new model message:
 A message stands for the time since the one before it. Everything is booked
 when the message is evaluated. A gap releases what waits and starts afresh.
 
-The block of a window (left out when no message of it was accepted):
+The block of a window (left out when the time of its accepted messages, as
+sent, is zero and none was scored):
 
     n, sumSq           scored messages and the sum of their squared residuals, m^2
     scoredS            their time, s
@@ -272,4 +273,8 @@ class LaneSway(Measure):
 
     def window_fields(self) -> dict:
         block = closing_block(self._core.flush())
-        return {} if block is None else {self.name: rounded(block)}
+        if block is None:
+            return {}
+        sent = rounded(block)
+        # Left out when the time it would show is zero. A scored message is never left out with it.
+        return {self.name: sent} if sent["eligibleS"] or sent["n"] else {}
