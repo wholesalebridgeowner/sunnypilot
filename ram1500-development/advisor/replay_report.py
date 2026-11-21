@@ -1,44 +1,113 @@
 #!/usr/bin/env python3
-"""Offline Drive Advisor replay: Q-log files -> per-minute summaries and suggestions.
+"""Offline Drive Advisor replay: decimated log files -> the messages the agent would have sent.
 
-Usage (decoded with the installed build's schema; prints numbers only, never
-route names, locations or identifiers):
+This tool holds no measure logic and no sampling logic of its own. It builds
+batches from the decoded events of a log and feeds them to the same per-drive
+Pipeline the agent builds (pipeline.py), so a number that differs between a
+live drive and its replay can only come from the inputs.
+
+Batches are built as for a decimated log: the events are put in time order
+(file order is not time order), and every message of the eight streams goes
+into the batch of the first later-or-equal message of the vehicle-state stream.
+
+Usage (decoded with the installed build's schema; prints numbers and fixed
+tokens only, never a file name, a route name, a place or a clock time):
   python3 replay_report.py --schema-dir SCHEMA_DIR qlog1.zst [qlog2.zst ...]
+
+Printed, one JSON message per line with the drive named `replay`: the
+summaries and the event records. drive_start, drive_ready and drive_end, which
+need the settings of the log header, are not printed yet; `header_settings`
+below reads them.
 """
 from __future__ import annotations
 
 import argparse
-import json
+import math
 
-from metrics import MinuteSummary
-from rules import live_suggestion
-from samples import SampleBuilder
+import messages
+from pipeline import STREAMS, Pipeline, PipelineConfig
+from settings_snapshot import KEYS, model_bundle_id
 
-SERVICES = ("carState", "carControl", "controlsState", "carOutput", "radarState",
-            "drivingModelData", "onroadEvents")
-
-
-def summaries_from_events(events, *, sample_hz: float = 10.0, window_s: float = 60.0) -> list:
-    builder = SampleBuilder(sample_hz=sample_hz)
-    summaries, current = [], None
-    for service, t_ns, msg in events:
-        sample = builder.ingest(service, t_ns, msg)
-        if sample is None:
-            continue
-        prev = None
-        if current is not None and sample.t - current.start_t >= window_s:
-            prev = current.last_sample
-            summaries.append(current.finish(sample_hz))
-            current = None
-        if current is None:
-            current = MinuteSummary(start_t=sample.t, prev=prev)
-        current.add(sample)
-    if current is not None and current.samples:
-        summaries.append(current.finish(sample_hz))
-    return summaries
+_TICK_STREAM = STREAMS[0]       # the stream whose every message makes a batch
+_HEX12 = frozenset("0123456789abcdef")
 
 
-def _qlog_events(paths, schema_dir):
+def decimated_batches(events):
+    """Batches for the pipeline from (stream, logMonoTime_ns, message) events, in any order.
+
+    One batch per message of the tick stream, holding the newest message of
+    each other stream that came after the previous batch and at or before it.
+    On equal times the tick stream goes last.
+    """
+    wanted = frozenset(STREAMS)
+    ordered = sorted((event for event in events if event[0] in wanted),
+                     key=lambda event: (event[1], event[0] == _TICK_STREAM))
+    batch = {}
+    for stream, t_ns, msg in ordered:
+        batch[stream] = (t_ns, msg)
+        if stream == _TICK_STREAM:
+            yield batch
+            batch = {}
+
+
+def replay_messages(events, config: PipelineConfig | None = None) -> list:
+    """Every message the pipeline sends for these events, in the agent's envelope."""
+    pipeline = Pipeline(config or PipelineConfig.for_decimated_log())
+    produced = []
+    for batch in decimated_batches(events):
+        produced.extend(pipeline.ingest_tick(batch))
+    produced.extend(pipeline.end())
+    return [messages.fit(messages.envelope(kind, messages.REPLAY_DRIVE_ID, f"{messages.REPLAY_DRIVE_ID}-{i}", data))
+            for i, (kind, data) in enumerate(produced, start=1)]
+
+
+def _text(raw):
+    if isinstance(raw, str):
+        return raw
+    try:
+        return bytes(raw).decode("utf-8")
+    except (TypeError, ValueError):
+        return None
+
+
+def _switch(raw):
+    text = _text(raw) if raw is not None else None
+    return None if text is None else text == "1"
+
+
+def _float(raw):
+    try:
+        value = float(_text(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _int(raw):
+    try:
+        return int(_text(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def header_settings(entries: dict) -> dict:
+    """The settings snapshot from the parameter list of a log header (name -> raw value).
+
+    A switch is on when its value is `1`. A value that is missing or cannot be
+    parsed gives null; the model bundle id is made as the agent makes it.
+    """
+    build = (_text(entries.get("GitCommit")) or "")[:12].lower()
+    snapshot = {"lagdToggle": _switch(entries.get("LagdToggle")),
+                "lagdToggleDelayS": _float(entries.get("LagdToggleDelay")),
+                "nnlc": _switch(entries.get("NeuralNetworkLateralControl")),
+                "laneChangeTimer": _int(entries.get("AutoLaneChangeTimer")),
+                "modelBundleId": model_bundle_id(entries.get("ModelManager_ActiveBundle")),
+                "build": build if len(build) == 12 and set(build) <= _HEX12 else None}
+    return {key: snapshot[key] for key in KEYS}
+
+
+def _log_events(paths, schema_dir, buffers: list):
+    """The events of the eight streams. The decoded messages point into `buffers`, which the caller keeps."""
     import io
     import os
 
@@ -49,24 +118,21 @@ def _qlog_events(paths, schema_dir):
     for path in paths:
         with open(path, "rb") as handle:
             data = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(handle.read())).read()
+        buffers.append(data)
         for event in log.Event.read_multiple_bytes(data):
             kind = event.which()
-            if kind in SERVICES:
-                body = getattr(event, kind)
-                yield kind, event.logMonoTime, (list(body) if kind == "onroadEvents" else body)
+            if kind in STREAMS:
+                yield kind, event.logMonoTime, getattr(event, kind)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--schema-dir", required=True)
-    parser.add_argument("--sample-hz", type=float, default=10.0)
-    parser.add_argument("qlogs", nargs="+")
+    parser.add_argument("logs", nargs="+")
     args = parser.parse_args()
-    summaries = summaries_from_events(_qlog_events(args.qlogs, args.schema_dir), sample_hz=args.sample_hz)
-    for i, summary in enumerate(summaries):
-        summary = {k: v for k, v in summary.items() if k != "startT"}
-        suggestion = live_suggestion(summaries[: i + 1], trials_this_drive=0, trial_active=False)
-        print(json.dumps({"minute": i, "summary": summary, "liveSuggestion": suggestion}, sort_keys=True))
+    buffers = []
+    for message in replay_messages(_log_events(args.logs, args.schema_dir, buffers)):
+        print(messages.encode(message).decode("utf-8"))
 
 
 if __name__ == "__main__":
