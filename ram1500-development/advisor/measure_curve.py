@@ -18,10 +18,11 @@ Per Sample, 6.0 s after its time stamp, with x = speed^2 x desired curvature
     above04Sum                 demand: the steady shortfall without the curve entry
     lowS, lowBelowSum,         the same as the first line for clean Samples from 5 m/s up to the
     lowAboveSum, lowLimitS     speed floor, and the part of that time with the command at its limit
+                               (a command that was not seen adds nothing to it)
 
   lag block (left out when it holds no Sample)
-    s, n                       lag Samples: 0.98 s of accepted Samples in a row with the command off its
-                               limit and no more than 0.15 s between them, within 3.05 s of a curve
+    s, n                       lag Samples: 0.98 s of accepted Samples in a row with the command seen and
+                               off its limit and no more than 0.15 s between them, within 3.05 s of a curve
     syy, sxy[k], sxx[k]        sums of y^2, y x_k and x_k^2, where x_k is the demand 0.1 k s earlier,
                                k = 0 to 10
 
@@ -167,7 +168,8 @@ class LagCore:
     """Lag sums on their own. Times are log time stamps in nanoseconds.
 
         add(t_ns, (v, desired_curvature, actual_curvature, dt, at_limit), accept_flag, key)
-                       every Sample, in time order
+                       every Sample, in time order. `at_limit`: the command is at its limit; a
+                       Sample with it ends the stretch of good Samples.
         new_run()      a gap: forget the earlier demands
         flush()        {key: block} booked since the last flush
     """
@@ -282,7 +284,9 @@ class CurveLag(Measure):
 
     def on_evaluate(self, ctx, g) -> None:
         s = g.sample
-        self._core.add(g.t_ns, (s.v_ego, s.desired_curvature, s.actual_curvature, s.dt, g.at_limit), g.eligible, ctx.w)
+        # A command that was not seen is not known to be off its limit: that Sample ends the stretch too.
+        limit = g.at_limit or s.torque_output is None
+        self._core.add(g.t_ns, (s.v_ego, s.desired_curvature, s.actual_curvature, s.dt, limit), g.eligible, ctx.w)
 
     def on_gap(self, ctx) -> None:
         self._core.new_run()

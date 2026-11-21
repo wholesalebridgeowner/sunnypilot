@@ -389,6 +389,32 @@ class CurveMeasureTests(unittest.TestCase):
         self.assertEqual(plain["n"] - lag["n"], 10 + 10)              # that second, and the second after it
         self.assertEqual(curve["s"], run(lambda t_s: 1.0, n=700)[1]["s"])         # the curve sums do not mind
 
+    def test_lag_samples_stop_while_the_command_is_not_known(self):
+        # No carOutput message for a second. The last one stays fresh for 0.5 s; for the five Samples after
+        # that nobody can tell whether the command sits at its limit. Not known is not "off its limit": the
+        # stretch ends there, as it does at the limit itself.
+        silent = lambda t_s: {"skip": ("carOutput",)} if 30.0 <= t_s < 31.0 else None
+        plain_out, plain_curve, plain = run(lambda t_s: 1.0, n=700)
+        out, curve, lag = run(lambda t_s: 1.0, n=700, extra=silent)
+        self.assertEqual(sum(s["health"]["staleS"].get("co", 0.0) for s in out), 0.5)
+        self.assertEqual(plain["n"] - lag["n"], 5 + 10)               # those five, and the second after them
+        self.assertEqual(curve, plain_curve)                          # the curve sums do not mind
+
+    def test_no_lag_sample_without_the_command_stream(self):
+        gone = lambda t_s: {"skip": ("carOutput",)}
+        out, curve, lag = run(lambda t_s: 1.0, lambda t_s: 0.9, n=700, extra=gone)
+        self.assertIsNone(lag)
+        self.assertEqual(set(out[0]) - PIPELINE_FIELDS, {"curve"})
+        self.assertEqual(curve, run(lambda t_s: 1.0, lambda t_s: 0.9, n=700)[1])
+
+    def test_low_speed_time_without_the_command_stream_counts_no_limit_time(self):
+        # Not known adds nothing to the time at the limit; the window's own count of the missing stream says so.
+        demand = span((20.0, 30.0, 1.0))
+        out, curve, lag = run(demand, n=400, v=10.0, extra=lambda t_s: {"skip": ("carOutput",)})
+        self.assertAlmostEqual(curve["lowS"], 10.0, delta=0.05)
+        self.assertEqual(curve["lowLimitS"], 0.0)
+        self.assertEqual(out[0]["health"]["staleS"]["co"], out[0]["windowS"])
+
     def test_a_stall_drops_the_earlier_demands_held(self):
         sums, lag_sums = CurveSums(), CurveLag()
         p = Pipeline(PipelineConfig(measures=(lambda: sums, lambda: lag_sums)))
