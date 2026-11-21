@@ -42,6 +42,12 @@ Replaying the logged CAN after each recorded start: the missed start would have 
 
 The steering-calibration learner (`paramsd`) no longer updates steer ratio, stiffness or offset while the truck is in reverse, as in newer openpilot (612d97cf). On the recorded drives it had learned for 14.8 s in reverse across 35 reverse maneuvers, and the estimates moved little. Tests: `selfdrive/locationd/test/test_rampilot_paramsd_reverse.py`.
 
+## Smaller backports
+
+- **Chrysler checksum** (opendbc #3782): a table lookup gives the same checksum as the former bit loop. On 400,000 recorded frames it matched every one and was about 14 times faster per frame. Tests: `opendbc/car/chrysler/tests/test_rampilot_checksum.py`.
+- **Fixed steering-delay setting** (sunnypilot #1906): with live delay learning off, controlsd now uses the fixed delay (steerActuatorDelay plus the software delay) as intended. The swapped branches made that setting have no effect. With learning on, as on this truck today, nothing changes. Tests: `sunnypilot/livedelay/test_rampilot_lat_delay.py`.
+- **Loop catch-up** (openpilot #39095): after a stall of more than one frame, the Ratekeeper resyncs instead of running catch-up frames back to back. Tests: `common/tests/test_rampilot_ratekeeper.py`.
+
 ## Install and rollback
 
 `rampilot/device.sh` installs RamPilot on the comma three from a git bundle and rolls back to the pinned baseline. Steps: `rampilot/INSTALL.md`. Offline tests: `rampilot/tests/test_device.sh`, plus an install and rollback of the real branch on a simulated device holding only the baseline.
