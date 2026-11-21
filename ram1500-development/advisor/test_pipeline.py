@@ -584,6 +584,39 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(out[0]["health"]["cpuPct"], 3.1)
         self.assertEqual(out[1]["health"]["gapN"], 0)
 
+    def test_failing_agent_health_source_changes_no_measure_field(self):
+        def summaries_with(source):
+            batches = synth.drive(stalled(900, 300, 400))              # steering on throughout, one short stall
+            return synth.summaries(synth.run(make(Probe(), LogOnly(), health_source=source), batches))
+
+        def once(fault):
+            calls = []
+
+            def source():
+                calls.append(1)
+                return fault() if len(calls) == 1 else {"cpuPct": 3.1}
+            return source
+
+        def raises():
+            raise OSError("probe failed")
+
+        strip = lambda s: {k: v for k, v in s.items() if k != "health"}
+        good = summaries_with(lambda: {"cpuPct": 3.1})
+        self.assertEqual([s["latOnS"] for s in good], [60.0, 60.0, 10.2])
+        for name, fault in (("raises", raises), ("none", lambda: None), ("list", lambda: [("cpuPct", 3.1)]),
+                            ("text", lambda: "cpuPct")):
+            with self.subTest(fault=name):
+                out = summaries_with(once(fault))                      # the fault hits the first window close
+                self.assertEqual([strip(s) for s in out], [strip(s) for s in good])
+                self.assertEqual(out[0]["health"], {"gapN": 0, "modelGapN": 0, "staleS": {}, "staleSteerS": {}})
+                self.assertEqual([s["health"]["gapN"] for s in out], [0, 1, 0])    # no gap was made by the fault
+                self.assertEqual(out[1]["health"]["cpuPct"], 3.1)      # the agent values are back in the next one
+
+    def test_agent_health_values_cannot_replace_the_pipelines_own(self):
+        source = lambda: {"gapN": 99, "modelGapN": 99, "staleS": "x", "staleSteerS": "x", "failed": ["x"], "queue": 4}
+        out = synth.summaries(synth.run(make(health_source=source), synth.drive(stalled(100, 300, 100))))
+        self.assertEqual(out[0]["health"], {"gapN": 1, "modelGapN": 0, "staleS": {}, "staleSteerS": {}, "queue": 4})
+
     def test_drive_end_fields(self):
         probe = Probe()
         p = make(probe)

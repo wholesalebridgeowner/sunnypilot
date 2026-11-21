@@ -41,7 +41,8 @@ class PipelineConfig:
     fresh_lead_s: float = FRESH_S           # ... of the lead stream
     t0_mono_s: float | None = None          # window grid start; None = the first Sample. Earlier messages are dropped
     measures: tuple | None = None           # measure factories; None = the measures of this build (measure_set)
-    health_source: object = None            # callable giving the agent's own health values for a closing window
+    health_source: object = None            # callable giving the agent's own health values (a dict) for a closing
+                                            # window; when it raises or gives no dict, the values are left out
 
     @classmethod
     def for_decimated_log(cls, **kwargs) -> "PipelineConfig":
@@ -221,20 +222,33 @@ class Pipeline:
     # --- windows ------------------------------------------------------------
     def _close_window(self) -> None:
         win = self._win
+        # The agent's values are read first: once a measure has handed over its
+        # sums they are gone, so nothing that can go wrong may come after that.
+        health = self._agent_health()
         data = {"w": win.w, "tMonoS": round((self._t0_ns + win.w * _WINDOW_NS) / 1e9, 1), "n": win.n,
                 "windowS": round(win.window_s, 1), "unobservedS": round(win.unobserved_s, 1),
                 "tickMaxS": round(win.tick_max_s, 2)}
         for m in self._measures:
             self._merge(m, "window_fields", data)
-        health = {"gapN": win.gap_n, "modelGapN": win.model_gap_n,
-                  "staleS": _non_zero(win.stale), "staleSteerS": _non_zero(win.stale_steer)}
-        if self._config.health_source is not None:
-            health.update(self._config.health_source())
+        health.pop("failed", None)
+        health.update({"gapN": win.gap_n, "modelGapN": win.model_gap_n,
+                       "staleS": _non_zero(win.stale), "staleSteerS": _non_zero(win.stale_steer)})
         if self._failed:
             health["failed"] = list(self._failed)
         data["health"] = health
         self._ctx.out.append(("summary", data))
         self.windows_sent += 1
+
+    def _agent_health(self) -> dict:
+        """The agent's own health values for the closing window; empty when it has none or the read fails."""
+        source = self._config.health_source
+        if source is None:
+            return {}
+        try:
+            values = source()
+        except Exception:
+            return {}
+        return dict(values) if isinstance(values, dict) else {}
 
     # --- one measure must not take the others down ---------------------------
     def _run(self, measure, call, *args) -> None:
