@@ -119,7 +119,8 @@ class VehicleParamsLearner:
 
       in_linear_region = abs(steering_angle) < 45
       self.observed_speed = msg.vEgo
-      self.active = self.observed_speed > MIN_ACTIVE_SPEED and in_linear_region
+      # RamPilot (openpilot #38573, 612d97cf): no learning in reverse gear
+      self.active = self.observed_speed > MIN_ACTIVE_SPEED and in_linear_region and msg.gearShifter != car.CarState.GearShifter.reverse
 
       if self.active:
         self.kf.predict_and_observe(t, ObservationKind.STEER_ANGLE, np.array([[np.radians(steering_angle)]]))
