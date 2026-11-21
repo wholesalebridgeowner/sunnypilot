@@ -57,12 +57,12 @@ class SteeringTime(Measure):
                 win["driverS"] += dt
             if s.lane_change_state in (1, 2, 3):
                 win["laneChangeS"] += dt
-            if g.forced_zero:
-                win["forcedZeroS"] += dt
-            else:
-                win["steeringS"] += dt
-                self._steering_s += dt
-                self._v_steer_sum += v * dt
+        if g.forced_zero:
+            win["forcedZeroS"] += dt
+        if g.steering:
+            win["steeringS"] += dt
+            self._steering_s += dt
+            self._v_steer_sum += v * dt
         if v > MOVING_ABOVE_MS:
             win["movingS"] += dt
             self._moving_s += dt
