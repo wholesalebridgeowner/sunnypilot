@@ -1,0 +1,65 @@
+diff --git a/selfdrive/ui/sunnypilot/ui.cc b/selfdrive/ui/sunnypilot/ui.cc
+index 1277195..83b0d54 100644
+--- a/selfdrive/ui/sunnypilot/ui.cc
++++ b/selfdrive/ui/sunnypilot/ui.cc
+@@ -13,16 +13,14 @@ void UIStateSP::updateStatus() {
+   UIState::updateStatus();
+ }
+
+-UIStateSP::UIStateSP(QObject *parent) : UIState(parent) {
+-  sm = std::make_unique<SubMaster>(std::vector<const char*>{
++UIStateSP::UIStateSP(QObject *parent) : UIState(parent, {
+     "modelV2", "controlsState", "liveCalibration", "radarState", "deviceState",
+     "pandaStates", "carParams", "driverMonitoringState", "carState", "driverStateV2",
+     "wideRoadCameraState", "managerState", "selfdriveState", "longitudinalPlan",
+     "modelManagerSP", "selfdriveStateSP", "longitudinalPlanSP", "backupManagerSP",
+     "carControl", "gpsLocationExternal", "gpsLocation", "liveTorqueParameters",
+     "carStateSP", "liveParameters"
+-  });
+-
++  }) {
+   // update timer
+   timer = new QTimer(this);
+   QObject::connect(timer, &QTimer::timeout, this, &UIStateSP::update);
+diff --git a/selfdrive/ui/ui.cc b/selfdrive/ui/ui.cc
+index 4b8f797..14db77f 100644
+--- a/selfdrive/ui/ui.cc
++++ b/selfdrive/ui/ui.cc
+@@ -114,12 +114,14 @@ void UIState::updateStatus() {
+   }
+ }
+
+-UIState::UIState(QObject *parent) : QObject(parent) {
+-  sm = std::make_unique<SubMaster>(std::vector<const char*>{
++UIState::UIState(QObject *parent) : UIState(parent, {
+     "modelV2", "controlsState", "liveCalibration", "radarState", "deviceState",
+     "pandaStates", "carParams", "driverMonitoringState", "carState", "driverStateV2",
+     "wideRoadCameraState", "managerState", "selfdriveState", "longitudinalPlan",
+-  });
++  }) {}
++
++UIState::UIState(QObject *parent, const std::vector<const char *> &services)
++    : QObject(parent), sm(std::make_unique<SubMaster>(services)) {
+   prime_state = new PrimeState(this);
+   language = QString::fromStdString(Params().get("LanguageSetting"));
+
+diff --git a/selfdrive/ui/ui.h b/selfdrive/ui/ui.h
+index 5b3872b..8d22382 100644
+--- a/selfdrive/ui/ui.h
++++ b/selfdrive/ui/ui.h
+@@ -3,6 +3,7 @@
+ #include <eigen3/Eigen/Dense>
+ #include <memory>
+ #include <string>
++#include <vector>
+
+ #include <QTimer>
+ #include <QColor>
+@@ -96,6 +97,7 @@ protected slots:
+   virtual void update();
+
+ protected:
++  UIState(QObject *parent, const std::vector<const char *> &services);
+   QTimer *timer;
+
+ private:
