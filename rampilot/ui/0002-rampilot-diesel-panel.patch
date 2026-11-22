@@ -1,5 +1,5 @@
 diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
-index 32f01bc..dc02d1a 100644
+index 32f01bc..581e0e6 100644
 --- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 +++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 @@ -32,6 +32,7 @@ void HudRendererSP::updateState(const UIState &s) {
@@ -19,7 +19,7 @@ index 32f01bc..dc02d1a 100644
      // Bottom Dev UI
      if (devUiInfo == 2) {
        QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
-@@ -127,6 +130,55 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+@@ -127,6 +130,66 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    }
  }
  
@@ -29,16 +29,27 @@ index 32f01bc..dc02d1a 100644
 +  const auto state = (*s.sm)["carStateSP"].getCarStateSP();
 +  if (!state.getDieselSupported()) return;
 +
-+  auto add = [this](const QString &label, bool valid, float value, int decimals, const QString &unit) {
++  auto add = [this](const QString &label, bool valid, double value, int decimals, const QString &unit) {
 +    if (valid && std::isfinite(value) && value >= 0.f) {
 +      dieselRows.push_back({label, QString::number(value, 'f', decimals) + " " + unit});
 +    }
 +  };
-+  add(tr("Fuel est."), state.getFuelRemainingUsGalValid(), state.getFuelRemainingUsGal(), 1, tr("US gal"));
-+  add(tr("Average"), state.getAvgFuelEconomyUsMpgValid(), state.getAvgFuelEconomyUsMpg(), 1, tr("MPG"));
-+  add(tr("Current"), state.getInstantFuelEconomyUsMpgValid(), state.getInstantFuelEconomyUsMpg(), 1, tr("MPG"));
-+  add(tr("Idle fuel"), state.getIdleFuelUsGalPerHourValid(), state.getIdleFuelUsGalPerHour(), 2, tr("gal/h"));
-+  add(tr("Range"), state.getRangeMilesValid(), state.getRangeMiles(), 0, tr("mi"));
++  constexpr double litersPerUSGallon = 3.785411784;
++  constexpr double kmPerMile = 1.609344;
++  const double volumeScale = is_metric ? litersPerUSGallon : 1.0;
++  auto economy = [this, &add](const QString &label, bool valid, double mpg) {
++    if (is_metric && mpg <= 0.0) return;
++    add(label, valid && std::isfinite(mpg), is_metric ? 100.0 * litersPerUSGallon / (kmPerMile * mpg) : mpg,
++        1, is_metric ? tr("L/100 km") : tr("MPG"));
++  };
++  add(tr("Fuel est."), state.getFuelRemainingUsGalValid(), state.getFuelRemainingUsGal() * volumeScale,
++      1, is_metric ? tr("L") : tr("US gal"));
++  economy(tr("Average"), state.getAvgFuelEconomyUsMpgValid(), state.getAvgFuelEconomyUsMpg());
++  economy(tr("Current"), state.getInstantFuelEconomyUsMpgValid(), state.getInstantFuelEconomyUsMpg());
++  add(tr("Idle fuel"), state.getIdleFuelUsGalPerHourValid(), state.getIdleFuelUsGalPerHour() * volumeScale,
++      2, is_metric ? tr("L/h") : tr("gal/h"));
++  add(tr("Range"), state.getRangeMilesValid(), state.getRangeMiles() * (is_metric ? kmPerMile : 1.0),
++      0, is_metric ? tr("km") : tr("mi"));
 +  add(tr("DEF"), state.getDefPercentValid(), state.getDefPercent(), 0, tr("%"));
 +  if (!dieselRows.empty() || state.getDpfRegenValid()) {
 +    const QString regen = state.getDpfRegenValid()

@@ -39,7 +39,7 @@ class DieselHudTests(unittest.TestCase):
 struct QString : std::string {
   using std::string::string;
   QString(const std::string &s) : std::string(s) {}
-  static QString number(float v, char, int decimals) {
+  static QString number(double v, char, int decimals) {
     char buf[64]; std::snprintf(buf, sizeof(buf), "%.*f", decimals, v); return buf;
   }
 };
@@ -71,6 +71,7 @@ struct SubMaster {
 struct UIState { struct {uint64_t started_frame;} scene; SubMaster *sm; };
 struct HudRendererSP {
   std::vector<std::pair<QString,QString>> dieselRows;
+  bool is_metric = false;
   QString tr(const char *s) {return s;}
   void updateDiesel(const UIState &s, bool current);
 };
@@ -96,6 +97,16 @@ int main() {
   assert(rows.size()==7 && rows[1].second=="12.5 US gal" && rows[2].second=="24.2 MPG" &&
          rows[3].second=="26.1 MPG" && rows[4].second=="0.31 gal/h" &&
          rows[5].second=="300 mi" && rows[6].second=="72 %");
+  hud.is_metric=true; update();
+  assert(rows.size()==7 && rows[0].second=="Unknown" && rows[1].second=="47.3 L" &&
+         rows[2].second=="9.7 L/100 km" && rows[3].second=="9.0 L/100 km" &&
+         rows[4].second=="1.17 L/h" && rows[5].second=="483 km" && rows[6].second=="72 %");
+  auto original = sm.state;
+  sm.state = State{}; sm.state.valid[1]=true; sm.state.value[1]=0.f; update(); hidden();
+  sm.state.value[1]=std::numeric_limits<float>::infinity(); update(); hidden();
+  hud.is_metric=false; sm.state.value[1]=0.f; update();
+  assert(rows.size()==2 && rows[1].second=="0.0 MPG");
+  sm.state=original; update();
   for (int i=0; i<6; ++i) {
     sm.state.valid[i]=false; update(); assert(rows.size()==6); sm.state.valid[i]=true;
   }
