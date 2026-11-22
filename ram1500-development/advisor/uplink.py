@@ -10,8 +10,8 @@ without network would otherwise cost enough to stop the listening for that
 drive. A normal minute's two or three events are never held back. Offroad
 there is no limit.
 
-Approvals are fetched each round only while applying is enabled (applier.py);
-on this build no such request is made.
+The agent requests owner approvals while offroad or parked. Advisor-suggested
+approvals use their own build gate and queue.
 """
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ class Uplink:
         self.opener = opener or _http
         self.queue = deque(maxlen=max_queue)
         self.inbox = []
+        self.owner_inbox = {}
+        self.owner_poll = False
         self.lock = threading.Lock()
         self.interval_s = interval_s
         self.timeout_s = timeout_s
@@ -78,6 +80,16 @@ class Uplink:
             out, self.inbox = self.inbox, []
         return out
 
+    def set_owner_poll(self, ready: bool) -> None:
+        with self.lock:
+            self.owner_poll = ready
+
+    def owner_approvals(self) -> list:
+        with self.lock:
+            out = list(self.owner_inbox.values())
+            self.owner_inbox.clear()
+        return out
+
     # --- the sender ---------------------------------------------------------
     def _request(self, method: str, path: str, body: bytes):
         headers = sign_request(self.key, method, path, body)
@@ -107,6 +119,20 @@ class Uplink:
             with self.lock:
                 if self.queue and self.queue[0] is event:
                     self.queue.popleft()
+        with self.lock:
+            owner_poll = self.owner_poll
+        if owner_poll:
+            payload = self._request("GET", "/v1/owner/approvals", b"")
+            if payload is not None:
+                try:
+                    items = json.loads(payload).get("approvals", [])
+                except (ValueError, AttributeError):
+                    items = []
+                if isinstance(items, list):
+                    with self.lock:
+                        for item in items:
+                            if isinstance(item, dict) and item.get("mode") == "owner" and isinstance(item.get("nonce"), str):
+                                self.owner_inbox[item["nonce"]] = item
         if not apply_lock.APPLY_ENABLED:
             return
         payload = self._request("GET", "/v1/approvals", b"")

@@ -186,7 +186,7 @@ class PayloadTests(unittest.TestCase):
     def test_nothing_that_is_not_for_the_comma_is_in_the_payload(self):
         for name in AGENT_PAYLOAD:
             self.assertFalse(name.startswith("test_"), name)
-        not_for_the_comma = {"service_app.py", "service_store.py", "service_notify.py", "replay_report.py",
+        not_for_the_comma = {"service_app.py", "service_store.py", "service_notify.py", "replay_report.py", "owner_request.py",
                              "npz_input.py", "quality_values.py", "port_adapters.py", "synth.py",
                              "acceptance_data.py", "schema_v2.py", "install_agent.py",
                              "parking_report.py",     # experimental, offline only

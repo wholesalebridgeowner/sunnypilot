@@ -3,10 +3,9 @@
 
 Listens to existing sunnypilot messages (never publishes, never sends CAN) and
 measures: on every drive it sends the settings in force, one summary per
-minute, one record per event and a drive-end record. It changes no setting.
-Applying owner-approved settings through the Applier is locked on this build
-(applier.py); the one thing still written is what an earlier trial replaced,
-put back at agent start and at drive end.
+minute, one record per event and a drive-end record. A separate receiver
+handles signed, owner-initiated setting requests while parked or switched off.
+The advisor's automatic suggestion path remains locked (applier.py).
 
 The agent only builds batches from its sockets: the newest message of each
 stream since the previous tick. Everything after the batch happens in the
@@ -42,6 +41,8 @@ from device_params import (DeviceParams, base_actuator_delay_s, blind_spot_enabl
 from journal import Journal, NonceLedger
 from measure_delay import delay_record, trusted_delay_s
 from messages import drive_end_data, drive_ready_data, drive_start_data, envelope, fit
+from owner_apply import OwnerApplier
+from owner_receiver import OwnerReceiver
 import parking_live
 from pipeline import STREAMS, Pipeline, PipelineConfig
 from samples import event_payload, get
@@ -65,7 +66,7 @@ class Agent:
                  car_params_decode=None, car_params_sp_decode=None, live_delay_decode=None, delay_probe=None,
                  wall_clock=time.time, monotonic=time.monotonic, resource_probe=None,
                  subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None, can_slot_check=None,
-                 dash_relay=None):
+                 dash_relay=None, owner_receiver=None):
         self.params = params
         self.applier = applier
         self.uplink = uplink
@@ -83,6 +84,7 @@ class Agent:
         self.on_tick_error = on_tick_error
         self.can_decode = can_decode    # raw `can` message -> (t_ns, frames); used only if parking_live is on
         self.dash_relay = dash_relay
+        self.owner_receiver = owner_receiver
         self.boot_id = uuid.uuid4().hex[:12]
         self.seq = 0
         self.onroad = False
@@ -179,6 +181,8 @@ class Agent:
             if self.listening and self.socks:
                 self._drain(now)
             self._check_health(now)
+        if self.owner_receiver is not None:
+            self.owner_receiver.tick(self, now)
         if apply_lock.APPLY_ENABLED:
             self._handle_approvals(now)
             ended = self.applier.check_owner_override()
@@ -251,6 +255,7 @@ class Agent:
                     self.latest_state.pop(stream, None)
                 if stream == "carState":
                     car_state_unreadable = True
+                    self.latest_state.pop(stream, None)
                 continue                # this stream is missing for this tick
             # The device decoder also returns the event's validity; test decoders may return only two values.
             t_ns, msg = decoded[0], decoded[1]
@@ -259,7 +264,7 @@ class Agent:
                 dash_samples[stream] = (t_ns, msg)
             batch[stream] = (t_ns, msg)
             if stream in ("carState", "carControl"):
-                self.latest_state[stream] = (now, msg)
+                self.latest_state[stream] = (now, msg, t_ns, valid)
             if stream == "carState":
                 car_state_valid = valid
         if batch:
@@ -466,6 +471,12 @@ def main() -> None:  # pragma: no cover - runs on the Comma
     def slot_check(streams=STREAMS):
         return not device_telemetry.slot_problems(device_telemetry.msgq_reader_counts(streams))
 
+    owner_receiver = OwnerReceiver(
+        OwnerApplier(params, home / "owner-history", key, applier.journal),
+        control_clock_ns=time.monotonic_ns,
+        board_clock_ns=lambda: time.clock_gettime_ns(time.CLOCK_BOOTTIME),
+        ignition_socket=lambda: messaging.sub_sock("pandaStates", conflate=True) if slot_check(("pandaStates",)) else None)
+
     def can_decode(raw):
         event = messaging.log_from_bytes(raw)
         if not event.valid:
@@ -482,7 +493,8 @@ def main() -> None:  # pragma: no cover - runs on the Comma
     agent = Agent(params=params, applier=applier, uplink=uplink, socket_factory=messaging.sub_sock,
                   decode=message_decoder(messaging), slot_check=slot_check, delay_probe=DelayProbe().run,
                   resource_probe=_resource_probe, on_tick_error=log_error, can_decode=can_decode,
-                  can_slot_check=lambda: slot_check((parking_live.STREAM,)), dash_relay=DashboardRelay())
+                  can_slot_check=lambda: slot_check((parking_live.STREAM,)), dash_relay=DashboardRelay(),
+                  owner_receiver=owner_receiver)
     agent.start()
     while True:
         time.sleep(agent.step())

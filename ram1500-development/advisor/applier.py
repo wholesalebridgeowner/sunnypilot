@@ -1,4 +1,4 @@
-"""The only Drive Advisor component that writes settings.
+"""Apply or restore advisor-generated trials. Owner-initiated settings use owner_apply.py.
 
 On this build it applies nothing (see the lock constant below). It still puts
 back what an earlier trial replaced: `restore` runs at agent start and at

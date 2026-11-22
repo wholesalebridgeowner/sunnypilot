@@ -14,11 +14,14 @@ from __future__ import annotations
 import math
 import re
 
+from approval import OWNER_RECEIPT_STATUSES
+
 MAX_NUMBER = 1e9                    # a clock time in seconds or milliseconds would exceed it
 MEASURES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag", "unknown"}
 SETTING_KEYS = {"lagdToggle", "lagdToggleDelayS", "nnlc", "laneChangeTimer", "modelBundleId", "build"}
 
 _HEX12 = re.compile(r"[0-9a-f]{12}")
+_OWNER_REQUEST_ID = re.compile(r"[0-9a-f]{16}")
 _DRIVE_ID = re.compile(r"[0-9a-f]{32}|replay")
 _EVENT_ID = re.compile(r"[0-9a-f]{12}-[0-9]{1,9}|replay-[0-9]{1,9}")
 _VERSION = re.compile(r"[0-9]+(\.[0-9]+)*")
@@ -72,6 +75,7 @@ _SUMMARY = {
 }
 DATA = {
     "agent_start": {"restore": _shape(_RESTORE)},
+    "apply_result": {"suggestionId": _shape(_OWNER_REQUEST_ID), "status": _tokens(*OWNER_RECEIPT_STATUSES)},
     "drive_start": {"resumed": FLAG, "settings": _SETTINGS, "delay": _DELAY,
                     "agent": {"version": _shape(_VERSION), "measures": _list_of(MEASURES), "applyEnabled": FLAG}},
     "drive_ready": {"delayProbe": _PROBE, "nnlcModel": _tokens("ram", "mock", "other"), "nnlcFuzzy": FLAG,
@@ -175,12 +179,17 @@ def problems(event) -> list:
     if kind == "agent_start":
         if drive_id is not None:
             found.append("driveId: agent_start belongs to no drive")
-    elif not isinstance(drive_id, str) or not _DRIVE_ID.fullmatch(drive_id):
+    elif not (kind == "apply_result" and drive_id is None) and (
+            not isinstance(drive_id, str) or not _DRIVE_ID.fullmatch(drive_id)):
         found.append("driveId: not 32 hex")
     if not isinstance(event.get("id"), str) or not _EVENT_ID.fullmatch(event["id"]):
         found.append("id: not <12 hex>-<number>")
     if not isinstance(event.get("data"), dict):
         found.append("data: not an object")
     else:
+        if kind == "apply_result":
+            for field in DATA[kind]:
+                if event["data"].get(field) is None:
+                    found.append(f"data.{field}: required for an approval receipt")
         _check(event["data"], DATA[kind], "data", found)
     return found

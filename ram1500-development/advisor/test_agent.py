@@ -1108,6 +1108,8 @@ class PrivacyTests(AgentFixture):
         self.agent.start()
         self.agent.tick()
         self.end()
+        # Owner receipts can be sent offroad, without any drive ID.
+        self.agent._event("apply_result", {"suggestionId": "0123456789abcdef", "status": "applied"})
         collect()
         return events
 
@@ -1122,6 +1124,27 @@ class PrivacyTests(AgentFixture):
         restores = {e["data"]["restore"] for e in events if e["type"] in ("agent_start", "drive_end")}
         self.assertEqual(restores, {"nothing_to_restore", "restored", "deferred_until_drive_end",
                                     "owner_changed:LagdToggle"})
+
+    def test_owner_receipt_contains_only_the_request_id_and_a_terminal_status(self):
+        good = {"v": 2, "type": "apply_result", "driveId": None, "id": "18feb41f09ca-1",
+                "data": {"suggestionId": "0123456789abcdef", "status": "applied"}}
+        for drive_id in (None, "a" * 32):
+            for status in ("applied", "refused:expired", "refused:issued_in_future", "refused:already_used",
+                           "refused:invalid_owner_change", "refused:native_setting_locked",
+                           "refused:trial_already_active", "refused:delay_inert_on_this_build",
+                           "refused:interrupted_owner_change", "refused:partial_owner_change"):
+                with self.subTest(drive_id=drive_id, status=status):
+                    self.assertEqual(schema_v2.problems(dict(good, driveId=drive_id,
+                                                            data=dict(good["data"], status=status))), [])
+        for data in ({}, {"status": "applied"}, {"suggestionId": "0123456789abcdef"},
+                     dict(good["data"], status=None), dict(good["data"], suggestionId=None),
+                     dict(good["data"], suggestionId="personal note"), dict(good["data"], suggestionId="a" * 32),
+                     dict(good["data"], status="refused:not_parked"), dict(good["data"], status="refused:personal note"),
+                     dict(good["data"], change={"display": True}), dict(good["data"], nonce="a" * 32)):
+            with self.subTest(data=data):
+                self.assertTrue(schema_v2.problems(dict(good, data=data)))
+        self.assertTrue(schema_v2.problems(dict(good, type="summary", data={})))
+        self.assertTrue(schema_v2.problems(dict(good, driveId="a short description")))
 
     def test_no_number_could_be_a_clock_time_and_every_number_is_finite(self):
         def numbers(value):

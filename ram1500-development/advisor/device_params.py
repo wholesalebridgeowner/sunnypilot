@@ -28,6 +28,13 @@ class DeviceParams:
     def put(self, key, value) -> None:
         self.p.put(key, value)
 
+    def stored(self, key):
+        """Read the explicit value so rollback can distinguish an absent override from its default."""
+        return self.p.get(key, return_default=False)
+
+    def remove(self, key):
+        self.p.remove(key)
+
     def onroad(self) -> bool:
         return bool(self.p.get_bool("IsOnroad"))
 
