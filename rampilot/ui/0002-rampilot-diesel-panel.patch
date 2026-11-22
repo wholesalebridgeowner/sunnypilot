@@ -1,5 +1,5 @@
 diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
-index 32f01bc..67011d3 100644
+index 32f01bc..dc02d1a 100644
 --- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 +++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 @@ -32,6 +32,7 @@ void HudRendererSP::updateState(const UIState &s) {
@@ -13,35 +13,22 @@ index 32f01bc..67011d3 100644
 @@ -110,6 +111,8 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
        drawSpeedLimitSign(p, surface_rect);
      }
-
+ 
 +    drawDiesel(p, surface_rect);
 +
      // Bottom Dev UI
      if (devUiInfo == 2) {
        QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
-@@ -127,6 +130,63 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+@@ -127,6 +130,55 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    }
  }
-
+ 
 +void HudRendererSP::updateDiesel(const UIState &s, bool current) {
 +  dieselRows.clear();
-+  if (s.scene.started_frame != dieselStartedFrame) {
-+    dieselStartedFrame = s.scene.started_frame;
-+    dieselVehicle = false;
-+  }
-+  if (!current) {
-+    if (dieselVehicle) dieselRows.push_back({tr("DPF regen"), tr("Unknown")});
-+    return;
-+  }
++  if (!current) return;
 +  const auto state = (*s.sm)["carStateSP"].getCarStateSP();
-+  dieselVehicle = state.getDieselSupported();
-+  if (!dieselVehicle) return;
++  if (!state.getDieselSupported()) return;
 +
-+  QString regen = tr("Unknown");
-+  if (state.getDpfRegenValid()) {
-+    regen = state.getDpfRegenActive() ? tr("Active") : tr("Inactive");
-+  }
-+  dieselRows.push_back({tr("DPF regen"), regen});
 +  auto add = [this](const QString &label, bool valid, float value, int decimals, const QString &unit) {
 +    if (valid && std::isfinite(value) && value >= 0.f) {
 +      dieselRows.push_back({label, QString::number(value, 'f', decimals) + " " + unit});
@@ -53,6 +40,11 @@ index 32f01bc..67011d3 100644
 +  add(tr("Idle fuel"), state.getIdleFuelUsGalPerHourValid(), state.getIdleFuelUsGalPerHour(), 2, tr("gal/h"));
 +  add(tr("Range"), state.getRangeMilesValid(), state.getRangeMiles(), 0, tr("mi"));
 +  add(tr("DEF"), state.getDefPercentValid(), state.getDefPercent(), 0, tr("%"));
++  if (!dieselRows.empty() || state.getDpfRegenValid()) {
++    const QString regen = state.getDpfRegenValid()
++      ? (state.getDpfRegenActive() ? tr("Active") : tr("Inactive")) : tr("Unknown");
++    dieselRows.insert(dieselRows.begin(), {tr("DPF regen"), regen});
++  }
 +}
 +
 +void HudRendererSP::drawDiesel(QPainter &p, const QRect &surface_rect) {
@@ -84,29 +76,27 @@ index 32f01bc..67011d3 100644
  void HudRendererSP::drawSpeedLimitSign(QPainter &p, const QRect &surface_rect) {
    p.save();
 diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.h b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
-index e49fbf7..3a1d62d 100644
+index e49fbf7..bf8d0e4 100644
 --- a/selfdrive/ui/sunnypilot/qt/onroad/hud.h
 +++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
 @@ -7,6 +7,9 @@
-
+ 
  #pragma once
-
+ 
 +#include <QPair>
 +#include <QVector>
 +
  #include "selfdrive/ui/qt/onroad/hud.h"
  #include "selfdrive/ui/sunnypilot/qt/onroad/developer_ui/developer_ui.h"
-
-@@ -25,6 +28,12 @@ private:
+ 
+@@ -25,6 +28,10 @@ private:
    int drawRightDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
    int drawBottomDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
    void drawBottomDevUI(QPainter &p, int x, int y);
 +  void updateDiesel(const UIState &s, bool current);
 +  void drawDiesel(QPainter &p, const QRect &surface_rect);
 +  QVector<QPair<QString, QString>> dieselRows;
-+  bool dieselVehicle = false;
-+  uint64_t dieselStartedFrame = 0;
 +
    void drawSpeedLimitSign(QPainter &p, const QRect &surface_rect);  // RamPilot
-
+ 
    bool speedLimitValid = false;  // RamPilot: the truck reports a speed limit

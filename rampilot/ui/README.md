@@ -4,7 +4,7 @@ The comma three runs the compiled Qt program `selfdrive/ui/ui`. The builder star
 
 ## EcoDiesel readouts
 
-The second patch draws a compact panel below the speed-limit sign for the recorded Ram DT EcoDiesel engine calibration. The only default row on a recognized truck is **DPF regen · Unknown**. A valid fresh reading and its independent calibration switch are required for each numeric row. The underlying units are US gallons, US MPG, gallons per hour at idle, miles of range and percent DEF. The panel omits soot load. A lost or invalid message clears the numbers and returns regen to Unknown.
+The second patch draws a compact panel below the speed-limit sign for the recorded Ram DT EcoDiesel engine calibration. The panel appears when the recognized truck supplies at least one fresh, validated reading. If only numeric readings are validated, the regen row reads **Unknown**. A valid fresh reading and its independent calibration switch are required for each numeric row. The underlying units are US gallons, US MPG, gallons per hour at idle, miles of range and percent DEF. The panel omits soot load. A lost or invalid message clears the panel.
 
 The flag in the archived drives is a candidate. The 2021 Ram 1500 owner's manual describes conditional cluster messages for regeneration in progress and completion on pages 98–99. A timestamped factory message or a documented independent PCM status can validate the interpretation. The cluster can stay silent during a routine drive, and a second similar CAN trace alone cannot establish the flag's meaning. [Ram owner's manual](https://vehicleinfo.mopar.com/assets/publications/en-us/Ram/2021/1500_DT/5633293_21_DT_OM_EN_USC_DIGITAL_E4.pdf)
 

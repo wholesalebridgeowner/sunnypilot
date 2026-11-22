@@ -71,8 +71,6 @@ struct SubMaster {
 struct UIState { struct {uint64_t started_frame;} scene; SubMaster *sm; };
 struct HudRendererSP {
   std::vector<std::pair<QString,QString>> dieselRows;
-  uint64_t dieselStartedFrame = 0;
-  bool dieselVehicle = false;
   QString tr(const char *s) {return s;}
   void updateDiesel(const UIState &s, bool current);
 };
@@ -83,12 +81,16 @@ int main() {
   HudRendererSP hud;
   auto &rows = hud.dieselRows;
   auto update = [&] {hud.updateDiesel(s, freshCarStateSP(s));};
-  auto unknown = [&] {assert(rows.size()==1 && rows[0].first=="DPF regen" && rows[0].second=="Unknown");};
+  auto hidden = [&] {assert(rows.empty());};
   sm.state.typed=false; update(); assert(rows.empty());
-  sm.state.typed=true; update(); unknown();
-  sm.state.active=true; update(); unknown();
+  sm.state.typed=true; update(); hidden();
+  sm.state.active=true; update(); hidden();
   sm.state.regenValid=true; update(); assert(rows[0].second=="Active");
   sm.state.active=false; update(); assert(rows[0].second=="Inactive");
+  sm.state.regenValid=false;
+  sm.state.valid[0]=true; update();
+  assert(rows.size()==2 && rows[0].second=="Unknown" && rows[1].second=="12.5 US gal");
+  sm.state.valid[0]=false; update(); hidden();
   for (bool &v : sm.state.valid) v=true;
   update();
   assert(rows.size()==7 && rows[1].second=="12.5 US gal" && rows[2].second=="24.2 MPG" &&
@@ -101,11 +103,11 @@ int main() {
   sm.state.value[1]=std::numeric_limits<float>::infinity();
   sm.state.value[2]=-1.f; update(); assert(rows.size()==4);
   // Simulation keeps alive true after the first sample even if publication stops.
-  nowNs += 100000000; update(); unknown();
+  nowNs += 100000000; update(); hidden();
   sm.receivedAt=nowNs; update(); assert(rows.size()==4);
-  sm.state.typed=false; update(); unknown();
-  sm.state.typed=true; sm.ok=false; update(); unknown();
-  sm.ok=true; sm.online=false; update(); unknown();
+  sm.state.typed=false; update(); hidden();
+  sm.state.typed=true; sm.ok=false; update(); hidden();
+  sm.ok=true; sm.online=false; update(); hidden();
   s.scene.started_frame=11; update(); assert(rows.empty());
   sm.online=true; update(); assert(rows.empty());
   sm.received=11; sm.state.supported=false; update(); assert(rows.empty());
