@@ -147,6 +147,11 @@ class ReportBodyTests(unittest.TestCase):
         self.assertIn("Hard braking: 1 recorded (1 with cruise active and no pedal press).", lines)
         self.assertEqual(report_lines([drive(window_s=0, steering_s=0)], CLOSE)[0], "1 drive, 0 min observed.")
 
+    def test_other_braking_context(self):
+        event = ("brake", {"peakDrop1s": 3.2, "who": "other"})
+        lines = report_lines([drive(events=[event])], CLOSE)
+        self.assertIn("Hard braking: 1 recorded (1 with no brake pedal press and cruise off for most of the episode).", lines)
+
     def test_no_advice_words(self):
         d = drive(events=[("steering_loss", {"cause": c}) for c in
                           ("brake", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none", None)])

@@ -9,7 +9,8 @@ HARD_BRAKE_DROP_MS = 3.0       # m/s lost within one second
 CAUSE_WORDS = {"brake": "with brake pedal down", "gas": "with gas pedal down", "cruise_off": "with cruise switching off",
                "gear": "out of Drive", "fault": "with a steering fault", "blinker": "with a turn signal on",
                "driver": "with driver steering detected", "none": "without an identified signal"}
-WHO_WORDS = {"driver": "with brake pedal down", "cruise": "with cruise active and no pedal press", "other": "unclassified"}
+WHO_WORDS = {"driver": "with brake pedal down", "cruise": "with cruise active and no pedal press",
+             "other": "with no brake pedal press and cruise off for most of the episode"}
 MEASURE_NAMES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag"}
 
 
