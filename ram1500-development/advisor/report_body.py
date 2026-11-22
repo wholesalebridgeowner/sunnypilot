@@ -190,19 +190,25 @@ def report_lines(drives: list, closing_line: str) -> list:
         lines.append("Comma steering switched off at about 11 mph or faster: none recorded.")
     if changes or old_changes:
         details = []
+        completed = [c for c in changes if c.get("outcome") == "completed"]
         if changes:
-            done = sum(c.get("outcome") == "completed" for c in changes)
             cancelled = sum(c.get("outcome") == "cancelled" for c in changes)
-            details += [f"{done} completed", f"{cancelled} cancelled"]
+            details += [f"{len(completed)} completed", f"{cancelled} cancelled"]
         if old_changes:
             details.append(f"{old_changes} from older summaries")
         line = f"Lane changes: {len(changes) + old_changes} recorded ({', '.join(details)})."
-        peaks = [abs(_num(c.get("peakLatAccel"))) for c in changes
-                 if c.get("outcome") == "completed" and _num(c.get("peakLatAccel")) is not None]
+        curved = sum(c.get("curveStart") is True for c in completed)
+        unknown = sum(type(c.get("curveStart")) is not bool for c in completed)
+        if len(completed) > unknown:
+            line += f" Completed changes that started in a curve: {curved}."
+        if unknown:
+            line += f" Curve status at the start was unknown for {unknown} completed change{'' if unknown == 1 else 's'}."
+        peaks = [abs(_num(c.get("peakLatAccel"))) for c in completed
+                 if c.get("curveStart") is False and _num(c.get("peakLatAccel")) is not None]
         if len(peaks) == 1:
-            line += f" Peak change in sideways acceleration for the one measured lane change: {peaks[0]:.1f} m/s²."
+            line += f" Peak change in sideways acceleration for the one measured start outside a curve: {peaks[0]:.1f} m/s²."
         elif peaks:
-            line += (f" Peak change in sideways acceleration for {len(peaks)} measured lane changes: "
+            line += (f" Peak change in sideways acceleration for {len(peaks)} measured starts outside a curve: "
                      f"median {statistics.median(peaks):.1f}, highest {max(peaks):.1f} m/s².")
         lines.append(line)
     elif n and measured["lane"] == n:

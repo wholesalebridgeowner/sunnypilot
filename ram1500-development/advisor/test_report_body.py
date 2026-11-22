@@ -34,8 +34,8 @@ class ReportBodyTests(unittest.TestCase):
         d1 = drive(window_s=5400, steering_s=4800, warn=(2, 1), events=[
             ("steering_loss", {"cause": "brake"}), ("steering_loss", {"cause": "brake"}),
             ("steering_loss", {"cause": "cruise_off"}),
-            ("lane_change", {"outcome": "completed", "peakLatAccel": 0.8}),
-            ("lane_change", {"outcome": "completed", "peakLatAccel": -1.3}),
+            ("lane_change", {"outcome": "completed", "peakLatAccel": 0.8, "curveStart": False}),
+            ("lane_change", {"outcome": "completed", "peakLatAccel": -1.3, "curveStart": False}),
             ("lane_change", {"outcome": "cancelled", "peakLatAccel": 2.0}),
             ("brake", {"peakDrop1s": 3.4, "who": "driver"}), ("brake", {"peakDrop1s": 2.1, "who": "cruise"})])
         d2 = drive(window_s=1500, steering_s=600, bsm=False, warn=(1,))
@@ -45,7 +45,7 @@ class ReportBodyTests(unittest.TestCase):
             "Comma blind-spot input at startup: enabled on 1 drive, disabled on 1 drive.",
             "Steering-limit warning episodes recorded: 4.",
             "Comma steering switched off at about 11 mph or faster: 3 recorded. Main nearby signal: 2 with brake pedal down, 1 with cruise switching off.",
-            "Lane changes: 3 recorded (2 completed, 1 cancelled). Peak change in sideways acceleration for 2 measured lane changes: median 1.1, highest 1.3 m/s².",
+            "Lane changes: 3 recorded (2 completed, 1 cancelled). Completed changes that started in a curve: 0. Peak change in sideways acceleration for 2 measured starts outside a curve: median 1.1, highest 1.3 m/s².",
             "Hard braking: 1 recorded (1 with brake pedal down).",
             "Recording: all expected summary windows received.",
             CLOSE])
@@ -139,6 +139,21 @@ class ReportBodyTests(unittest.TestCase):
         lines = report_lines([drive(bsm=True), drive(bsm=None)], CLOSE)
         self.assertIn("Comma blind-spot input at startup: enabled on 1 drive, unknown on 1 drive.", lines)
         self.assertIn("Comma blind-spot input at startup: unknown on 1 drive.", report_lines([drive(bsm=None)], CLOSE))
+
+    def test_curve_and_unknown_starts_keep_their_counts_outside_the_straight_peak(self):
+        def change(peak, **extra):
+            return ("lane_change", {"outcome": "completed", "peakLatAccel": peak, **extra})
+        current = drive(events=[change(.7, curveStart=False), change(2.5, curveStart=True),
+                                change(1.9, curveStart=None), change(None, curveStart=False)])
+        legacy = drive(events=[change(3.1)])
+        line = next(l for l in report_lines([current, legacy], CLOSE) if l.startswith("Lane changes:"))
+        self.assertIn("5 recorded (5 completed, 0 cancelled)", line)
+        self.assertIn("started in a curve: 1", line)
+        self.assertIn("unknown for 2 completed changes", line)
+        self.assertIn("the one measured start outside a curve: 0.7 m/s²", line)
+        line = next(l for l in report_lines([legacy], CLOSE) if l.startswith("Lane changes:"))
+        self.assertIn("unknown for 1 completed change.", line)
+        self.assertNotIn("Peak change", line)
 
     def test_short_observation_and_cruise_context(self):
         event = ("brake", {"peakDrop1s": 3.2, "who": "cruise"})

@@ -69,10 +69,22 @@ def _true(value) -> bool:
     return _observed_bool(value) is True
 
 
+class _InvalidMeasurement:
+    """Keep existing raw measure inputs readable while preserving explicit envelope invalidity."""
+    __slots__ = ("payload",)
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __getattr__(self, name):
+        return get(self.payload, name)
+
+
 def event_payload(event, stream):
-    """Keep a timestamped unknown in the join when carControl is explicitly invalid."""
-    if stream == "carControl" and not event.valid:
-        return None
+    if stream in ("carControl", "carState", "controlsState") and not event.valid:
+        if stream == "carControl":
+            return None
+        return _InvalidMeasurement(getattr(event, stream))
     return getattr(event, stream)
 
 
@@ -114,6 +126,7 @@ class Sample:
     alerts: frozenset | None = None           # alert names; None = no alert list for 5.0 s
     missing: tuple = ()                       # short names of the streams missing for this Sample
     control_epoch: int = 0                    # changes when continuity of latActive observations breaks
+    curvature_observation_ns: int | None = None  # original controlsState stamp for pre-lane-change context
 
 
 @dataclass(slots=True)
@@ -221,6 +234,10 @@ class StreamJoiner:
 
         found = {stream: self._fresh(stream, t_ns) for stream, _ in JOINED}
         control, controls_state = found["carControl"], found["controlsState"]
+        curvature_ns = None
+        if (controls_state is not None and not isinstance(controls_state, _InvalidMeasurement)
+                and not isinstance(car_state, _InvalidMeasurement) and _observed_bool(get(car_state, "canValid")) is True):
+            curvature_ns = self._latest["controlsState"][0]
         lead = get(found["radarState"], "leadOne")
         lead_present = _true(get(lead, "status"))
         model = found["drivingModelData"]
@@ -244,6 +261,7 @@ class StreamJoiner:
             actuators_torque=number(get(control, "actuators", "torque")),
             desired_curvature=number(get(controls_state, "desiredCurvature")),
             actual_curvature=number(get(controls_state, "curvature")),
+            curvature_observation_ns=curvature_ns,
             torque_output=number(get(found["carOutput"], "actuatorsOutput", "torqueOutputCan")),
             lead_present=lead_present,
             lead_distance_m=number(get(lead, "dRel")) if lead_present else None,

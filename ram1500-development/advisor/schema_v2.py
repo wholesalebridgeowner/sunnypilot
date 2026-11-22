@@ -81,7 +81,7 @@ DATA = {
               "tookOverFromCruise": FLAG, "speedMs": NUMBER, "leadGapS": NUMBER, "leadDistanceM": NUMBER},
     "lane_change": {"outcome": _tokens("completed", "cancelled"), "dir": _tokens("L", "R"), "handsOn": FLAG,
                     "pressedShare": NUMBER, "pushTorqueMax": NUMBER, "vStartMs": NUMBER, "crossed": FLAG,
-                    "crossS": NUMBER, "startingS": NUMBER, "peakLatAccel": NUMBER,
+                    "crossS": NUMBER, "startingS": NUMBER, "peakLatAccel": NUMBER, "curveStart": FLAG,
                     "settleState": _tokens("settled", "not_settled", "no_crossing", "slow_stream",
                                            "not_measurable:drive_end", "not_measurable:data",
                                            "not_measurable:next_lane_change", "not_measurable:steering_off",

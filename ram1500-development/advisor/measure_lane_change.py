@@ -23,8 +23,8 @@ lcBlinkerOnly, lcHandsOn (completed ones with driver steering detected),
 lcTruncated. Each is booked when the attempt ends, when the blinker state
 returns to off, or when the gap shows.
 
-One `lane_change` record per completed or cancelled attempt. Its numbers are
-for the log only; nothing in the report reads them:
+One `lane_change` record per completed or cancelled attempt. The nightly report counts outcomes and uses
+the measured peaks of completed lane changes whose pre-start acceleration showed no sustained curve.
 
     outcome, dir (L / R), vStartMs, startingS (start to "finishing")
     pushTorqueMax    largest driver torque toward the new lane around the start
@@ -32,6 +32,7 @@ for the log only; nothing in the report reads them:
     handsOn          wheel sensor reading "pressed"; hands on above a tenth
     crossed, crossS  the lane centre jumped (the lines became those of the new lane), and when
     peakLatAccel     largest change of lateral acceleration against its level before the start
+    curveStart       sustained measured curvature before the start; null if coverage is insufficient
     settleState      settled / not_settled, or why there is no settle figure
     settleS          time from the crossing until the truck stays within 0.25 m of where it ends up
     overshootM       how far it swung past that position
@@ -44,7 +45,7 @@ from __future__ import annotations
 from collections import deque
 
 from measure_api import Measure
-from shared_rules import MODEL_GAP_SLOW_S
+from shared_rules import CURVE_DEMAND_MS2, DT_CAP_S, MODEL_GAP_SLOW_S
 
 OFF, PRE, STARTING, FINISHING = 0, 1, 2, 3     # lane-change states, as in samples.py
 LEFT, RIGHT = 1, 2                             # lane-change directions
@@ -72,6 +73,8 @@ _BODY_FROM_NS = _ns(1.0)            # the pressed share leaves out the push: it 
 _CROSS_AFTER_NS = _ns(2.0)          # the crossing is looked for until this long after the end
 _BASE_FROM_NS = _ns(3.0)            # level before the lane change: from this long before the start ...
 _BASE_TO_NS = _ns(1.0)              # ... to this long before it
+_CURVE_BIN_NS = _ns(0.5)
+_CURVE_GAP_NS = _ns(DT_CAP_S)
 _PEAK_AFTER_NS = _ns(3.0)           # the peak is looked for until this long after the end
 _SETTLE_NS = _ns(8.0)               # the truck is followed this long after the crossing
 _FINAL_FROM_NS = _ns(5.0)           # final position: from this long after the crossing to the end of that window
@@ -80,7 +83,7 @@ _SILENT_NS = _ns(MODEL_GAP_SLOW_S)  # no model message for longer than this is a
 
 _COUNTS = ("lcStarts", "lcCompleted", "lcCancelled", "lcBlinkerOnly", "lcHandsOn", "lcTruncated")
 _T = 0
-_TORQUE, _PRESSED, _LAT_ON, _ACCEL = 1, 2, 3, 4      # Sample rows
+_TORQUE, _PRESSED, _LAT_ON, _ACCEL, _CURVATURE_NS = 1, 2, 3, 4, 5      # Sample rows
 _STATE, _CENTRE, _CONFIDENT, _GAP = 1, 2, 3, 4       # model-message rows
 
 
@@ -151,7 +154,7 @@ class LaneChanges(Measure):
                 self._break_stream()        # whatever message comes next, it comes after a gap
         s = g.sample
         accel = None if s.actual_curvature is None else s.v_ego * s.v_ego * s.actual_curvature
-        self._samples.append((g.t_ns, s.steering_torque, s.steering_pressed, g.lat_on, accel))
+        self._samples.append((g.t_ns, s.steering_torque, s.steering_pressed, g.lat_on, accel, s.curvature_observation_ns))
         self._last_sample_ns = g.t_ns
         if self._waiting:
             keep_ns = self._waiting[0].t_start
@@ -350,6 +353,33 @@ class LaneChanges(Measure):
             return "not_settled", None, overshoot
         return "settled", (offsets[last_outside + 1][0] - t_cross) / 1e9, overshoot
 
+    def _curve_start(self, start_ns):
+        """Compare signed medians in adjacent half-seconds against the advisor's 0.5 m/s² curve threshold.
+
+        Six covered bins describe the three seconds before starting. Repeated uses of one controlsState
+        message contribute once. Only a complete, sufficiently dense baseline can yield True or False.
+        """
+        lo = start_ns - _BASE_FROM_NS
+        if any(lo <= m[_T] < start_ns and (m[_STATE] in (STARTING, FINISHING) or m[_GAP]) for m in self._msgs):
+            return None   # a previous lane change or a model gap makes the road context ambiguous
+        bins = [[] for _ in range(_BASE_FROM_NS // _CURVE_BIN_NS)]
+        previous = None
+        for row in self._samples:
+            stamp, accel = row[_CURVATURE_NS], row[_ACCEL]
+            if not lo <= row[_T] < start_ns or stamp is None or accel is None or not lo <= stamp < start_ns:
+                continue
+            if abs(row[_T] - stamp) > _CURVE_GAP_NS or stamp == previous:
+                continue
+            if stamp - (lo if previous is None else previous) > _CURVE_GAP_NS:
+                return None
+            bins[(stamp - lo) // _CURVE_BIN_NS].append(accel)
+            previous = stamp
+        if previous is None or start_ns - previous > _CURVE_GAP_NS or any(len(b) < 2 for b in bins):
+            return None
+        levels = [_median(b) for b in bins]
+        return any((a >= CURVE_DEMAND_MS2 and b >= CURVE_DEMAND_MS2)
+                   or (a <= -CURVE_DEMAND_MS2 and b <= -CURVE_DEMAND_MS2) for a, b in zip(levels, levels[1:]))
+
     def _record(self, attempt: _Attempt, settle: tuple) -> dict:
         sign = attempt.sign
         t_start = attempt.t_start
@@ -379,7 +409,7 @@ class LaneChanges(Measure):
                 "crossed": attempt.crossed,
                 "crossS": round((attempt.t_cross - t_start) / 1e9, 2) if attempt.crossed else None,
                 "startingS": None if attempt.t_fin is None else round((attempt.t_fin - t_start) / 1e9, 2),
-                "peakLatAccel": _rounded(peak, 2), "settleState": state,
+                "peakLatAccel": _rounded(peak, 2), "curveStart": self._curve_start(t_start), "settleState": state,
                 "settleS": _rounded(settle_s, 2), "overshootM": _rounded(overshoot, 2)}
 
     # --- summaries ------------------------------------------------------------------

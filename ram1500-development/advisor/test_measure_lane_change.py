@@ -13,7 +13,7 @@ T0 = 1_000 * SEC
 NAN = float("nan")
 COUNTS = ("lcStarts", "lcCompleted", "lcCancelled", "lcBlinkerOnly", "lcHandsOn", "lcTruncated")
 RECORD = {"outcome", "dir", "handsOn", "pressedShare", "pushTorqueMax", "vStartMs", "crossed", "crossS", "startingS",
-          "peakLatAccel", "settleState", "settleS", "overshootM"}
+          "peakLatAccel", "curveStart", "settleState", "settleS", "overshootM"}
 PIPELINE_FIELDS = {"w", "tMonoS", "n", "windowS", "unobservedS", "tickMaxS", "health"}
 NONE = dict.fromkeys(COUNTS, 0)
 
@@ -158,7 +158,7 @@ class CountTests(unittest.TestCase):
         self.assertEqual(set(r.record), RECORD)
         self.assertEqual(r.record, {
             "outcome": "completed", "dir": "L", "handsOn": False, "pressedShare": 0.0, "pushTorqueMax": 140,
-            "vStartMs": 25.0, "crossed": True, "crossS": 3.0, "startingS": 3.5, "peakLatAccel": 0.8,
+            "vStartMs": 25.0, "crossed": True, "crossS": 3.0, "startingS": 3.5, "peakLatAccel": 0.8, "curveStart": False,
             "settleState": "settled", "settleS": 2.6, "overshootM": 0.0})
 
     def test_a_lane_change_to_the_right(self):
@@ -180,7 +180,7 @@ class CountTests(unittest.TestCase):
         self.assertEqual(r.counts, counts(starts=1, cancelled=1))
         self.assertEqual(r.record, {
             "outcome": "cancelled", "dir": "L", "handsOn": False, "pressedShare": 0.0, "pushTorqueMax": 0,
-            "vStartMs": 25.0, "crossed": False, "crossS": None, "startingS": None, "peakLatAccel": None,
+            "vStartMs": 25.0, "crossed": False, "crossS": None, "startingS": None, "peakLatAccel": None, "curveStart": False,
             "settleState": "no_crossing", "settleS": None, "overshootM": None})
 
     def test_a_start_that_falls_back_to_the_blinker_state_is_cancelled(self):
@@ -693,6 +693,33 @@ class SettleTests(unittest.TestCase):
 
 class SlowStreamTests(unittest.TestCase):
     """A 2 Hz model stream, as a decimated log holds it."""
+
+    def test_sustained_pre_start_turns_in_either_direction_keep_the_raw_peak(self):
+        for sign in (-1, 1):
+            for slow in (False, True):
+                with self.subTest(sign=sign, slow=slow):
+                    record = Run(LC(), slow=slow, accel=lambda t: sign * (1.5 if t < ms(20) else 0.4)).record
+                    self.assertIs(record["curveStart"], True)
+                    self.assertEqual(record["peakLatAccel"], 1.1)
+
+    def test_short_or_opposing_turns_do_not_count_as_a_sustained_pre_start_curve(self):
+        accel = lambda t: 1.0 if ms(18.0) <= t < ms(18.5) or t >= ms(20) else (-1.0 if ms(18.5) <= t < ms(19) else 0.0)
+        self.assertIs(Run(LC(), accel=accel).record["curveStart"], False)
+
+    def test_missing_context_and_previous_lane_change_are_unknown(self):
+        self.assertIsNone(Run(LC(), accel=lambda t: NAN if ms(18) <= t < ms(19) else 0.1).record["curveStart"])
+        result = Run((LC(), LC(start=24.5, pre=0)), n=550).records
+        self.assertIs(result[0]["curveStart"], False)
+        self.assertIsNone(result[1]["curveStart"])
+
+    def test_holding_an_old_curvature_value_does_not_fill_a_source_gap(self):
+        p = Pipeline(PipelineConfig(measures=(LaneChanges,)))
+        c = LC()
+        batches = [synth.batch(t, skip=("controlsState",) if ms(18) <= (t-T0)//MS < ms(18.4) else (),
+                               drivingModelData=model_of((c,), (t-T0)//MS)) for t in synth.ticks(450, 100, T0)]
+        record = next(d for k,d in synth.run(p,batches) if k == "lane_change")
+        self.assertEqual(record["peakLatAccel"], 0.0)
+        self.assertIsNone(record["curveStart"])
 
     def test_counts_and_record(self):
         r = Run(LC(), slow=True, car=PUSH)

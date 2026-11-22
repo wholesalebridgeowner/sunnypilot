@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace as ns
 
-from samples import ModelMsg, Sample, StreamJoiner
+from samples import ModelMsg, Sample, StreamJoiner, event_payload
 
 MS = 1_000_000
 SEC = 1_000_000_000
@@ -23,6 +23,18 @@ def model(state="off", direction="none", left_y=-1.8, right_y=1.7, left_prob=0.9
 
 
 class SampleFieldsTests(unittest.TestCase):
+    def test_original_curvature_stamp_requires_valid_can_and_envelopes(self):
+        for car_ok, curvature_ok, can_ok in ((True, True, True), (True, True, None), (True, True, "yes"),
+                                            (True, True, False), (False, True, True), (True, False, True)):
+            with self.subTest(car=car_ok, controls=curvature_ok, can=can_ok):
+                join = StreamJoiner()
+                cur = ns(valid=curvature_ok, controlsState=ns(curvature=.01))
+                car = ns(valid=car_ok, carState=car_state(canValid=can_ok))
+                join.offer("controlsState", T0, event_payload(cur, "controlsState"))
+                s = join.sample(T0 + 5 * MS, event_payload(car, "carState"))
+                self.assertEqual(s.actual_curvature, .01)  # original raw measure remains readable
+                self.assertEqual(s.curvature_observation_ns, T0 if car_ok and curvature_ok and can_ok is True else None)
+
     def test_all_fields_from_fresh_messages(self):
         j = StreamJoiner()
         j.offer("carControl", T0, ns(latActive=True, actuators=ns(torque=-0.4)))
