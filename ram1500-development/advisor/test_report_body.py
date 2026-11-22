@@ -41,20 +41,20 @@ class ReportBodyTests(unittest.TestCase):
         d2 = drive(window_s=1500, steering_s=600, bsm=False, warn=(1,))
         lines = report_lines([d1, d2], CLOSE)
         self.assertEqual(lines, [
-            "2 drives, 1 h 55 min, steering on 1 h 30 min.",
-            "Blind spot: off on 1 of 2 drives.",
-            "Steering-limit warnings: 4.",
-            "Steering turned off while moving: 3 (brake 2, cruise off 1).",
-            "Lane changes: 3 (2 completed, 1 cancelled). Sideways push: median 1.1, highest 1.3 m/s².",
-            "Hard braking: 1 (driver 1).",
-            "Recording: complete.",
+            "2 drives, 1 h 55 min observed, Comma steering active for 1 h 30 min.",
+            "Comma blind-spot input at startup: enabled on 1 drive, disabled on 1 drive.",
+            "Steering-limit warning episodes recorded: 4.",
+            "Comma steering switched off at about 11 mph or faster: 3 recorded. Main nearby signal: 2 with brake pedal down, 1 with cruise switching off.",
+            "Lane changes: 3 recorded (2 completed, 1 cancelled). Peak change in sideways acceleration for 2 measured lane changes: median 1.1, highest 1.3 m/s².",
+            "Hard braking: 1 recorded (1 with brake pedal down).",
+            "Recording: all expected summary windows received.",
             CLOSE])
 
     def test_quiet_drive(self):
         self.assertEqual(report_lines([drive(window_s=20, steering_s=0)], CLOSE), [
-            "1 drive, under 1 min, steering on under 1 min.", "Blind spot: on.", "Steering-limit warnings: 0.",
-            "Steering turned off while moving: none.", "Lane changes: none.", "Hard braking: none.",
-            "Recording: complete.", CLOSE])
+            "1 drive, under 1 min observed, Comma steering active for 0 min.", "Comma blind-spot input at startup: enabled on 1 drive.",
+            "Steering-limit warning episodes recorded: 0.", "Comma steering switched off at about 11 mph or faster: none recorded.",
+            "Lane changes: none recorded.", "Hard braking: none recorded.", "Recording: all expected summary windows received.", CLOSE])
 
     def test_recording_gaps_are_named(self):
         lines = report_lines([drive(failed=("lane",), listening=False), drive(end=False)], CLOSE)
@@ -75,7 +75,8 @@ class ReportBodyTests(unittest.TestCase):
         self.assertIn("window", recording)
         self.assertIn("unobserved", recording)
         self.assertNotIn("without an end", recording)
-        for negative in ("Steering turned off while moving: none.", "Lane changes: none.", "Hard braking: none."):
+        for negative in ("Comma steering switched off at about 11 mph or faster: none recorded.",
+                         "Lane changes: none recorded.", "Hard braking: none recorded."):
             self.assertNotIn(negative, lines)
 
     def test_duplicate_index_cannot_hide_a_missing_window(self):
@@ -108,15 +109,15 @@ class ReportBodyTests(unittest.TestCase):
     def test_window_duration_rounding_does_not_make_a_complete_drive_partial(self):
         row = drive(window_s=120, steering_s=90)
         row["end"]["totals"]["windowS"] = 120.1
-        self.assertIn("Recording: complete.", report_lines([row], CLOSE))
+        self.assertIn("Recording: all expected summary windows received.", report_lines([row], CLOSE))
 
     def test_v1_summary_counts_are_distinct_from_v2_events_and_wheel_touches(self):
         old = {"ended": True, "summaries": [{"steerWarningEpisodes": 2, "laneChanges": 3, "overrideEpisodes": 7,
                                               "hardBrakes": [{"speedMs": 12.0}, {"speedMs": 18.0}]}]}
         lines = report_lines([old], CLOSE)
-        for metric, value in (("Steering-limit warnings", 2), ("Lane changes", 3), ("Hard braking", 2)):
+        for metric, value in (("Steering-limit warning episodes recorded", 2), ("Lane changes", 3), ("Hard braking", 2)):
             self.assertTrue(any(line.startswith(f"{metric}: {value}") for line in lines), lines)
-        self.assertFalse(any(line.startswith("Steering turned off while moving:") and ("7" in line or "none" in line) for line in lines), lines)
+        self.assertFalse(any(line.startswith("Comma steering switched off") for line in lines), lines)
         recording = next(line for line in lines if line.startswith("Recording:"))
         self.assertTrue(recording.startswith("Recording: partial"), recording)
         self.assertNotIn("without an end", recording)
@@ -136,7 +137,15 @@ class ReportBodyTests(unittest.TestCase):
 
     def test_unknown_blind_spot_is_not_reported_as_on_or_off(self):
         lines = report_lines([drive(bsm=True), drive(bsm=None)], CLOSE)
-        self.assertIn("Blind spot: on; not reported for 1 of 2 drives.", lines)
+        self.assertIn("Comma blind-spot input at startup: enabled on 1 drive, unknown on 1 drive.", lines)
+        self.assertIn("Comma blind-spot input at startup: unknown on 1 drive.", report_lines([drive(bsm=None)], CLOSE))
+
+    def test_short_observation_and_cruise_context(self):
+        event = ("brake", {"peakDrop1s": 3.2, "who": "cruise"})
+        lines = report_lines([drive(window_s=50, steering_s=45, events=[event])], CLOSE)
+        self.assertEqual(lines[0], "1 drive, under 1 min observed, Comma steering active for under 1 min.")
+        self.assertIn("Hard braking: 1 recorded (1 with cruise active and no pedal press).", lines)
+        self.assertEqual(report_lines([drive(window_s=0, steering_s=0)], CLOSE)[0], "1 drive, 0 min observed.")
 
     def test_no_advice_words(self):
         d = drive(events=[("steering_loss", {"cause": c}) for c in

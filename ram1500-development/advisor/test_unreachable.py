@@ -92,8 +92,8 @@ class ServiceLockTests(unittest.TestCase):
         report = self.notifier.sent[-1]
         self.assertEqual(report["title"], "Ram drive report")
         self.assertEqual(report["message"].splitlines(),
-                         ["3 drives, 30 min, steering on 27 min.", "Steering-limit warnings: 21.",
-                          "Hard braking: 7 (7 from older summaries).",
+                         ["3 drives, 30 min observed, Comma steering active for 27 min.", "Steering-limit warning episodes recorded: 21.",
+                          "Hard braking: 7 recorded (7 from older summaries).",
                           "Recording: partial. 3 ended drives with incomplete coverage. Gaps: missing summary windows.",
                           "No changes are suggested. This report only measures."])
         for advice in ("following-distance", "Suggestion", "Trial", "neural-network", "Pull over", "Park"):

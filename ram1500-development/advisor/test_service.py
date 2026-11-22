@@ -208,8 +208,8 @@ class ServiceTests(ServiceFixture):
         self.assertTrue(self.service.run_nightly())
         self.assertEqual(len(self.notifier.sent), 1)
         lines = self.notifier.sent[0]["message"].splitlines()
-        self.assertIn("Steering-limit warnings: 10.", lines)
-        self.assertIn("Recording: complete.", lines)
+        self.assertIn("Steering-limit warning episodes recorded: 10.", lines)
+        self.assertIn("Recording: all expected summary windows received.", lines)
         self.assertFalse(self.service.run_nightly())
 
     def test_retry_after_confirmed_send_and_storage_error_does_not_resend(self):

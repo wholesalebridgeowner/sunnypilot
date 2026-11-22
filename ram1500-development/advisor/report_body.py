@@ -6,9 +6,10 @@ import statistics
 from collections import Counter
 
 HARD_BRAKE_DROP_MS = 3.0       # m/s lost within one second
-CAUSE_WORDS = {"brake": "brake", "gas": "gas", "cruise_off": "cruise off", "gear": "gear", "fault": "fault",
-               "blinker": "blinker", "driver": "driver steering", "none": "no cause found"}
-WHO_WORDS = {"driver": "driver", "cruise": "truck's cruise", "other": "other"}
+CAUSE_WORDS = {"brake": "with brake pedal down", "gas": "with gas pedal down", "cruise_off": "with cruise switching off",
+               "gear": "out of Drive", "fault": "with a steering fault", "blinker": "with a turn signal on",
+               "driver": "with driver steering detected", "none": "without an identified signal"}
+WHO_WORDS = {"driver": "with brake pedal down", "cruise": "with cruise active and no pedal press", "other": "unclassified"}
 MEASURE_NAMES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag"}
 
 
@@ -23,9 +24,11 @@ def _count(value):
 
 
 def _duration(seconds: float) -> str:
-    minutes = int(round(seconds / 60.0))
-    if minutes < 1:
+    if seconds == 0:
+        return "0 min"
+    if seconds < 60:
         return "under 1 min"
+    minutes = int(round(seconds / 60.0))
     hours, minutes = divmod(minutes, 60)
     return f"{hours} h {minutes} min" if hours else f"{minutes} min"
 
@@ -101,7 +104,7 @@ def _breakdown(records, field, words):
     for row in records:
         token = row.get(field)
         labels[words.get(token, "other") if isinstance(token, str) else "other"] += 1
-    return ", ".join(f"{name} {count}" for name, count in sorted(labels.items(), key=lambda x: (-x[1], x[0])))
+    return ", ".join(f"{count} {name}" for name, count in sorted(labels.items(), key=lambda x: (-x[1], x[0])))
 
 
 def report_lines(drives: list, closing_line: str) -> list:
@@ -110,23 +113,20 @@ def report_lines(drives: list, closing_line: str) -> list:
     window = [_num(t.get("windowS")) for t in totals]
     steering = [_num(t.get("steeringS")) for t in totals]
     if window and None not in window:
-        line = f"{_drives(n)}, {_duration(sum(window))}"
-        if None not in steering:
-            line += f", steering on {_duration(sum(steering))}"
+        observed = sum(window)
+        line = f"{_drives(n)}, {_duration(observed)} observed"
+        if observed > 0 and None not in steering:
+            line += f", Comma steering active for {_duration(sum(steering))}"
         lines = [line + "."]
     else:
         lines = [f"{_drives(n)} recorded."]
 
     bsm = [(d.get("ready") or {}).get("blindSpot") for d in drives]
-    if any(type(b) is bool for b in bsm):
-        off, unknown = sum(b is False for b in bsm), sum(type(b) is not bool for b in bsm)
-        if off:
-            line = f"Blind spot: off on {off} of {_drives(n)}"
-            lines.append(line + (f"; not reported for {unknown}." if unknown else "."))
-        elif unknown:
-            lines.append(f"Blind spot: on; not reported for {unknown} of {_drives(n)}.")
-        else:
-            lines.append("Blind spot: on for every drive." if n > 1 else "Blind spot: on.")
+    if any("blindSpot" in (d.get("ready") or {}) for d in drives):
+        enabled, disabled = sum(b is True for b in bsm), sum(b is False for b in bsm)
+        statuses = [(enabled, "enabled"), (disabled, "disabled"), (n - enabled - disabled, "unknown")]
+        details = ", ".join(f"{status} on {_drives(count)}" for count, status in statuses if count)
+        lines.append(f"Comma blind-spot input at startup: {details}.")
 
     losses, changes, brakes = [], [], []
     warnings, old_changes, old_brakes = 0, 0, 0
@@ -179,13 +179,14 @@ def report_lines(drives: list, closing_line: str) -> list:
         reasons.update(gaps)
 
     if warnings or (n and measured["warnings"] == n):
-        lines.append(f"Steering-limit warnings: {warnings}.")
+        lines.append(f"Steering-limit warning episodes recorded: {warnings}.")
     elif n and legacy_coverage["warnings"] == n:
-        lines.append("Steering-limit warnings: 0 in received older summaries.")
+        lines.append("Steering-limit warning episodes: 0 in received older summaries.")
     if losses:
-        lines.append(f"Steering turned off while moving: {len(losses)} ({_breakdown(losses, 'cause', CAUSE_WORDS)}).")
+        lines.append(f"Comma steering switched off at about 11 mph or faster: {len(losses)} recorded. "
+                     f"Main nearby signal: {_breakdown(losses, 'cause', CAUSE_WORDS)}.")
     elif n and measured["loss"] == n:
-        lines.append("Steering turned off while moving: none.")
+        lines.append("Comma steering switched off at about 11 mph or faster: none recorded.")
     if changes or old_changes:
         details = []
         if changes:
@@ -194,23 +195,26 @@ def report_lines(drives: list, closing_line: str) -> list:
             details += [f"{done} completed", f"{cancelled} cancelled"]
         if old_changes:
             details.append(f"{old_changes} from older summaries")
-        line = f"Lane changes: {len(changes) + old_changes} ({', '.join(details)})."
+        line = f"Lane changes: {len(changes) + old_changes} recorded ({', '.join(details)})."
         peaks = [abs(_num(c.get("peakLatAccel"))) for c in changes
                  if c.get("outcome") == "completed" and _num(c.get("peakLatAccel")) is not None]
-        if peaks:
-            line += f" Sideways push: median {statistics.median(peaks):.1f}, highest {max(peaks):.1f} m/s²."
+        if len(peaks) == 1:
+            line += f" Peak change in sideways acceleration for the one measured lane change: {peaks[0]:.1f} m/s²."
+        elif peaks:
+            line += (f" Peak change in sideways acceleration for {len(peaks)} measured lane changes: "
+                     f"median {statistics.median(peaks):.1f}, highest {max(peaks):.1f} m/s².")
         lines.append(line)
     elif n and measured["lane"] == n:
-        lines.append("Lane changes: none.")
+        lines.append("Lane changes: none recorded.")
     elif n and legacy_coverage["lane"] == n:
         lines.append("Lane changes: 0 in received older summaries.")
     if brakes or old_brakes:
         details = [_breakdown(brakes, "who", WHO_WORDS)] if brakes else []
         if old_brakes:
             details.append(f"{old_brakes} from older summaries")
-        lines.append(f"Hard braking: {len(brakes) + old_brakes} ({', '.join(details)}).")
+        lines.append(f"Hard braking: {len(brakes) + old_brakes} recorded ({', '.join(details)}).")
     elif n and measured["brake"] == n:
-        lines.append("Hard braking: none.")
+        lines.append("Hard braking: none recorded.")
     elif n and legacy_coverage["brake"] == n:
         lines.append("Hard braking: 0 in received older summaries.")
     if ended_partial or unfinished:
@@ -224,6 +228,6 @@ def report_lines(drives: list, closing_line: str) -> list:
             line += " Gaps: " + ", ".join(sorted(reasons)) + "."
         lines.append(line)
     elif n:
-        lines.append("Recording: complete.")
+        lines.append("Recording: all expected summary windows received.")
     lines.append(closing_line)
     return lines
