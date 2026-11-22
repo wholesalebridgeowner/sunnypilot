@@ -96,9 +96,9 @@ class OwnerDeviceTests(unittest.TestCase):
         self.assertEqual(self.apply(), "refused:interrupted_owner_change")
         self.assertEqual(len(self.params.writes), 2)
 
-    def test_failed_group_keeps_accelerator_disengagement_enabled_after_redelivery(self):
-        self.params.values["DisengageOnAccelerator"] = False
-        grant = self.sign({"DisengageOnAccelerator": True, "RainbowMode": True})
+    def test_failed_group_keeps_disengagement_chime_enabled_after_redelivery(self):
+        self.params.values["QuietMode"] = True
+        grant = self.sign({"QuietMode": False, "RainbowMode": True})
         put = self.params.put
 
         def fail_on_display(name, value):
@@ -111,18 +111,37 @@ class OwnerDeviceTests(unittest.TestCase):
         receipt_path, = (self.root / "owner").glob("*.json")
         self.assertFalse(self.writer.pending.exists())
         receipt = json.loads(receipt_path.read_text())
-        self.assertEqual(receipt["retained"], ["DisengageOnAccelerator"])
+        self.assertEqual(receipt["retained"], ["QuietMode"])
         self.assertEqual(receipt["status"], "refused:partial_owner_change")
         self.assertEqual(receipt["nonce"], grant["nonce"])
-        self.assertIs(receipt["previous"]["DisengageOnAccelerator"], False)
-        self.assertIs(self.params.values["DisengageOnAccelerator"], True)
+        self.assertIs(receipt["previous"]["QuietMode"], True)
+        self.assertIs(self.params.values["QuietMode"], False)
         self.assertIs(self.params.values["RainbowMode"], False)
 
         self.writer = self.new_writer()
         self.assertEqual(self.apply(grant), "refused:partial_owner_change")
-        self.assertEqual(self.params.writes, [("DisengageOnAccelerator", True)])
-        self.assertIs(self.params.values["DisengageOnAccelerator"], True)
+        self.assertEqual(self.params.writes, [("QuietMode", False)])
+        self.assertIs(self.params.values["QuietMode"], False)
         self.assertIs(self.params.values["RainbowMode"], False)
+
+    def test_accelerator_override_applies_and_a_failed_group_rolls_it_back(self):
+        self.params.values["DisengageOnAccelerator"] = True
+        self.assertEqual(self.apply(self.sign({"DisengageOnAccelerator": False})), "applied")
+        self.assertIs(self.params.values["DisengageOnAccelerator"], False)
+
+        self.params.values["DisengageOnAccelerator"] = True
+        self.writer = self.new_writer()
+        grant = self.sign({"DisengageOnAccelerator": False, "RainbowMode": True})
+        put = self.params.put
+
+        def fail_on_display(name, value):
+            if name == "RainbowMode":
+                raise OSError("injected display write failure")
+            put(name, value)
+
+        with patch.object(self.params, "put", side_effect=fail_on_display):
+            self.assertEqual(self.apply(grant), "refused:interrupted_owner_change")
+        self.assertIs(self.params.values["DisengageOnAccelerator"], True)
 
     def test_loss_of_park_mid_group_defers_recovery_until_safe(self):
         self.assertEqual(self.apply(safe=lambda: not self.params.writes), "refused:not_parked")

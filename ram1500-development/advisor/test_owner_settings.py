@@ -93,9 +93,19 @@ class OwnerSettingsTests(unittest.TestCase):
         for value in (0, 1, True, 2.0, "2"):
             with self.subTest(value=value), self.assertRaises(GuardError):
                 validate_owner_change({"MadsSteeringMode": value})
-        for key, value in (("DisengageOnAccelerator", False), ("QuietMode", True)):
+        for key, value in (("QuietMode", True),):
             with self.subTest(key=key), self.assertRaises(GuardError):
                 validate_owner_change({key: value})
+
+    def test_accelerator_disengagement_is_an_ordinary_owner_setting(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                validate_owner_change({"DisengageOnAccelerator": value})
+        self.assertIs(parse_owner_value("DisengageOnAccelerator", "false"), False)
+        self.assertIs(parse_owner_value("DisengageOnAccelerator", "1"), True)
+        for value in (0, 1, "false", None):
+            with self.subTest(value=value), self.assertRaises(GuardError):
+                validate_owner_change({"DisengageOnAccelerator": value})
 
     def test_owner_changes_remain_outside_suggestion_guard(self):
         with self.assertRaises(GuardError):

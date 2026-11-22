@@ -58,8 +58,12 @@ OWNER_NATIVE_LOCKS = {"RecordFront": "RecordFrontLock"}
 
 # The menu contains alternatives which alter protected disengagement, override
 # or actuator behavior. These individual values preserve the protective state.
+# DisengageOnAccelerator is an ordinary owner setting (Mark, 2026-11-22: "keep
+# cruise and steering on with a gas pedal press"): off makes the pedal an
+# override, the brake still disengages, and off is openpilot's own default.
+# selfdrived reads it live but MADS reads it at startup, so it is applied in
+# Park like every owner change and takes full effect at the next start.
 PROTECTIVE_VALUES = {
-    "DisengageOnAccelerator": (True, "accelerator_disengagement"),
     "Mads": (False, "stock_disengagement"),
     "MadsMainCruiseAllowed": (False, "independent_lateral_engagement"),
     "MadsUnifiedEngagementMode": (False, "independent_lateral_engagement"),
