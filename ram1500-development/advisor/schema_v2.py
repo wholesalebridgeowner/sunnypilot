@@ -17,7 +17,7 @@ import re
 from approval import OWNER_RECEIPT_STATUSES
 
 MAX_NUMBER = 1e9                    # a clock time in seconds or milliseconds would exceed it
-MEASURES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag", "unknown"}
+MEASURES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "cruiseCutoffs", "lane", "swings", "ay", "curve", "lag", "unknown"}
 SETTING_KEYS = {"lagdToggle", "lagdToggleDelayS", "nnlc", "laneChangeTimer", "modelBundleId", "build"}
 
 _HEX12 = re.compile(r"[0-9a-f]{12}")
@@ -56,6 +56,7 @@ _HEALTH = {"gapN": COUNT, "modelGapN": COUNT, "cpuPct": NUMBER, "cpuPeakPct": NU
            "queue": COUNT, "dropped": COUNT, "tickErrors": COUNT, "failed": _list_of(MEASURES),
            "staleS": _STALE, "staleSteerS": {key: NUMBER for key in ("ctl", "co", "dmd", "ev")}}
 _SUMMARY = {
+    "cruiseCutoffs": dict.fromkeys(("gas", "brake", "bothPedals", "hostCancel", "button", "unavailable", "unresolved"), COUNT),
     "w": COUNT, "tMonoS": NUMBER, "n": COUNT, "windowS": NUMBER, "unobservedS": NUMBER, "tickMaxS": NUMBER,
     **dict.fromkeys(("latOnS", "steeringS", "forcedZeroS", "fzFallbackS", "pressedS", "driverS", "laneChangeS",
                      "movingS", "cruiseS", "vMean", "vMeanSteering", "limitS", "limitDriverS", "limitLaneChangeS",

@@ -16,6 +16,7 @@ this order: lag, ay, swings, lane, curve. The owner-facing ones never are.
 from __future__ import annotations
 
 from measure_brake import Braking
+from measure_cruise_cutoffs import CruiseCutoffs
 from measure_curve import CurveLag, CurveSums
 from measure_delay import LearnedDelay
 from measure_lane_change import LaneChanges
@@ -28,5 +29,5 @@ from measure_swings import WheelSwings
 
 # SteeringLoss (2026-11-21, r2) is owner-facing: it sends one `steering_loss` record per loss of steering
 # while moving, with its evidence; it adds no summary fields.
-MEASURES = (SteeringTime, SteeringLimit, Braking, LaneChanges, LearnedDelay, SteeringLoss,
+MEASURES = (SteeringTime, SteeringLimit, Braking, LaneChanges, CruiseCutoffs, LearnedDelay, SteeringLoss,
             LaneSway, WheelSwings, LateralRms, CurveSums, CurveLag)

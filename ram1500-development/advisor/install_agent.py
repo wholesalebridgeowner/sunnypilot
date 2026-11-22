@@ -51,6 +51,7 @@ AGENT_PAYLOAD = (
     "journal.py",
     "measure_api.py",
     "measure_brake.py",
+    "measure_cruise_cutoffs.py",
     "measure_curve.py",
     "measure_delay.py",
     "measure_lane_change.py",

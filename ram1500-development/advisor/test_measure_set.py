@@ -22,6 +22,7 @@ FLAT_FIELDS = {
     "laneChange": {"lcStarts", "lcCompleted", "lcCancelled", "lcBlinkerOnly", "lcHandsOn", "lcTruncated"},
 }
 # The learned delay is owner-facing too. It sends one block, from the learner's first message of the drive on.
+FLAT_FIELDS["cruiseCutoffs"] = {"cruiseCutoffs"}  # window-level count map on observed carState pairs
 OWNER_BLOCKS = {"delay": {"valueS", "minS", "maxS", "status", "blocks"}}
 # Owner-facing measures that send event records only, never summary fields or a block (2026-11-21, r2).
 EVENT_ONLY = ("steeringLoss",)
@@ -104,7 +105,7 @@ class SummaryTests(unittest.TestCase):
     def test_the_measures_of_this_build_in_run_order(self):
         names = [m.name for m in measure_set.MEASURES]
         self.assertEqual(names, list(FLAT_FIELDS) + list(OWNER_BLOCKS) + list(EVENT_ONLY) + list(BLOCKS))
-        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 6 + [False] * 5)
+        self.assertEqual([m.owner_facing for m in measure_set.MEASURES], [True] * 7 + [False] * 5)
         self.assertEqual(Pipeline().measure_names, names)             # the owner-facing ones run first
         self.assertTrue(all(issubclass(m, Measure) for m in measure_set.MEASURES))
 
@@ -142,7 +143,7 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(set(out[1][name]), fields)
         self.assertNotIn("failed", out[1]["health"])
         # Blocks in the order the size cap takes them out last: lane, swings, ay, curve, lag.
-        self.assertEqual([m.name for m in measure_set.MEASURES][6:], ["lane", "swings", "ay", "curve", "lag"])
+        self.assertEqual([m.name for m in measure_set.MEASURES][7:], ["lane", "swings", "ay", "curve", "lag"])
 
     def test_without_the_delay_learner_there_is_no_delay_block(self):
         out = synth.summaries(synth.run(Pipeline(), road(1300)))

@@ -126,6 +126,7 @@ class Sample:
     alerts: frozenset | None = None           # alert names; None = no alert list for 5.0 s
     missing: tuple = ()                       # short names of the streams missing for this Sample
     control_epoch: int = 0                    # changes when continuity of latActive observations breaks
+    cruise_observation: tuple | None = None
     curvature_observation_ns: int | None = None  # original controlsState stamp for pre-lane-change context
 
 
@@ -244,7 +245,18 @@ class StreamJoiner:
         alerts = None if found[ALERT_STREAM] is None else self._alerts
         if alerts is None:
             found[ALERT_STREAM] = None        # a list that cannot be read is missing, never "no alert"
-        return Sample(
+        cruise = None
+        if not isinstance(car_state, _InvalidMeasurement) and _observed_bool(get(car_state, "canValid")) is True:
+            enabled = _observed_bool(get(car_state, "cruiseState", "enabled"))
+            gas = _observed_bool(get(car_state, "gasPressed"))
+            brake = _observed_bool(get(car_state, "brakePressed"))
+            if enabled is not None and gas is not None and brake is not None:
+                buttons = get(car_state, "buttonEvents")
+                button = any(str(get(b, "type")) in ("cancel", "mainCruise") and
+                             _true(get(b, "pressed")) for b in buttons) if buttons is not None else None
+                cruise = (enabled, _observed_bool(get(car_state, "cruiseState", "available")), gas, brake,
+                          None if isinstance(control, _InvalidMeasurement) else _observed_bool(get(control, "cruiseControl", "cancel")), button)
+        return Sample(cruise_observation=cruise,
             t=t_ns / 1e9, dt=dt, gap=gap, raw_dt=raw_dt, v_ego=v_ego,
             steering_angle_deg=number(get(car_state, "steeringAngleDeg")),
             steering_torque=number(get(car_state, "steeringTorque")) or 0.0,

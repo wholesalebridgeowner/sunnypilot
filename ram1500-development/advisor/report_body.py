@@ -11,7 +11,10 @@ CAUSE_WORDS = {"brake": "with brake pedal down", "gas": "with gas pedal down", "
                "driver": "with driver steering detected", "none": "without an identified signal"}
 WHO_WORDS = {"driver": "with brake pedal down", "cruise": "with cruise active and no pedal press",
              "other": "with no brake pedal press and cruise off for most of the episode"}
-MEASURE_NAMES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "lane", "swings", "ay", "curve", "lag"}
+CUTOFF_LABELS = {"gas": "gas pedal", "brake": "brake pedal", "bothPedals": "both pedals",
+                  "hostCancel": "Comma cancel", "button": "cruise switch", "unavailable": "cruise unavailable",
+                  "unresolved": "cause unresolved"}
+MEASURE_NAMES = {"steering", "limit", "brake", "laneChange", "delay", "steeringLoss", "cruiseCutoffs", "lane", "swings", "ay", "curve", "lag"}
 
 
 def _num(value):
@@ -129,6 +132,8 @@ def report_lines(drives: list, closing_line: str) -> list:
         details = ", ".join(f"{status} on {_drives(count)}" for count, status in statuses if count)
         lines.append(f"Comma blind-spot input at startup: {details}.")
 
+    cutoff_counts = Counter()
+    cutoff_windows = 0
     losses, changes, brakes = [], [], []
     warnings, old_changes, old_brakes = 0, 0, 0
     legacy_coverage = Counter()
@@ -137,6 +142,11 @@ def report_lines(drives: list, closing_line: str) -> list:
     measured = Counter()
     for d in drives:
         rows = _summaries(d)
+        for row in rows:
+            counts = row.get("cruiseCutoffs")
+            if isinstance(counts, dict) and counts.keys() <= CUTOFF_LABELS.keys() and all(_count(v) is not None for v in counts.values()):
+                cutoff_windows += 1
+                cutoff_counts.update(counts)
         gaps = _coverage(d, rows)
         ended = d.get("ended") is True or isinstance(d.get("end"), dict)
         events = {}
@@ -179,6 +189,11 @@ def report_lines(drives: list, closing_line: str) -> list:
             ended_partial += 1
         reasons.update(gaps)
 
+    if cutoff_windows:
+        details = ", ".join(f"{cutoff_counts[k]} {label}" for k, label in CUTOFF_LABELS.items() if cutoff_counts[k])
+        lines.append(f"Factory cruise cutoffs in {cutoff_windows} observed windows: {details or 'none recorded'}.")
+        if cutoff_counts["unresolved"] or cutoff_counts["unavailable"]:
+            lines.append("Truck cancel requests require the full CAN log to verify.")
     if warnings or (n and measured["warnings"] == n):
         lines.append(f"Steering-limit warning episodes recorded: {warnings}.")
     elif n and legacy_coverage["warnings"] == n:
