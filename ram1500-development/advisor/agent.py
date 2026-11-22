@@ -35,6 +35,7 @@ from pathlib import Path
 
 import applier as apply_lock
 from applier import Applier, VehicleState
+from dash_relay import DashboardRelay, MAX_AGE_NS as DASH_STREAMS
 from delay_probe import UNKNOWN, DelayProbe
 from device_params import (DeviceParams, base_actuator_delay_s, blind_spot_enabled, cache_delay_s, nnlc_match,
                            persisted_live_delay)
@@ -63,7 +64,8 @@ class Agent:
     def __init__(self, *, params, applier, uplink, socket_factory, decode, slot_check,
                  car_params_decode=None, car_params_sp_decode=None, live_delay_decode=None, delay_probe=None,
                  wall_clock=time.time, monotonic=time.monotonic, resource_probe=None,
-                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None, can_slot_check=None):
+                 subscribe_delay_s=SUBSCRIBE_DELAY_S, on_tick_error=None, can_decode=None, can_slot_check=None,
+                 dash_relay=None):
         self.params = params
         self.applier = applier
         self.uplink = uplink
@@ -80,6 +82,7 @@ class Agent:
         self.subscribe_delay_s = subscribe_delay_s
         self.on_tick_error = on_tick_error
         self.can_decode = can_decode    # raw `can` message -> (t_ns, frames); used only if parking_live is on
+        self.dash_relay = dash_relay
         self.boot_id = uuid.uuid4().hex[:12]
         self.seq = 0
         self.onroad = False
@@ -92,6 +95,8 @@ class Agent:
 
     def _clear_drive(self) -> None:
         """The state of one drive. Nothing of it crosses into the next."""
+        self.drive_relay = self.dash_relay
+        self.next_dash_send = 0.0
         self.drive_id = None
         self.onroad_since = None
         self.pipeline = None
@@ -229,6 +234,7 @@ class Agent:
     def _drain(self, now: float) -> None:
         """Empty every socket, decode the newest message of each stream, and hand the batch to the pipeline."""
         batch = {}
+        dash_samples = {} if self.drive_relay is not None and now >= self.next_dash_send else None
         car_state_valid = None
         car_state_unreadable = False
         for stream, sock in self.socks.items():
@@ -249,6 +255,8 @@ class Agent:
             # The device decoder also returns the event's validity; test decoders may return only two values.
             t_ns, msg = decoded[0], decoded[1]
             valid = decoded[2] if len(decoded) > 2 else None
+            if dash_samples is not None and stream in DASH_STREAMS and valid is True:
+                dash_samples[stream] = (t_ns, msg)
             batch[stream] = (t_ns, msg)
             if stream in ("carState", "carControl"):
                 self.latest_state[stream] = (now, msg)
@@ -258,6 +266,13 @@ class Agent:
             self._send(self.pipeline.ingest_tick(batch))
         if self.parking is not None:
             self._parking_tick(batch.get("carState"), car_state_valid, car_state_unreadable)
+        if dash_samples is not None:
+            self.next_dash_send = now + 0.5
+            try:
+                self.drive_relay.send(dash_samples, self.monotonic(), self.onroad_since)
+            except Exception:
+                # An unexpected optional display failure must not interrupt the advisor.
+                self.drive_relay = None
 
     def _parking_tick(self, car_state, valid, unreadable):
         parking = self.parking
@@ -405,6 +420,13 @@ def _round1(value):
     return None if value is None else round(value, 1)
 
 
+def message_decoder(messaging):
+    def decode(service, raw):
+        event = messaging.log_from_bytes(raw)
+        return event.logMonoTime, event_payload(event, service), bool(event.valid)
+    return decode
+
+
 def _resource_probe():
     rss_kib = 0
     try:
@@ -441,10 +463,6 @@ def main() -> None:  # pragma: no cover - runs on the Comma
     uplink = Uplink((home / "advisor.url").read_text().strip(), key)
     uplink.start()
 
-    def decode(service, raw):
-        event = messaging.log_from_bytes(raw)
-        return event.logMonoTime, event_payload(event, service), bool(event.valid)
-
     def slot_check(streams=STREAMS):
         return not device_telemetry.slot_problems(device_telemetry.msgq_reader_counts(streams))
 
@@ -462,9 +480,9 @@ def main() -> None:  # pragma: no cover - runs on the Comma
                 handle.write(f"{time.time():.0f} tick_error {type(error).__name__}\n")
 
     agent = Agent(params=params, applier=applier, uplink=uplink, socket_factory=messaging.sub_sock,
-                  decode=decode, slot_check=slot_check, delay_probe=DelayProbe().run,
+                  decode=message_decoder(messaging), slot_check=slot_check, delay_probe=DelayProbe().run,
                   resource_probe=_resource_probe, on_tick_error=log_error, can_decode=can_decode,
-                  can_slot_check=lambda: slot_check((parking_live.STREAM,)))
+                  can_slot_check=lambda: slot_check((parking_live.STREAM,)), dash_relay=DashboardRelay())
     agent.start()
     while True:
         time.sleep(agent.step())

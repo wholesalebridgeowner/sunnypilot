@@ -44,6 +44,7 @@ AGENT_PAYLOAD = (
     "agent.py",
     "applier.py",
     "approval.py",
+    "dash_relay.py",
     "delay_probe.py",
     "device_params.py",
     "gates.py",
