@@ -1,31 +1,49 @@
 diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
-index 9ead933..e46ad6d 100644
+index 9ead933..32f01bc 100644
 --- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
 +++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
-@@ -7,6 +7,8 @@
- 
+@@ -7,15 +7,40 @@
+
  #include "selfdrive/ui/sunnypilot/qt/onroad/hud.h"
- 
+
 +#include <cmath>
 +
++#include "common/timing.h"
++
  #include "selfdrive/ui/qt/util.h"
- 
- 
-@@ -16,6 +18,13 @@ void HudRendererSP::updateState(const UIState &s) {
+
+
++static bool freshCarStateSP(const UIState &s) {
++  const SubMaster &sm = *s.sm;
++  const uint64_t receivedAt = sm.rcv_time("carStateSP");
++  const uint64_t now = nanos_since_boot();
++  // Match the 100 Hz service's 100 ms receive timeout even when simulation leaves alive set.
++  return receivedAt != 0 && now >= receivedAt && now - receivedAt < 100'000'000ULL &&
++         sm.rcv_frame("carStateSP") >= s.scene.started_frame && sm.alive("carStateSP") && sm.valid("carStateSP") &&
++         sm["carStateSP"].which() == cereal::Event::CAR_STATE_S_P;
++}
++
+ HudRendererSP::HudRendererSP() {}
+
+ void HudRendererSP::updateState(const UIState &s) {
    HudRenderer::updateState(s);
- 
+
    const SubMaster &sm = *(s.sm);
 +  // RamPilot: speed limit the truck reports (carStateSP.speedLimit, m/s)
-+  const auto car_state_sp = sm["carStateSP"].getCarStateSP();
-+  const float limit_ms = car_state_sp.getSpeedLimit();
-+  speedLimitValid = sm.alive("carStateSP") && sm.valid("carStateSP") && car_state_sp.getSpeedLimitValid() &&
-+                    std::isfinite(limit_ms) && limit_ms > 0.f;
-+  speedLimit = limit_ms * (is_metric ? MS_TO_KPH : MS_TO_MPH);
++  const bool currentCarStateSP = freshCarStateSP(s);
++  speedLimitValid = false;
++  speedLimit = 0.f;
++  if (currentCarStateSP) {
++    const auto car_state_sp = sm["carStateSP"].getCarStateSP();
++    const float limit_ms = car_state_sp.getSpeedLimit();
++    speedLimitValid = car_state_sp.getSpeedLimitValid() && std::isfinite(limit_ms) && limit_ms > 0.f;
++    if (speedLimitValid) speedLimit = limit_ms * (is_metric ? MS_TO_KPH : MS_TO_MPH);
++  }
 +
    const bool cs_alive = sm.alive("controlsState");
    const auto cs = sm["controlsState"].getControlsState();
    const auto car_state = sm["carState"].getCarState();
-@@ -80,6 +89,11 @@ void HudRendererSP::updateState(const UIState &s) {
+@@ -80,6 +105,11 @@ void HudRendererSP::updateState(const UIState &s) {
  void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    HudRenderer::draw(p, surface_rect);
    if (!reversing) {
@@ -37,10 +55,10 @@ index 9ead933..e46ad6d 100644
      // Bottom Dev UI
      if (devUiInfo == 2) {
        QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
-@@ -97,6 +111,36 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+@@ -97,6 +127,36 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
    }
  }
- 
+
 +// RamPilot: US-style rectangular sign in mph, round red-ring sign in km/h, under the MAX box
 +void HudRendererSP::drawSpeedLimitSign(QPainter &p, const QRect &surface_rect) {
 +  p.save();
@@ -86,6 +104,6 @@ index 968789b..e49fbf7 100644
 +
 +  bool speedLimitValid = false;  // RamPilot: the truck reports a speed limit
 +  float speedLimit = 0;          // RamPilot: in display units (mph or km/h)
- 
+
    bool lead_status;
    float lead_d_rel;

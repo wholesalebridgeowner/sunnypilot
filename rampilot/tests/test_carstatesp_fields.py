@@ -30,8 +30,17 @@ class CarStateSPFieldTests(unittest.TestCase):
     for name, typ in py.items():
       self.assertEqual(kinds[typ], capnp[name][1], name)
 
-  def test_speed_limit_fields_present_in_order(self):
-    self.assertEqual(schema_fields(), {"speedLimit": (0, "Float32"), "speedLimitValid": (1, "Bool")})
+  def test_schema_ordinals_and_types(self):
+    self.assertEqual(schema_fields(), {
+      "speedLimit": (0, "Float32"), "speedLimitValid": (1, "Bool"), "dieselSupported": (2, "Bool"),
+      "dpfRegenActive": (3, "Bool"), "dpfRegenValid": (4, "Bool"),
+      "fuelRemainingUsGal": (5, "Float32"), "fuelRemainingUsGalValid": (6, "Bool"),
+      "avgFuelEconomyUsMpg": (7, "Float32"), "avgFuelEconomyUsMpgValid": (8, "Bool"),
+      "instantFuelEconomyUsMpg": (9, "Float32"), "instantFuelEconomyUsMpgValid": (10, "Bool"),
+      "idleFuelUsGalPerHour": (11, "Float32"), "idleFuelUsGalPerHourValid": (12, "Bool"),
+      "rangeMiles": (13, "Float32"), "rangeMilesValid": (14, "Bool"),
+      "defPercent": (15, "Float32"), "defPercentValid": (16, "Bool"),
+    })
 
 
 if __name__ == "__main__":

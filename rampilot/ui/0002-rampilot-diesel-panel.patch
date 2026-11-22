@@ -1,0 +1,112 @@
+diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
+index 32f01bc..67011d3 100644
+--- a/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
++++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.cc
+@@ -32,6 +32,7 @@ void HudRendererSP::updateState(const UIState &s) {
+   const SubMaster &sm = *(s.sm);
+   // RamPilot: speed limit the truck reports (carStateSP.speedLimit, m/s)
+   const bool currentCarStateSP = freshCarStateSP(s);
++  updateDiesel(s, currentCarStateSP);
+   speedLimitValid = false;
+   speedLimit = 0.f;
+   if (currentCarStateSP) {
+@@ -110,6 +111,8 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+       drawSpeedLimitSign(p, surface_rect);
+     }
+
++    drawDiesel(p, surface_rect);
++
+     // Bottom Dev UI
+     if (devUiInfo == 2) {
+       QRect rect_bottom(surface_rect.left(), surface_rect.bottom() - 60, surface_rect.width(), 61);
+@@ -127,6 +130,63 @@ void HudRendererSP::draw(QPainter &p, const QRect &surface_rect) {
+   }
+ }
+
++void HudRendererSP::updateDiesel(const UIState &s, bool current) {
++  dieselRows.clear();
++  if (s.scene.started_frame != dieselStartedFrame) {
++    dieselStartedFrame = s.scene.started_frame;
++    dieselVehicle = false;
++  }
++  if (!current) {
++    if (dieselVehicle) dieselRows.push_back({tr("DPF regen"), tr("Unknown")});
++    return;
++  }
++  const auto state = (*s.sm)["carStateSP"].getCarStateSP();
++  dieselVehicle = state.getDieselSupported();
++  if (!dieselVehicle) return;
++
++  QString regen = tr("Unknown");
++  if (state.getDpfRegenValid()) {
++    regen = state.getDpfRegenActive() ? tr("Active") : tr("Inactive");
++  }
++  dieselRows.push_back({tr("DPF regen"), regen});
++  auto add = [this](const QString &label, bool valid, float value, int decimals, const QString &unit) {
++    if (valid && std::isfinite(value) && value >= 0.f) {
++      dieselRows.push_back({label, QString::number(value, 'f', decimals) + " " + unit});
++    }
++  };
++  add(tr("Fuel est."), state.getFuelRemainingUsGalValid(), state.getFuelRemainingUsGal(), 1, tr("US gal"));
++  add(tr("Average"), state.getAvgFuelEconomyUsMpgValid(), state.getAvgFuelEconomyUsMpg(), 1, tr("MPG"));
++  add(tr("Current"), state.getInstantFuelEconomyUsMpgValid(), state.getInstantFuelEconomyUsMpg(), 1, tr("MPG"));
++  add(tr("Idle fuel"), state.getIdleFuelUsGalPerHourValid(), state.getIdleFuelUsGalPerHour(), 2, tr("gal/h"));
++  add(tr("Range"), state.getRangeMilesValid(), state.getRangeMiles(), 0, tr("mi"));
++  add(tr("DEF"), state.getDefPercentValid(), state.getDefPercent(), 0, tr("%"));
++}
++
++void HudRendererSP::drawDiesel(QPainter &p, const QRect &surface_rect) {
++  if (dieselRows.isEmpty()) return;
++  // The speed-limit sign ends at y=477 in its taller US layout. Keep the bottom overlay clear too.
++  constexpr int top = 496, left = 60, width = 310, inset = 12, rowHeight = 35;
++  const QRect box(left, top, width, 2 * inset + rowHeight * dieselRows.size());
++  if (!surface_rect.adjusted(0, 0, 0, -100).contains(box)) return;
++  p.save();
++  p.setPen(Qt::NoPen);
++  p.setBrush(QColor(0, 0, 0, 175));
++  p.drawRoundedRect(box, 12, 12);
++  p.setFont(InterFont(24, QFont::DemiBold));
++  const int valueWidth = 157;
++  int y = top + inset;
++  for (const auto &row : dieselRows) {
++    const QRect label(left + inset, y, width - 2 * inset - valueWidth - 8, rowHeight);
++    const QRect value(box.right() - inset - valueWidth + 1, y, valueWidth, rowHeight);
++    p.setPen(QColor(205, 209, 214));
++    p.drawText(label, Qt::AlignLeft | Qt::AlignVCenter, p.fontMetrics().elidedText(row.first, Qt::ElideRight, label.width()));
++    p.setPen(Qt::white);
++    p.drawText(value, Qt::AlignRight | Qt::AlignVCenter, p.fontMetrics().elidedText(row.second, Qt::ElideRight, value.width()));
++    y += rowHeight;
++  }
++  p.restore();
++}
++
+ // RamPilot: US-style rectangular sign in mph, round red-ring sign in km/h, under the MAX box
+ void HudRendererSP::drawSpeedLimitSign(QPainter &p, const QRect &surface_rect) {
+   p.save();
+diff --git a/selfdrive/ui/sunnypilot/qt/onroad/hud.h b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
+index e49fbf7..3a1d62d 100644
+--- a/selfdrive/ui/sunnypilot/qt/onroad/hud.h
++++ b/selfdrive/ui/sunnypilot/qt/onroad/hud.h
+@@ -7,6 +7,9 @@
+
+ #pragma once
+
++#include <QPair>
++#include <QVector>
++
+ #include "selfdrive/ui/qt/onroad/hud.h"
+ #include "selfdrive/ui/sunnypilot/qt/onroad/developer_ui/developer_ui.h"
+
+@@ -25,6 +28,12 @@ private:
+   int drawRightDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
+   int drawBottomDevUIElement(QPainter &p, int x, int y, const QString &value, const QString &label, const QString &units, QColor &color);
+   void drawBottomDevUI(QPainter &p, int x, int y);
++  void updateDiesel(const UIState &s, bool current);
++  void drawDiesel(QPainter &p, const QRect &surface_rect);
++  QVector<QPair<QString, QString>> dieselRows;
++  bool dieselVehicle = false;
++  uint64_t dieselStartedFrame = 0;
++
+   void drawSpeedLimitSign(QPainter &p, const QRect &surface_rect);  // RamPilot
+
+   bool speedLimitValid = false;  // RamPilot: the truck reports a speed limit

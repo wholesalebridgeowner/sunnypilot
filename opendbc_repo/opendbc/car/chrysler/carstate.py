@@ -1,5 +1,6 @@
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
+from opendbc.car.chrysler.ram_dt_diesel import DieselReadouts, supports_diesel
 from opendbc.car.chrysler.values import DBC, STEER_THRESHOLD, RAM_CARS, RAM_DT
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
@@ -32,31 +33,41 @@ class CarState(CarStateBase, MadsCarState):
 
     self.distance_button = 0
     self.limit_sample_ns: int | None = None
-    self.limit_clock_ns = 0
+    self.display_clock_ns = 0
+    self.display_now_ns: int | None = None
     self.limit_mps = 0.0
     self.limit_fresh = False
+    self.diesel = DieselReadouts() if supports_diesel(CP) else None
     if CP.carFingerprint in RAM_DT:
-      self.observe_can = self.observe_speed_limit
+      self.observe_can = self.observe_display_data
 
-  def observe_speed_limit(self, packets, now_nanos, packet_valid):
+  def observe_display_data(self, packets, now_nanos, packet_valid):
     # In replay, CAN logMonoTime supplies the publication clock. An empty replay
     # tick has no recording time; withhold until a timestamp is available again.
     now = now_nanos if now_nanos is not None else max((stamp for stamp, _ in packets), default=None)
     self.limit_fresh = False
-    if now is None or now < self.limit_clock_ns:
+    self.display_now_ns = None
+    if now is None or now < self.display_clock_ns:
       return
-    self.limit_clock_ns = now
+    self.display_now_ns = self.display_clock_ns = now
+    diesel_ids = self.diesel.addresses if self.diesel is not None else ()
     for i, (stamp, frames) in enumerate(packets):
-      if stamp < 0 or stamp > now or (self.limit_sample_ns is not None and stamp < self.limit_sample_ns):
+      if stamp < 0 or stamp > now:
         continue
       valid = None
       for address, data, bus in frames:
-        if address == 0x265 and bus == 0:
-          if valid is None:
-            valid = packet_valid is None or packet_valid(i)
+        if bus != 0 or (address != 0x265 and address not in diesel_ids):
+          continue
+        if valid is None and packet_valid is not None:
+          valid = packet_valid(i)
+        if address == 0x265:
+          if self.limit_sample_ns is not None and stamp < self.limit_sample_ns:
+            continue
           self.limit_sample_ns = stamp
-          mph = SPEED_LIMIT_MPH.get(data[5], 0) if valid and len(data) == 8 else 0
+          mph = SPEED_LIMIT_MPH.get(data[5], 0) if (packet_valid is None or valid) and len(data) == 8 else 0
           self.limit_mps = mph * CV.MPH_TO_MS
+        else:
+          self.diesel.observe(address, data, stamp, bool(valid))
     self.limit_fresh = self.limit_sample_ns is not None and now - self.limit_sample_ns <= SPEED_LIMIT_FRESH_NS
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
@@ -68,6 +79,8 @@ class CarState(CarStateBase, MadsCarState):
     if self.limit_fresh and self.limit_mps > 0:
       ret_sp.speedLimit = self.limit_mps
       ret_sp.speedLimitValid = True
+    if self.diesel is not None:
+      self.diesel.publish(ret_sp, self.display_now_ns)
 
     prev_distance_button = self.distance_button
     self.distance_button = cp.vl["CRUISE_BUTTONS"]["ACC_Distance_Dec"]

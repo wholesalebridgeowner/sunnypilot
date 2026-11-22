@@ -265,6 +265,22 @@ struct BackupManagerSP @0xf98d843bfd7004a3 {
 struct CarStateSP @0xb86e6369214c01c8 {
   speedLimit @0 :Float32;       # RamPilot: m/s, the limit the truck reports
   speedLimitValid @1 :Bool;     # RamPilot
+  # Diesel display values use US gallons and miles. A false validity flag hides its value.
+  dieselSupported @2 :Bool;
+  dpfRegenActive @3 :Bool;
+  dpfRegenValid @4 :Bool;
+  fuelRemainingUsGal @5 :Float32;
+  fuelRemainingUsGalValid @6 :Bool;
+  avgFuelEconomyUsMpg @7 :Float32;
+  avgFuelEconomyUsMpgValid @8 :Bool;
+  instantFuelEconomyUsMpg @9 :Float32;
+  instantFuelEconomyUsMpgValid @10 :Bool;
+  idleFuelUsGalPerHour @11 :Float32;
+  idleFuelUsGalPerHourValid @12 :Bool;
+  rangeMiles @13 :Float32;
+  rangeMilesValid @14 :Bool;
+  defPercent @15 :Float32;
+  defPercentValid @16 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

@@ -144,3 +144,18 @@ class CarControlSP:
 class CarStateSP:
   speedLimit: float = auto_field()       # RamPilot: m/s, the limit the truck reports
   speedLimitValid: bool = auto_field()   # RamPilot
+  dieselSupported: bool = auto_field()
+  dpfRegenActive: bool = auto_field()
+  dpfRegenValid: bool = auto_field()
+  fuelRemainingUsGal: float = auto_field()
+  fuelRemainingUsGalValid: bool = auto_field()
+  avgFuelEconomyUsMpg: float = auto_field()
+  avgFuelEconomyUsMpgValid: bool = auto_field()
+  instantFuelEconomyUsMpg: float = auto_field()
+  instantFuelEconomyUsMpgValid: bool = auto_field()
+  idleFuelUsGalPerHour: float = auto_field()
+  idleFuelUsGalPerHourValid: bool = auto_field()
+  rangeMiles: float = auto_field()
+  rangeMilesValid: bool = auto_field()
+  defPercent: float = auto_field()
+  defPercentValid: bool = auto_field()

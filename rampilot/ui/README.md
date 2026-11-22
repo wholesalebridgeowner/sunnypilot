@@ -2,6 +2,12 @@
 
 The comma three runs the compiled Qt program `selfdrive/ui/ui`. The builder starts from sunnypilot source commit `737a6c4236e843034680c951005b38d15815363f` for the installed `1f7233cb` build. The `0001-rampilot-speed-limit-sign.patch` patch draws a speed-limit sign under MAX when `carStateSP.speedLimitValid` is set and the truck is outside Reverse. The sign uses the value in `carStateSP.speedLimit` (m/s).
 
+## EcoDiesel readouts
+
+The second patch draws a compact panel below the speed-limit sign for the recorded Ram DT EcoDiesel engine calibration. The only default row on a recognized truck is **DPF regen · Unknown**. A valid fresh reading and its independent calibration switch are required for each numeric row. The underlying units are US gallons, US MPG, gallons per hour at idle, miles of range and percent DEF. The panel omits soot load. A lost or invalid message clears the numbers and returns regen to Unknown.
+
+The flag in the archived drives is a candidate. The 2021 Ram 1500 owner's manual describes conditional cluster messages for regeneration in progress and completion on pages 98–99. A timestamped factory message or a documented independent PCM status can validate the interpretation. The cluster can stay silent during a routine drive, and a second similar CAN trace alone cannot establish the flag's meaning. [Ram owner's manual](https://vehicleinfo.mopar.com/assets/publications/en-us/Ram/2021/1500_DT/5633293_21_DT_OM_EN_USC_DIGITAL_E4.pdf)
+
 ## Building
 
 With approval for a parked build and the intended RamPilot cereal schemas installed, run `bash build_ui_on_device.sh` as the comma user. The builder requires a readable `IsOnroad` containing the single byte `0` and rechecks it before compilation and staging. It needs Git, SCons, clang++, qmake for the installed Qt version, GNU utilities, flock, access to the pinned source and submodules, and at least 6,000 MiB free on the build filesystem.
