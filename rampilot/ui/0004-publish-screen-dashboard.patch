@@ -1,0 +1,192 @@
+diff --git a/selfdrive/ui/sunnypilot/SConscript b/selfdrive/ui/sunnypilot/SConscript
+index 807bf02..49b7c47 100644
+--- a/selfdrive/ui/sunnypilot/SConscript
++++ b/selfdrive/ui/sunnypilot/SConscript
+@@ -16,6 +16,7 @@ qt_util = [
+
+ qt_src = [
+   "sunnypilot/ui.cc",
++  "sunnypilot/screen_dashboard.cc",
+   "sunnypilot/qt/api.cc",
+   "sunnypilot/qt/sidebar.cc",
+   "sunnypilot/qt/window.cc",
+diff --git a/selfdrive/ui/sunnypilot/screen_dashboard.cc b/selfdrive/ui/sunnypilot/screen_dashboard.cc
+new file mode 100644
+index 0000000..1c57dc1
+--- /dev/null
++++ b/selfdrive/ui/sunnypilot/screen_dashboard.cc
+@@ -0,0 +1,141 @@
++#include "selfdrive/ui/sunnypilot/screen_dashboard.h"
++
++#ifdef __linux__
++#include <cmath>
++#include <cstdio>
++#include <fcntl.h>
++#include <string>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++
++#include "cereal/messaging/messaging.h"
++#include "common/timing.h"
++#include "common/util.h"
++
++namespace {
++
++class ScreenEndpoint {
++public:
++  ~ScreenEndpoint() {
++    if (socket_fd >= 0) close(socket_fd);
++    if (peer_fd >= 0) close(peer_fd);
++  }
++
++  bool ready() {
++    struct stat dir_stat{}, path_stat{}, cached{};
++    if (lstat(directory.c_str(), &dir_stat) || !private_directory(dir_stat) ||
++        lstat(path.c_str(), &path_stat) || !owned_socket(path_stat)) return false;
++    if (peer_fd >= 0 && !fstat(peer_fd, &cached) &&
++        cached.st_dev == path_stat.st_dev && cached.st_ino == path_stat.st_ino) return true;
++
++    // Pin both lookups. A replacement after validation cannot redirect this send.
++    unique_fd dir(open(directory.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
++    if (dir < 0 || fstat(dir, &dir_stat) || !private_directory(dir_stat)) return false;
++    int next_peer = openat(dir, "screen.sock", O_PATH | O_NOFOLLOW | O_CLOEXEC);
++    if (next_peer < 0) return false;
++    if (fstat(next_peer, &path_stat) || !owned_socket(path_stat)) {
++      close(next_peer);
++      return false;
++    }
++    if (socket_fd < 0) socket_fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
++    if (socket_fd < 0) {
++      close(next_peer);
++      return false;
++    }
++    if (peer_fd >= 0) close(peer_fd);
++    peer_fd = next_peer;
++    address.sun_family = AF_UNIX;
++    std::snprintf(address.sun_path, sizeof(address.sun_path), "/proc/self/fd/%d", peer_fd);
++    return true;
++  }
++
++  void send(const QByteArray &data) const {
++    sendto(socket_fd, data.constData(), data.size(), MSG_DONTWAIT | MSG_NOSIGNAL,
++           reinterpret_cast<const sockaddr *>(&address), sizeof(address));
++  }
++
++private:
++  bool private_directory(const struct stat &st) const {
++    return S_ISDIR(st.st_mode) && st.st_uid == uid && (st.st_mode & 0777) == 0700;
++  }
++
++  bool owned_socket(const struct stat &st) const {
++    return S_ISSOCK(st.st_mode) && st.st_uid == uid;
++  }
++
++  const uid_t uid = geteuid();
++  const std::string directory = "/dev/shm/rampilot-dash-" + std::to_string(uid);
++  const std::string path = directory + "/screen.sock";
++  int socket_fd = -1;
++  int peer_fd = -1;
++  sockaddr_un address{};
++};
++
++qint64 micros(uint64_t ns) {
++  return static_cast<qint64>(ns / 1000);
++}
++
++bool current(const SubMaster &sm, const char *name, cereal::Event::Which type, uint64_t now, uint64_t max_age) {
++  if (!sm.alive(name) || !sm.valid(name) || !sm.rcv_time(name)) return false;
++  auto event = sm[name];
++  const uint64_t stamp = event.getLogMonoTime();
++  return event.which() == type && stamp > 0 && stamp <= now && now - stamp < max_age;
++}
++
++QJsonArray carStateRow(cereal::Event::Reader event) {
++  const auto cs = event.getCarStateSP();
++  QJsonValue limit, regen;
++  QJsonObject diesel;
++  if (cs.getSpeedLimitValid() && std::isfinite(cs.getSpeedLimit()) && cs.getSpeedLimit() > 0) {
++    limit = cs.getSpeedLimit();
++  }
++  if (cs.getDieselSupported()) {
++    if (cs.getDpfRegenValid()) regen = cs.getDpfRegenActive();
++    auto add = [&diesel](const char *key, bool valid, float value) {
++      if (valid && std::isfinite(value) && value >= 0) diesel.insert(key, value);
++    };
++    add("fuel_us_gal", cs.getFuelRemainingUsGalValid(), cs.getFuelRemainingUsGal());
++    add("average_mpg", cs.getAvgFuelEconomyUsMpgValid(), cs.getAvgFuelEconomyUsMpg());
++    add("instant_mpg", cs.getInstantFuelEconomyUsMpgValid(), cs.getInstantFuelEconomyUsMpg());
++    add("idle_gph", cs.getIdleFuelUsGalPerHourValid(), cs.getIdleFuelUsGalPerHour());
++    add("range_mi", cs.getRangeMilesValid(), cs.getRangeMiles());
++    add("def_pct", cs.getDefPercentValid(), cs.getDefPercent());
++  }
++  return {micros(event.getLogMonoTime()), limit, regen, diesel};
++}
++
++}  // namespace
++
++void publishScreenDashboard(const SubMaster &sm) {
++  static ScreenEndpoint endpoint;
++  static uint64_t next_send = 0;
++  const uint64_t now = nanos_monotonic();  // The three Python publishers timestamp on CLOCK_MONOTONIC.
++  if (now < next_send) return;
++  next_send = now + 500'000'000ULL;
++  if (!endpoint.ready()) return;
++
++  QJsonObject fields;
++  if (current(sm, "deviceState", cereal::Event::DEVICE_STATE, now, 1'500'000'000ULL)) {
++    auto event = sm["deviceState"];
++    const auto device = event.getDeviceState();
++    fields.insert("deviceState", QJsonArray{micros(event.getLogMonoTime()), device.getStarted(), micros(device.getStartedMonoTime())});
++  }
++  if (current(sm, "carParams", cereal::Event::CAR_PARAMS, now, 75'000'000'000ULL)) {
++    auto event = sm["carParams"];
++    fields.insert("carParams", QJsonArray{micros(event.getLogMonoTime()), event.getCarParams().getEnableBsm()});
++  }
++  if (current(sm, "carStateSP", cereal::Event::CAR_STATE_S_P, now, 100'000'000ULL)) {
++    fields.insert("carStateSP", carStateRow(sm["carStateSP"]));
++  }
++  endpoint.send(QJsonDocument(QJsonObject{{"v", 1}, {"source", "screen"}, {"at_us", micros(now)}, {"fields", fields}})
++                    .toJson(QJsonDocument::Compact));
++}
++#else
++void publishScreenDashboard(const SubMaster &) {}
++#endif
+diff --git a/selfdrive/ui/sunnypilot/screen_dashboard.h b/selfdrive/ui/sunnypilot/screen_dashboard.h
+new file mode 100644
+index 0000000..7254037
+--- /dev/null
++++ b/selfdrive/ui/sunnypilot/screen_dashboard.h
+@@ -0,0 +1,6 @@
++#pragma once
++
++class SubMaster;
++
++// Best-effort display telemetry from the screen's existing subscriptions.
++void publishScreenDashboard(const SubMaster &sm);
+diff --git a/selfdrive/ui/sunnypilot/ui.cc b/selfdrive/ui/sunnypilot/ui.cc
+index 83b0d54..0cee1cd 100644
+--- a/selfdrive/ui/sunnypilot/ui.cc
++++ b/selfdrive/ui/sunnypilot/ui.cc
+@@ -8,6 +8,7 @@
+ #include "selfdrive/ui/sunnypilot/ui.h"
+
+ #include "common/watchdog.h"
++#include "selfdrive/ui/sunnypilot/screen_dashboard.h"
+
+ void UIStateSP::updateStatus() {
+   UIState::updateStatus();
+@@ -37,7 +38,8 @@ UIStateSP::UIStateSP(QObject *parent) : UIState(parent, {
+ // This method overrides completely the update method from the parent class intentionally.
+ void UIStateSP::update() {
+   update_sockets(this);
++  publishScreenDashboard(*sm);
+   update_state(this);
+   updateStatus();
+
+   if (sm->frame % UI_FREQ == 0) {

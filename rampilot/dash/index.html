@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RamPilot · Drive display</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0c1115; color: #f1f4f6; font-family: Roboto, "Segoe UI", Arial, sans-serif; font-variant-numeric: tabular-nums; }
+    [hidden] { display: none !important; }
+    .display { max-width: 1400px; margin: auto; padding: 0 3.5vw 18px; }
+    header { height: 62px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #364148; }
+    h1 { display: flex; align-items: center; margin: 0; font-size: 24px; font-weight: 680; letter-spacing: -.7px; }
+    .mark { display: inline-block; width: 29px; height: 23px; margin-right: 12px; position: relative; overflow: hidden; }
+    .mark::before, .mark::after { content: ""; position: absolute; background: #64dac1; width: 5px; height: 28px; transform: rotate(24deg); left: 6px; top: -2px; }
+    .mark::after { left: 19px; height: 17px; top: 9px; }
+    .connection { display: flex; align-items: center; font-size: 15px; font-weight: 650; color: #b6c2cb; }
+    .connection::before { content: ""; width: 9px; height: 9px; margin-right: 8px; background: currentColor; border-radius: 50%; }
+    .connection.live, .value.good { color: #75e2c9; }
+    .connection.stale, .value.caution { color: #ffd084; }
+    h2, p, dl, dd { margin: 0; }
+    .layout { display: grid; grid-template-columns: minmax(0,1.14fr) minmax(0,1fr); gap: 3.8vw; margin-top: 22px; }
+    .speed { min-width: 0; padding-right: 3.8vw; border-right: 1px solid #364148; }
+    h2 { font-size: 16px; font-weight: 620; color: #bcc8ce; }
+    .readout { display: flex; align-items: baseline; padding: 4px 0 12px; }
+    #speed { font-size: 112px; line-height: 1; font-weight: 560; letter-spacing: -.075em; }
+    .unit { color: #aebbc1; font-size: 25px; margin-left: 13px; }
+    .speed-pair { display: grid; grid-template-columns: 1fr 1fr; background: #171f24; border: 1px solid #303b42; border-radius: 12px; }
+    .metric { padding: 13px 14px 14px; min-width: 0; }
+    .metric + .metric { border-left: 1px solid #344047; }
+    .metric dt { font-size: 15px; color: #bfccd3; font-weight: 500; margin-bottom: 6px; }
+    .metric dd { display: flex; align-items: baseline; font-size: 35px; font-weight: 620; line-height: 1; letter-spacing: -.04em; }
+    .metric dd small { font-size: 15px; font-weight: 500; color: #b2c0c8; margin-left: 5px; letter-spacing: 0; }
+    .right { min-width: 0; }
+    .right h2, .diesel h2 { color: #75e2c9; font-size: 14px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+    .rows { margin-top: 5px; }
+    .row { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 0; border-bottom: 1px solid #29343a; }
+    .row:last-child { border-bottom: 0; }
+    .row dt, .diesel dt { color: #bdc9d0; font-size: 16px; }
+    .value, .diesel dd { font-size: 20px; font-weight: 620; text-align: right; margin-left: 10px; }
+    .muted { color: #a9b7bf; }
+    .diesel { margin-top: 20px; border-top: 1px solid #364148; padding-top: 14px; }
+    .diesel dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(165px,1fr)); gap: 8px 20px; margin-top: 10px; }
+    .diesel dl.one { display: flex; }
+    .diesel dl.one .reading { width: auto; }
+    .reading { display: flex; align-items: baseline; justify-content: space-between; border-left: 2px solid #54646e; padding-left: 9px; }
+    .diesel dt { font-size: 15px; }
+    .diesel dd { font-size: 17px; }
+    .setup { margin: 11vh auto; max-width: 550px; }
+    .setup h2 { font-size: 28px; color: #f1f4f6; }
+    .setup p { margin-top: 12px; font-size: 19px; line-height: 1.5; color: #b8c6ce; }
+    @media (min-height: 520px) and (min-width: 800px) {
+      header { height: 72px; }
+      .layout { margin-top: 28px; }
+      #speed { font-size: 128px; }
+      .row { padding: 12px 0; }
+      .metric { padding: 17px; }
+      .diesel { margin-top: 26px; padding-top: 18px; }
+    }
+    @media (max-height: 420px) and (min-width: 540px) {
+      .display { padding-bottom: 6px; }
+      header { height: 42px; }
+      .layout { margin-top: 12px; }
+      h1 { font-size: 22px; }
+      #speed { font-size: 70px; }
+      .readout { padding-bottom: 8px; }
+      .metric { padding: 8px 10px; }
+      .metric dd { font-size: 29px; }
+      .row { padding: 5px 0; }
+      .diesel { margin-top: 8px; padding-top: 6px; }
+      .diesel dl { margin-top: 5px; row-gap: 4px; }
+    }
+    @media (max-width: 650px) {
+      .display { padding-left: 14px; padding-right: 14px; }
+      .layout { gap: 14px; }
+      .speed { padding-right: 14px; }
+      .value { font-size: 17px; }
+      .row dt { font-size: 15px; }
+      .metric dt { font-size: 14px; }
+    }
+    @media (max-width: 539px) {
+      .layout { grid-template-columns: 1fr; }
+      .speed { border-right: 0; padding-right: 0; }
+      #speed { font-size: 80px; }
+      .row { padding: 6px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="display">
+    <header>
+      <h1><span class="mark" aria-hidden="true"></span>RamPilot</h1>
+      <span class="connection" id="connection" role="status">Connecting</span>
+    </header>
+    <div class="setup" id="setup" hidden>
+      <h2>Pair this display</h2>
+      <p>While parked, open the private pairing link for this Comma in this browser.</p>
+    </div>
+    <div id="dashboard">
+      <div class="layout">
+        <section class="speed" aria-labelledby="speed-label">
+          <h2 id="speed-label">Vehicle speed</h2>
+          <p class="readout"><span id="speed">—</span><span class="unit">mph</span></p>
+          <dl class="speed-pair">
+            <div class="metric"><dt>Speed limit</dt><dd><span id="limit">—</span><small>mph</small></dd></div>
+            <div class="metric"><dt>Cruise set</dt><dd><span id="cruise">—</span><small>mph</small></dd></div>
+          </dl>
+        </section>
+        <section class="right" aria-labelledby="assist-label">
+          <h2 id="assist-label">Driver assistance</h2>
+          <dl class="rows">
+            <div class="row"><dt>Steering assist</dt><dd class="value" id="steering">Unknown</dd></div>
+            <div class="row"><dt>Steering saturation</dt><dd class="value" id="limited">Unknown</dd></div>
+            <div class="row"><dt>Blind-spot feed at startup</dt><dd class="value" id="blindspot">Unknown</dd></div>
+            <div class="row"><dt>Lane change</dt><dd class="value" id="lane">Unknown</dd></div>
+          </dl>
+        </section>
+      </div>
+      <section class="diesel" aria-labelledby="diesel-label">
+        <h2 id="diesel-label">Diesel</h2>
+        <dl id="diesel-readings" class="one">
+          <div class="reading"><dt>DPF regen</dt><dd id="regen" class="muted">Unknown</dd></div>
+        </dl>
+      </section>
+    </div>
+  </main>
+  <script>
+  (function () {
+    'use strict';
+    var el = function (id) { return document.getElementById(id); };
+    var socket = null, request = null, pollTimer, watchTimer;
+    var polling = false, stopped = false;
+    var lastReceived = null, openedAt = performance.now();
+    var fields = [
+      ['fuel_us_gal', 'Fuel est.', 'US gal', 1], ['average_mpg', 'Average', 'MPG', 1],
+      ['instant_mpg', 'Current', 'MPG', 1], ['idle_gph', 'Idle fuel', 'gal/h', 2],
+      ['range_mi', 'Range', 'mi', 0], ['def_pct', 'DEF', '%', 0]
+    ];
+    var laneNames = { off: 'Off', preLaneChange: 'Preparing', laneChangeStarting: 'Starting', laneChangeFinishing: 'Finishing' };
+    var storageKey = 'rampilot.dash.token';
+    var token = new URLSearchParams(location.hash.slice(1)).get('token');
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    window.addEventListener('hashchange', function () {
+      if (new URLSearchParams(location.hash.slice(1)).has('token')) location.reload();
+    });
+    try {
+      if (token) sessionStorage.setItem(storageKey, token);
+      else token = sessionStorage.getItem(storageKey);
+    } catch (err) { /* In-memory pairing is sufficient for this tab. */ }
+
+    fields.forEach(function (field) {
+      var row = document.createElement('div'), label = document.createElement('dt'), value = document.createElement('dd');
+      row.className = 'reading'; row.id = 'row-' + field[0]; row.hidden = true;
+      label.textContent = field[1]; value.id = 'field-' + field[0];
+      row.appendChild(label); row.appendChild(value); el('diesel-readings').appendChild(row);
+    });
+
+    function text(id, value) {
+      if (el(id).textContent !== value) el(id).textContent = value;
+    }
+    function connection(value, style) {
+      text('connection', value);
+      el('connection').className = 'connection ' + (style || '');
+    }
+    function validNumber(value) { return typeof value === 'number' && isFinite(value) && value >= 0; }
+    function speed(id, value) { text(id, validNumber(value) ? String(Math.round(value)) : '—'); }
+    function indicator(id, value, yes, no, yesClass) {
+      text(id, value === true ? yes : value === false ? no : 'Unknown');
+      el(id).className = 'value ' + (value === true ? yesClass : value === false ? '' : 'muted');
+    }
+    function render(data, status) {
+      connection(status, status === 'Live' ? 'live' : 'stale');
+      speed('speed', data.speed_mph); speed('limit', data.speed_limit_mph); speed('cruise', data.set_speed_mph);
+      indicator('steering', data.steering_active, 'Active', 'Inactive', 'good');
+      indicator('limited', data.steering_limited, 'Flagged', 'Clear', 'caution');
+      indicator('blindspot', data.blindspot_available, 'Enabled', 'Unavailable', '');
+      text('lane', Object.prototype.hasOwnProperty.call(laneNames, data.lane_change) ? laneNames[data.lane_change] : 'Unknown');
+      var regen = data.regen === 'Active' || data.regen === 'Inactive' ? data.regen : 'Unknown';
+      text('regen', regen); el('regen').className = regen === 'Unknown' ? 'muted' : '';
+      var readings = data.diesel || {}, count = 0;
+      fields.forEach(function (field) {
+        var value = readings[field[0]], show = validNumber(value);
+        el('row-' + field[0]).hidden = !show;
+        if (show) { text('field-' + field[0], value.toFixed(field[3]) + ' ' + field[2]); count++; }
+        else text('field-' + field[0], '');
+      });
+      el('diesel-readings').className = count ? '' : 'one';
+    }
+    function accept(raw) {
+      if (stopped) return;
+      var data;
+      try { data = JSON.parse(raw); } catch (err) { return; }
+      if (!data || typeof data.stale !== 'boolean') return;
+      lastReceived = performance.now();
+      if (data.stale) render({}, 'Stale');
+      else render(data, 'Live');
+    }
+    function stop() {
+      stopped = true;
+      clearTimeout(pollTimer); clearInterval(watchTimer);
+      if (request) request.abort();
+      if (socket) { socket.onclose = null; socket.onerror = null; socket.close(); }
+    }
+    function pair() {
+      stop();
+      try { sessionStorage.removeItem(storageKey); } catch (err) { /* Storage is optional. */ }
+      el('setup').hidden = false; el('dashboard').hidden = true;
+      connection('Pairing required', '');
+    }
+    function poll() {
+      if (stopped) return;
+      request = new XMLHttpRequest();
+      request.open('GET', '/api/state');
+      request.setRequestHeader('Authorization', 'Bearer ' + token);
+      request.timeout = 1600;
+      request.onload = function () {
+        if (this.status === 401 || this.status === 403) { pair(); return; }
+        if (this.status === 200) accept(this.responseText);
+      };
+      request.onloadend = function () {
+        request = null;
+        if (!stopped) pollTimer = setTimeout(poll, 500);
+      };
+      request.send();
+    }
+    function fallback() {
+      if (stopped || polling) return;
+      polling = true;
+      if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
+      poll();
+    }
+    if (!token || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) { pair(); return; }
+    // Android can suspend a background tab. Discard its connection and read a
+    // fresh sample on return instead of displaying queued frames from before sleep.
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) { stop(); render({}, 'Stale'); }
+      else if (stopped) location.reload();
+    });
+    watchTimer = setInterval(function () {
+      var elapsed = performance.now() - (lastReceived === null ? openedAt : lastReceived);
+      if (elapsed >= 2000) { render({}, 'Stale'); fallback(); }
+    }, 250);
+    try {
+      socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws',
+                             ['rampilot.v1', 'rp.' + token]);
+      socket.onmessage = function (event) { accept(event.data); };
+      socket.onerror = fallback; socket.onclose = fallback;
+    } catch (err) { fallback(); }
+    window.addEventListener('pagehide', stop);
+    window.addEventListener('pageshow', function (event) { if (event.persisted) location.reload(); });
+  }());
+  </script>
+</body>
+</html>
