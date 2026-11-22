@@ -2,6 +2,7 @@
 from collections import Counter, deque
 
 from measure_api import Measure
+from shared_rules import LOSS_MIN_SPEED_MS
 
 
 class CruiseCutoffs(Measure):
@@ -25,12 +26,12 @@ class CruiseCutoffs(Measure):
         enabled, available, gas, brake, host, button = edge
         if self.history and not 0 < sample.t - self.history[-1][0] <= .250000001:
             self.history.clear()
-        previous = self.history[-1][1] if self.history else None
+        previous = self.history[-1] if self.history else None
         self.observed |= previous is not None
         while self.history and sample.t - self.history[0][0] > 1.000000001:
             self.history.popleft()
-        self.history.append((sample.t, enabled, gas, brake, host, button))
-        if previous is not True or enabled:
+        self.history.append((sample.t, enabled, gas, brake, host, button, sample.v_ego))
+        if previous is None or not previous[1] or enabled or previous[6] < LOSS_MIN_SPEED_MS:
             return
         gas = any(row[2] for row in self.history)
         brake = any(row[3] for row in self.history)

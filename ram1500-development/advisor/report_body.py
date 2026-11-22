@@ -191,7 +191,9 @@ def report_lines(drives: list, closing_line: str) -> list:
 
     if cutoff_windows:
         details = ", ".join(f"{cutoff_counts[k]} {label}" for k, label in CUTOFF_LABELS.items() if cutoff_counts[k])
-        lines.append(f"Factory cruise cutoffs in {cutoff_windows} observed windows: {details or 'none recorded'}.")
+        total = sum(cutoff_counts.values())
+        lines.append(f"Cruise switched off while moving: {total} ({details})." if total else
+                     "Cruise switched off while moving: none recorded.")
         if cutoff_counts["unresolved"] or cutoff_counts["unavailable"]:
             lines.append("Truck cancel requests require the full CAN log to verify.")
     if warnings or (n and measured["warnings"] == n):

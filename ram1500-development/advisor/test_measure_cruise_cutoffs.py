@@ -6,8 +6,8 @@ from report_body import report_lines
 
 
 class CutoffTests(unittest.TestCase):
-    def put(self, m, t, *edge):
-        m.on_sample(None, NS(sample=NS(t=t, cruise_observation=edge or None)))
+    def put(self, m, t, *edge, speed=10):
+        m.on_sample(None, NS(sample=NS(t=t, v_ego=speed, cruise_observation=edge or None)))
 
     def test_observed_causes_and_precedence(self):
         for label, cause in [("bothPedals",(True,True,True,True)),("brake",(False,True,False,False)),
@@ -19,6 +19,13 @@ class CutoffTests(unittest.TestCase):
             self.put(m,.2,False,False,False,False,False,False)
             self.assertEqual(m.window_fields(),{"cruiseCutoffs":{label:1}})
             self.assertEqual(m.window_fields(),{})
+
+    def test_cutoff_uses_last_enabled_speed(self):
+        for speed, expected in ((0, {}), (4.99, {}), (5, {"brake": 1})):
+            m = CruiseCutoffs()
+            self.put(m, 0, True, True, False, False, False, False, speed=speed)
+            self.put(m, .1, False, False, False, True, False, False, speed=4.9)
+            self.assertEqual(m.window_fields(), {"cruiseCutoffs": expected})
 
     def test_no_edge_across_missing_state_or_gap(self):
         for missing in (True,False):
@@ -37,13 +44,18 @@ class CutoffTests(unittest.TestCase):
         self.put(m,.2,False,True,False,False,None,None)
         self.assertEqual(m.window_fields(),{"cruiseCutoffs":{"unresolved":1}})
 
+    def test_observed_zero_wording(self):
+        text = " ".join(report_lines([{"summaries":[{"w":0, "cruiseCutoffs":{}}]}], "end"))
+        self.assertIn("Cruise switched off while moving: none recorded.", text)
+        self.assertNotIn("full CAN log", text)
+
     def test_report_counts_deduplicated_windows_only(self):
         row = {"w":0,"cruiseCutoffs":{"gas":1,"unresolved":2}}
         text = " ".join(report_lines([{"summaries":[row,row]},{"summaries":[{"w":0}]}],"end"))
-        self.assertIn("1 gas pedal",text)
+        self.assertIn("Cruise switched off while moving: 3 (1 gas pedal, 2 cause unresolved).",text)
         self.assertIn("2 cause unresolved",text)
         self.assertIn("full CAN log",text)
-        self.assertNotIn("Factory cruise cutoffs"," ".join(report_lines([{"summaries":[{}]}],"end")))
+        self.assertNotIn("Cruise switched off while moving"," ".join(report_lines([{"summaries":[{}]}],"end")))
 
 
 class AuditedReportTests(unittest.TestCase):
