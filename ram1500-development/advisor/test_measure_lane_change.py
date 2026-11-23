@@ -155,11 +155,17 @@ class CountTests(unittest.TestCase):
     def test_a_completed_lane_change(self):
         r = Run(LC(), car=PUSH, accel=lambda t: 0.2 + (0.8 if ms(21) <= t < ms(22) else 0.0))
         self.assertEqual(r.counts, counts(starts=1, completed=1))
-        self.assertEqual(set(r.record), RECORD)
+        self.assertEqual(set(r.record), RECORD | {'requestJerk10Hz', 'motionJerk10Hz'})
         self.assertEqual(r.record, {
             "outcome": "completed", "dir": "L", "handsOn": False, "pressedShare": 0.0, "pushTorqueMax": 140,
-            "vStartMs": 25.0, "crossed": True, "crossS": 3.0, "startingS": 3.5, "peakLatAccel": 0.8, "curveStart": False,
+            "vStartMs": 25.0, "crossed": True, "crossS": 3.0, "startingS": 3.5, "requestJerk10Hz": 0.0, "motionJerk10Hz": 8.0, "peakLatAccel": 0.8, "curveStart": False,
             "settleState": "settled", "settleS": 2.6, "overshootM": 0.0})
+
+    def test_invalid_speed_evidence_or_wrong_cadence_omits_jerk(self):
+        for result in (Run(LC(), car=lambda t: {"can_valid": t != 21200}),
+                       Run(LC(), period_ms=50, n=900)):
+            self.assertNotIn("motionJerk10Hz", result.record)
+            self.assertNotIn("requestJerk10Hz", result.record)
 
     def test_a_lane_change_to_the_right(self):
         r = Run(LC(direction="right"), car=lambda t: {"torque": -140.0} if ms(19.5) <= t < ms(20.1) else None)

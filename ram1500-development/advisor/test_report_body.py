@@ -50,6 +50,16 @@ class ReportBodyTests(unittest.TestCase):
             "Recording: all expected summary windows received.",
             CLOSE])
 
+    def test_jerk_medians_use_paired_completed_events_only(self):
+        def event(r, m, outcome="completed"):
+            return ("lane_change", {"requestJerk10Hz": r, "motionJerk10Hz": m, "outcome": outcome})
+        lines = report_lines([drive(events=[event(1, 4), event(3, 2), event(9, None),
+                                             event(200, 300, "cancelled")])], CLOSE)
+        line = next(line for line in lines if "10 Hz" in line)
+        self.assertIn("2 of 3 completed", line)
+        self.assertIn("request 2.00, measured motion 3.00", line)
+        self.assertIn("4.63 and 2.34", line)
+
     def test_quiet_drive(self):
         self.assertEqual(report_lines([drive(window_s=20, steering_s=0)], CLOSE), [
             "1 drive, under 1 min observed, Comma steering active for 0 min.", "Comma blind-spot input at startup: enabled on 1 drive.",

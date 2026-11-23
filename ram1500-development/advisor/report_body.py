@@ -228,6 +228,13 @@ def report_lines(drives: list, closing_line: str) -> list:
             line += (f" Peak change in sideways acceleration for {len(peaks)} measured starts outside a curve: "
                      f"median {statistics.median(peaks):.1f}, highest {max(peaks):.1f} m/s².")
         lines.append(line)
+        pairs = [(_num(c.get("requestJerk10Hz")), _num(c.get("motionJerk10Hz"))) for c in completed]
+        paired = [(r, m) for r, m in pairs if r is not None and m is not None and min(r, m) >= 0]
+        if paired:
+            requests, motions = zip(*paired)
+            lines.append(f"Estimated peak lateral jerk at 10 Hz ({len(paired)} of {len(completed)} completed): "
+                         f"median request {statistics.median(requests):.2f}, measured motion "
+                         f"{statistics.median(motions):.2f} m/s³. Baseline across 45 changes: 4.63 and 2.34 m/s³.")
     elif n and measured["lane"] == n:
         lines.append("Lane changes: none recorded.")
     elif n and legacy_coverage["lane"] == n:

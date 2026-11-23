@@ -83,7 +83,7 @@ _SILENT_NS = _ns(MODEL_GAP_SLOW_S)  # no model message for longer than this is a
 
 _COUNTS = ("lcStarts", "lcCompleted", "lcCancelled", "lcBlinkerOnly", "lcHandsOn", "lcTruncated")
 _T = 0
-_TORQUE, _PRESSED, _LAT_ON, _ACCEL, _CURVATURE_NS = 1, 2, 3, 4, 5      # Sample rows
+_TORQUE, _PRESSED, _LAT_ON, _ACCEL, _CURVATURE_NS, _REQUEST_ACCEL = 1, 2, 3, 4, 5, 6      # Sample rows
 _STATE, _CENTRE, _CONFIDENT, _GAP = 1, 2, 3, 4       # model-message rows
 
 
@@ -154,7 +154,9 @@ class LaneChanges(Measure):
                 self._break_stream()        # whatever message comes next, it comes after a gap
         s = g.sample
         accel = None if s.actual_curvature is None else s.v_ego * s.v_ego * s.actual_curvature
-        self._samples.append((g.t_ns, s.steering_torque, s.steering_pressed, g.lat_on, accel, s.curvature_observation_ns))
+        requested = None if s.desired_curvature is None else s.v_ego ** 2 * s.desired_curvature
+        self._samples.append((g.t_ns, s.steering_torque, s.steering_pressed, g.lat_on, accel,
+                              s.curvature_observation_ns, requested))
         self._last_sample_ns = g.t_ns
         if self._waiting:
             keep_ns = self._waiting[0].t_start
@@ -380,6 +382,37 @@ class LaneChanges(Measure):
         return any((a >= CURVE_DEMAND_MS2 and b >= CURVE_DEMAND_MS2)
                    or (a <= -CURVE_DEMAND_MS2 and b <= -CURVE_DEMAND_MS2) for a, b in zip(levels, levels[1:]))
 
+    def _jerk_peaks(self, attempt):
+        """Paired peaks over adjacent 10 Hz observations, through one second after the active phase."""
+        start, stop = attempt.t_start, attempt.t_end + _ns(1)
+        if (not attempt.completed or attempt.v_start < 9 or attempt.t_end - start > _ns(15)
+                or (attempt.next_start is not None and attempt.next_start < stop)):
+            return {}
+        prior = None
+        request_peak = motion_peak = 0.0
+        for row in self._samples:
+            if not start <= row[_T] < stop:
+                continue
+            stamp, request, motion = row[_CURVATURE_NS], row[_REQUEST_ACCEL], row[_ACCEL]
+            if (stamp is None or request is None or motion is None or abs(stamp - row[_T]) > _ns(0.05)):
+                return {}
+            if not start <= stamp < stop:
+                continue
+            if prior is None:
+                if stamp - start > _ns(0.15):
+                    return {}
+            else:
+                dt = (stamp - prior[0]) / 1e9
+                # Reject repeated, missing and off-cadence samples; peaks need the whole window.
+                if not 0.06 <= dt <= 0.15:
+                    return {}
+                request_peak = max(request_peak, abs(request - prior[1]) / dt)
+                motion_peak = max(motion_peak, abs(motion - prior[2]) / dt)
+            prior = stamp, request, motion
+        if prior is None or stop - prior[0] > _ns(0.15):
+            return {}
+        return {"requestJerk10Hz": round(request_peak, 3), "motionJerk10Hz": round(motion_peak, 3)}
+
     def _record(self, attempt: _Attempt, settle: tuple) -> dict:
         sign = attempt.sign
         t_start = attempt.t_start
@@ -402,7 +435,7 @@ class LaneChanges(Measure):
                 if changes:
                     peak = max(changes)
         state, settle_s, overshoot = settle
-        return {"outcome": "completed" if attempt.completed else "cancelled",
+        return {**self._jerk_peaks(attempt), "outcome": "completed" if attempt.completed else "cancelled",
                 "dir": None if sign is None else ("L" if sign > 0 else "R"),
                 "handsOn": attempt.hands_on, "pressedShare": round(attempt.pressed_share, 2),
                 "pushTorqueMax": push, "vStartMs": round(attempt.v_start, 1),
