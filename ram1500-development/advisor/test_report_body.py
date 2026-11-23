@@ -56,9 +56,8 @@ class ReportBodyTests(unittest.TestCase):
         lines = report_lines([drive(events=[event(1, 4), event(3, 2), event(9, None),
                                              event(200, 300, "cancelled")])], CLOSE)
         line = next(line for line in lines if "10 Hz" in line)
-        self.assertIn("2 of 3 completed", line)
-        self.assertIn("request 2.00, measured motion 3.00", line)
-        self.assertIn("4.63 and 2.34", line)
+        self.assertEqual(line, "Lane-change abruptness (peak jerk, 10 Hz estimate) on 2 of 3 lane changes: "
+                               "steering request 2.00, truck motion 3.00 m/s³. Before RamPilot: 4.63 and 2.34.")
 
     def test_quiet_drive(self):
         self.assertEqual(report_lines([drive(window_s=20, steering_s=0)], CLOSE), [

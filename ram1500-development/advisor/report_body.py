@@ -232,9 +232,9 @@ def report_lines(drives: list, closing_line: str) -> list:
         paired = [(r, m) for r, m in pairs if r is not None and m is not None and min(r, m) >= 0]
         if paired:
             requests, motions = zip(*paired)
-            lines.append(f"Estimated peak lateral jerk at 10 Hz ({len(paired)} of {len(completed)} completed): "
-                         f"median request {statistics.median(requests):.2f}, measured motion "
-                         f"{statistics.median(motions):.2f} m/s³. Baseline across 45 changes: 4.63 and 2.34 m/s³.")
+            lines.append(f"Lane-change abruptness (peak jerk, 10 Hz estimate) on {len(paired)} of "
+                         f"{len(completed)} lane changes: steering request {statistics.median(requests):.2f}, "
+                         f"truck motion {statistics.median(motions):.2f} m/s³. Before RamPilot: 4.63 and 2.34.")
     elif n and measured["lane"] == n:
         lines.append("Lane changes: none recorded.")
     elif n and legacy_coverage["lane"] == n:
