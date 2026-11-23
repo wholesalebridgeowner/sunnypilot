@@ -8,6 +8,8 @@
 - The comma's address and SSH access are known.
 - For a release that changes `selfdrive/ui/ui`, retain the SHA-256 of the independently reviewed screen executable and its approval alongside the approved commit. Use that recorded digest during installation.
 
+For an approved screen rebuild, the [screen builder](ui/README.md) locates the device tools in `/usr/local/venv/bin` even in a non-login shell. If it reports missing SCons, check that the device toolchain is present before retrying.
+
 ## 1. Copy the bundle and script (laptop)
 
 ```bash

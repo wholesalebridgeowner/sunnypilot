@@ -42,6 +42,7 @@ class BuildUiTests(unittest.TestCase):
       "GIT_CONFIG_NOSYSTEM": "1", "GIT_ALLOW_PROTOCOL": "file",
       "OP_DIR": str(self.op), "WORK": str(self.work), "STATE_DIR": str(self.stage),
       "PARAMS_DIR": str(self.params), "SOURCE_URL": self.source.as_uri(),
+      "RAMPILOT_VENV_BIN": str(self.root / "venv/bin"),
       "BUILDER_LOG": str(self.root / "builder-invocations"),
     }
     self.git(self.source, "init", "-q")
@@ -97,6 +98,25 @@ chmod 755 selfdrive/ui/ui""")
     self.assertFalse((self.root / "builder-invocations").exists())
     self.assertEqual((self.op / "widget.txt").read_text(), "keep local changes\n")
     self.assertEqual((self.op / "cereal/custom.capnp").read_text(), "installed schema\n")
+
+  def test_venv_scons_wins_in_non_login_shell(self):
+    venv = Path(self.env["RAMPILOT_VENV_BIN"])
+    venv.mkdir(parents=True)
+    (self.tools / "scons").rename(venv / "scons")
+    self.stub("scons", "exit 88")
+    result = self.build()
+    self.assertEqual(result.returncode, 0, result.stdout)
+    self.assertEqual((self.root / "builder-invocations").read_text(), "built\n")
+
+  def test_missing_scons_exits_before_workspace_creation(self):
+    (self.tools / "scons").unlink()
+    for tool in ("bash", "realpath", "dirname", "cmp"):
+      (self.tools / tool).symlink_to(shutil.which(tool))
+    self.env["PATH"] = str(self.tools)
+    result = self.build()
+    self.assertEqual(result.returncode, 2, result.stdout)
+    self.assertIn("scons missing", result.stdout)
+    self.assertFalse(self.work.exists())
 
   def test_requires_known_offroad_state(self):
     for value in (None, b"", b"unknown", b"1"):

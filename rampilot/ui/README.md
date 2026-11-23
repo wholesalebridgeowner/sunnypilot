@@ -10,6 +10,8 @@ The flag in the archived drives is a candidate. The 2021 Ram 1500 owner's manual
 
 ## Building
 
+The builder looks for SCons in `/usr/local/venv/bin` first, then on the caller’s PATH. A non-login shell works without activating the virtual environment. Offline fixtures can set `RAMPILOT_VENV_BIN` to their own tool directory. If SCons is missing, the helper exits before creating the workspace or fetching sources.
+
 With approval for a parked build and the intended RamPilot cereal schemas installed, run `bash build_ui_on_device.sh` as the comma user. The builder requires a readable `IsOnroad` containing the single byte `0` and rechecks it before compilation and staging. It needs Git, SCons, clang++, qmake for the installed Qt version, GNU utilities, flock, access to the pinned source and submodules, and at least 6,000 MiB free on the build filesystem.
 
 | Variable | Default | Role |

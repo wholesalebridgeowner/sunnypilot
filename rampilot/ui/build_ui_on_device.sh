@@ -23,6 +23,12 @@ require_offroad() {
 }
 
 require_offroad
+# Non-login shells on tici do not inherit the device Python toolchain.
+venv_bin="${RAMPILOT_VENV_BIN:-/usr/local/venv/bin}"
+if [[ -d "$venv_bin" ]]; then
+  export PATH="$venv_bin:$PATH"
+fi
+type -P scons >/dev/null || die "scons missing; checked $venv_bin and PATH"
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "need a full source commit SHA"
 [[ -f "$OP_DIR/cereal/custom.capnp" ]] || die "no cereal schema in $OP_DIR"
 for writable in "$WORK" "$STATE_DIR"; do
