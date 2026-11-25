@@ -1,5 +1,6 @@
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
+from opendbc.car.chrysler import rampilot_long
 from opendbc.car.chrysler.ram_dt_diesel import DieselReadouts, supports_diesel
 from opendbc.car.chrysler.values import DBC, STEER_THRESHOLD, RAM_CARS, RAM_DT
 from opendbc.car.common.conversions import Conversions as CV
@@ -13,6 +14,8 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # and unavailable codes 0x00/0x3F leave the display blank.
 SPEED_LIMIT_MPH = {0x05: 25, 0x06: 30, 0x07: 35, 0x08: 40, 0x09: 45, 0x0A: 50, 0x0B: 55, 0x0C: 60, 0x0E: 70}
 SPEED_LIMIT_FRESH_NS = 1_500_000_000
+
+RAM_DT_DAS_3_ADDR = 0x99  # DAS_3 in chrysler_ram_dt_generated
 
 
 class CarState(CarStateBase, MadsCarState):
@@ -38,8 +41,49 @@ class CarState(CarStateBase, MadsCarState):
     self.limit_mps = 0.0
     self.limit_fresh = False
     self.diesel = DieselReadouts() if supports_diesel(CP) else None
+
+    # RamPilot long (Ram DT): factory DAS_3 from the camera bus (bus 2), parsed every frame
+    # every frame parsed in the current update, oldest first: (all signals, COUNTER and CHECKSUM included; the same
+    # frame's exact bytes, when the raw frame was observed)
+    self.das_3_frames: list[tuple[dict[str, float], bytes | None]] = []
+    self.das_3: dict[str, float] | None = None  # the newest frame
+    self.das_3_raw: bytes | None = None
+    self.das_3_count = 0  # factory DAS_3 frames parsed so far
+    self.das_3_seen: list[bytes] = []  # raw bus 2 DAS_3 frames of the current update
+    self.das_3_emergency = False  # factory emergency frame (rampilot_long.is_emergency); reported in carStateSP
+    # driver's resume and accel (+) buttons, reported as button events with RamPilot long (they release its stop hold)
+    self.resume_button = 0
+    self.accel_button = 0
+
     if CP.carFingerprint in RAM_DT:
-      self.observe_can = self.observe_display_data
+      self.observe_can = self.observe_ram_dt
+
+  def observe_ram_dt(self, packets, now_nanos, packet_valid):
+    self.observe_display_data(packets, now_nanos, packet_valid)
+    self.das_3_seen = [bytes(data) for _, frames in packets for address, data, bus in frames
+                       if bus == 2 and address == RAM_DT_DAS_3_ADDR and len(data) == 8]
+
+  def update_das_3(self, cp_cam) -> None:
+    seen, self.das_3_seen = self.das_3_seen, []
+    self.das_3_frames = []
+    values = cp_cam.vl_all.get("DAS_3", {})  # per signal, every frame that passed checksum and counter checks
+    j = 0
+    for i in range(len(values.get("COUNTER", ()))):
+      frame = {name: vals[i] for name, vals in values.items()}
+      # its raw bytes: the next observed frame, in order, with this frame's counter and checksum
+      counter, checksum = int(frame["COUNTER"]), int(frame["CHECKSUM"])
+      raw = None
+      for k in range(j, len(seen)):
+        if seen[k][6] >> 4 == counter and seen[k][7] == checksum:
+          raw, j = seen[k], k + 1
+          break
+      self.das_3_frames.append((frame, raw))
+
+    if self.das_3_frames:
+      self.das_3, self.das_3_raw = self.das_3_frames[-1]
+      self.das_3_count += len(self.das_3_frames)
+      # the newest factory frame (or another one of a multi-frame update) is an emergency frame
+      self.das_3_emergency = any(rampilot_long.is_emergency(f) for f, _ in self.das_3_frames)
 
   def observe_display_data(self, packets, now_nanos, packet_valid):
     # In replay, CAN logMonoTime supplies the publication clock. An empty replay
@@ -147,12 +191,27 @@ class CarState(CarStateBase, MadsCarState):
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
     self.button_counter = cp.vl["CRUISE_BUTTONS"]["COUNTER"]
 
+    if self.CP.carFingerprint in RAM_DT:
+      self.update_das_3(cp_cam)
+      if self.CP.openpilotLongitudinalControl:
+        ret_sp.rampilotFactoryEmergency = self.das_3_emergency  # logged: when the Panda's factory window was open
+
     MadsCarState.update_mads(self, ret, can_parsers)
 
-    ret.buttonEvents = [
+    button_events = [
       *create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise}),
       *create_button_events(self.lkas_button, self.prev_lkas_button, {1: ButtonType.lkas}),
     ]
+    if self.CP.openpilotLongitudinalControl:
+      # RamPilot long: the driver's resume and accel (+) presses release a stop hold (rampilot_long.py)
+      prev_resume_button, prev_accel_button = self.resume_button, self.accel_button
+      self.resume_button = cp.vl["CRUISE_BUTTONS"]["ACC_Resume"]
+      self.accel_button = cp.vl["CRUISE_BUTTONS"]["ACC_Accel"]
+      button_events += [
+        *create_button_events(self.resume_button, prev_resume_button, {1: ButtonType.resumeCruise}),
+        *create_button_events(self.accel_button, prev_accel_button, {1: ButtonType.accelCruise}),
+      ]
+    ret.buttonEvents = button_events
 
     return ret, ret_sp
 

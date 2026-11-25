@@ -159,3 +159,4 @@ class CarStateSP:
   rangeMilesValid: bool = auto_field()
   defPercent: float = auto_field()
   defPercentValid: bool = auto_field()
+  rampilotFactoryEmergency: bool = auto_field()  # RamPilot long: the newest factory DAS_3 is an emergency frame

@@ -1,12 +1,14 @@
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL
+from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_meas_steer_torque_limits
-from opendbc.car.chrysler import chryslercan
+from opendbc.car.chrysler import chryslercan, rampilot_long
 from opendbc.car.chrysler.values import RAM_CARS, CarControllerParams, ChryslerFlags
 from opendbc.car.interfaces import CarControllerBase
 
 from opendbc.sunnypilot.car.chrysler.carcontroller_ext import CarControllerExt
 from opendbc.sunnypilot.car.chrysler.mads import MadsCarController
+
+ButtonType = structs.CarState.ButtonEvent.Type
 
 
 class CarController(CarControllerBase, MadsCarController, CarControllerExt):
@@ -20,6 +22,14 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt):
     self.last_lkas_falling_edge = 0
     self.lkas_control_bit_prev = False
     self.last_button_frame = 0
+
+    # RamPilot long
+    self.das_3_count_sent = 0  # factory DAS_3 frames already answered
+    self.das_3_counter_last: int | None = None  # factory COUNTER of the last copy sent
+    self.das_3_frame_last = 0  # controller frame of the last copy sent
+    self.long_state = rampilot_long.LongState()
+    self.long_confirm = False  # driver's resume/accel button or gas since the last decision
+    self.accel = 0.  # braking the comma applied in the last copy
 
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.params = CarControllerParams(CP)
@@ -86,10 +96,36 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt):
     if self.frame % 10 == 0 and self.CP.carFingerprint not in RAM_CARS:
       can_sends.append(MadsCarController.create_lkas_heartbit(self.packer, CS.lkas_heartbit, self.mads))
 
+    # RamPilot long (Ram DT): one DAS_3 on bus 0 for each factory DAS_3 (50 Hz), each built from its own factory frame;
+    # the comma only adds braking (rampilot_long.py)
+    if self.CP.openpilotLongitudinalControl:
+      # a driver confirm can come in a frame without a new factory DAS_3: keep it for the next decision
+      self.long_confirm |= CS.out.gasPressed or any(be.type in (ButtonType.resumeCruise, ButtonType.accelCruise)
+                                                    for be in CS.out.buttonEvents)
+
+      if CS.das_3_count != self.das_3_count_sent:
+        self.das_3_count_sent = CS.das_3_count
+        stopped = CS.out.standstill or CS.out.vEgo < rampilot_long.STOPPED_SPEED
+        # the last two factory frames of this update, oldest first; older ones are skipped
+        for das_3, das_3_raw in CS.das_3_frames[-rampilot_long.COPIES_PER_UPDATE:]:
+          counter = int(das_3["COUNTER"])
+          # never the same factory COUNTER twice, never an older one after a newer one
+          if not rampilot_long.counter_moves_forward(counter, self.das_3_counter_last, self.frame - self.das_3_frame_last):
+            continue
+          self.das_3_counter_last, self.das_3_frame_last = counter, self.frame
+          inputs = rampilot_long.StandstillInputs(stopped=stopped, confirm=self.long_confirm, gas_pressed=CS.out.gasPressed)
+          self.long_confirm = False
+          overrides, self.long_state = rampilot_long.das_3_overrides(das_3, CC.longActive, CC.actuators.accel,
+                                                                     self.long_state, inputs)
+          can_sends.append(chryslercan.create_das_3(self.packer, 0, das_3, das_3_raw, overrides))
+          self.accel = float(overrides.get("ACC_DECEL", 0.))
+
     self.frame += 1
 
     new_actuators = CC.actuators.as_builder()
     new_actuators.torque = self.apply_torque_last / self.params.STEER_MAX
     new_actuators.torqueOutputCan = self.apply_torque_last
+    if self.CP.openpilotLongitudinalControl:
+      new_actuators.accel = self.accel
 
     return new_actuators, can_sends

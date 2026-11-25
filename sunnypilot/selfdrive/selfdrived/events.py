@@ -154,6 +154,16 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.PERMANENT: NormalPermanentAlert(RAMPILOT_BSM_TITLE, "Check mirrors before changing lanes", duration=1.0),
   },
 
+  # RamPilot long: the Panda refuses the comma's braking and passes factory cruise through until disengaged
+  # (rampilot_long_alert.py). A warning, not a disengagement; the prompt sound plays once when it appears.
+  EventNameSP.rampilotLongBrakingUnavailable: {
+    ET.WARNING: Alert(
+      "Comma Braking Unavailable",
+      "Factory Cruise Only",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 1.),
+  },
+
   EventNameSP.laneTurnLeft: {
     ET.WARNING: Alert(
       "Turning Left",

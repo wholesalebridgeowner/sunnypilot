@@ -1,3 +1,5 @@
+import math
+
 from opendbc.car import structs
 from opendbc.car.crc import CRC8J1850
 from opendbc.car.chrysler.values import RAM_CARS
@@ -74,6 +76,28 @@ def create_cruise_buttons(packer, frame, bus, cancel=False, resume=False):
     "COUNTER": frame % 0x10,
   }
   return packer.make_can_msg("CRUISE_BUTTONS", bus, values)
+
+
+def create_das_3(packer, bus, das_3, das_3_raw, overrides):
+  # RamPilot long: the factory DAS_3 with `overrides` applied and the checksum recomputed. COUNTER and every other field
+  # stay the factory's (the Panda requires the comma's COUNTER to equal the factory's).
+  if das_3_raw is None:
+    # no exact factory bytes: pack every parsed signal (bits outside the DBC's signals are sent as 0)
+    values = {name: value for name, value in das_3.items() if name != "CHECKSUM"}
+    values.update(overrides)
+    return packer.make_can_msg("DAS_3", bus, values)
+
+  # Start from the factory bytes, so signals not overridden and bits no DBC signal covers are copied exactly: with no
+  # overrides, this returns the factory frame byte for byte.
+  from opendbc.can.packer import set_value  # opendbc.can imports this module (chrysler_checksum), so import it late
+  msg = packer.dbc.name_to_msg["DAS_3"]
+  dat = bytearray(das_3_raw)
+  for name, value in overrides.items():
+    sig = msg.sigs[name]
+    set_value(dat, sig, int(math.floor((value - sig.offset) / sig.factor + 0.5)))  # the packer's rounding
+  checksum = msg.sigs["CHECKSUM"]
+  set_value(dat, checksum, checksum.calc_checksum(msg.address, checksum, dat))
+  return msg.address, bytes(dat), bus
 
 
 def chrysler_checksum(address: int, sig, d: bytearray) -> int:

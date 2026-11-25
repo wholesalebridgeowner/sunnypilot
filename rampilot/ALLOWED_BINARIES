@@ -1,1 +1,11 @@
+# Compiled files a RamPilot release is allowed to change. device.sh reads this file from the candidate commit.
+# One pin per line: "<lowercase hex>  <path>", two spaces. Lines starting with # are notes.
+#   <sha256> selfdrive/ui/ui -- the screen program; install needs --ui-sha256 with the same digest.
+#   <sha256> panda/board/obj/panda.bin.signed -- the F4 Panda firmware (this truck's comma three has an
+#     F4-type internal Panda); install needs --panda-sha256 with the same digest, and the firmware needs
+#     the safety-tree pin below. panda_h7.bin.signed and both bootstubs are never pinned.
+#   <git tree hash> opendbc_repo/opendbc/safety -- the safety code that firmware was built from:
+#     git rev-parse <commit>:opendbc_repo/opendbc/safety
+# The firmware pin and the safety-tree pin go in together, from a reviewed, twice-built firmware
+# (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file. No firmware is pinned yet.
 b62eb54b7f3131a339a097d8b9b26033ff28c879a741b92487f4e7814d887bae  selfdrive/ui/ui

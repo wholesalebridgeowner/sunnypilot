@@ -220,6 +220,43 @@ bool get_honda_fwd_brake(void){
   return honda_fwd_brake;
 }
 
+// RamPilot longitudinal: COUNTER of the last DAS_3 on bus 0, -1 when none
+void set_chrysler_das_3_bus0_counter(int c){
+  chrysler_das_3_bus0_counter_valid = c >= 0;
+  chrysler_das_3_bus0_counter = (uint8_t)(c & 0xF);
+}
+
+int get_chrysler_das_3_bus0_counter(void){
+  return chrysler_das_3_bus0_counter_valid ? (int)chrysler_das_3_bus0_counter : -1;
+}
+
+// the comma's last DAS_3 attempt, without sending one
+void set_chrysler_das_3_tx_ts(uint32_t t){
+  chrysler_das_3_tx_seen = true;
+  chrysler_das_3_tx_ts = t;
+}
+
+void reset_chrysler_das_3_fallback(void){
+  chrysler_das_3_refusals = 0U;
+  chrysler_das_3_fallback = false;
+}
+
+int get_chrysler_das_3_refusals(void){
+  return (int)chrysler_das_3_refusals;
+}
+
+bool get_chrysler_das_3_fallback(void){
+  return chrysler_das_3_fallback;
+}
+
+bool get_chrysler_das_3_tx_seen(void){
+  return chrysler_das_3_tx_seen;
+}
+
+bool get_chrysler_das_3_emergency_seen(void){
+  return chrysler_das_3_emergency_seen;
+}
+
 void set_mads_button_press(int c){
   mads_button_press = c;
 }

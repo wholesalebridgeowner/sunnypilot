@@ -28,6 +28,7 @@ from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP, rampilot_bsm_unavailable
+from openpilot.sunnypilot.selfdrive.selfdrived.rampilot_long_alert import RamPilotLongMonitor, rampilot_long_enabled
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
@@ -65,6 +66,9 @@ class SelfdriveD(CruiseHelper):
     # RamPilot: this drive started without blind-spot support (BSM_1 not seen at startup)
     self.rampilot_bsm_off = rampilot_bsm_unavailable(self.CP)
 
+    # RamPilot long: warn when the Panda refuses the comma's braking (Ram DT with the RamPilot long safety mode only)
+    self.rampilot_long_monitor = RamPilotLongMonitor() if rampilot_long_enabled(self.CP) else None
+
     if CP_SP is None:
       cloudlog.info("selfdrived is waiting for CarParamsSP")
       self.CP_SP = messaging.log_from_bytes(self.params.get("CarParamsSP", block=True), custom.CarParamsSP)
@@ -91,6 +95,9 @@ class SelfdriveD(CruiseHelper):
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug'] + ['modelDataV2SP']
+    # RamPilot long reads carStateSP for factory emergency frames; it never affects the alive/valid/frequency checks
+    rampilot_long_services = ['carStateSP'] if self.rampilot_long_monitor is not None else []
+    ignore += rampilot_long_services
     if SIMULATION:
       ignore += ['driverCameraState', 'managerState']
     if REPLAY:
@@ -101,7 +108,7 @@ class SelfdriveD(CruiseHelper):
                                    'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'audioFeedback',
                                    'modelDataV2SP'] + \
-                                   self.camera_packets + self.sensor_packets + self.gps_packets,
+                                   self.camera_packets + self.sensor_packets + self.gps_packets + rampilot_long_services,
                                   ignore_alive=ignore, ignore_avg_freq=ignore,
                                   ignore_valid=ignore, frequency=int(1/DT_CTRL))
 
@@ -333,6 +340,16 @@ class SelfdriveD(CruiseHelper):
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
         self.events.add(EventName.relayMalfunction)
+
+    # RamPilot long: the Panda refused the comma's DAS_3 repeatedly while long control was active, so it passes factory
+    # cruise through until disengaged; openpilot still shows engaged, so say so
+    if self.rampilot_long_monitor is not None:
+      panda_states = self.sm['pandaStates']
+      tx_blocked = panda_states[0].safetyTxBlocked if self.sm.updated['pandaStates'] and len(panda_states) else None
+      clean = CS.cruiseState.enabled and not CS.brakePressed and not CS.gasPressed
+      if self.rampilot_long_monitor.update(self.sm.frame, self.enabled, self.sm['carControl'].longActive, clean, tx_blocked,
+                                           self.sm['carStateSP'].rampilotFactoryEmergency):
+        self.events_sp.add(custom.OnroadEventSP.EventName.rampilotLongBrakingUnavailable)
 
     # Handle HW and system malfunctions
     # Order is very intentional here. Be careful when modifying this.

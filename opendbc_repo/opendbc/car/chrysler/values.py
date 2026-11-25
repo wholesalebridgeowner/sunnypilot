@@ -12,6 +12,7 @@ Ecu = CarParams.Ecu
 class ChryslerSafetyFlags(IntFlag):
   RAM_DT = 1
   RAM_HD = 2
+  RAMPILOT_LONG = 4  # RamPilot long (Ram DT only): the comma may only add braking to the factory DAS_3
 
 
 class ChryslerFlags(IntFlag):

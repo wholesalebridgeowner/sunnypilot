@@ -63,6 +63,26 @@ class CarInterface(CarInterfaceBase):
       if any(fw.ecu == 'eps' and b"68" < fw.fwVersion[:4] <= b"6831" for fw in car_fw):
         ret.minSteerSpeed = 0.
 
+      # RamPilot long (alpha): the comma can only add braking to the factory DAS_3 (rampilot_long.py). Factory cruise
+      # keeps engagement (pcmCruise), set speed, following distance and emergency braking. radarUnavailable stays True:
+      # the lead comes from the camera.
+      ret.alphaLongitudinalAvailable = True
+      ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
+      if ret.openpilotLongitudinalControl:
+        ret.safetyConfigs[0].safetyParam |= ChryslerSafetyFlags.RAMPILOT_LONG.value
+
+        # Starting points from realfast's RamBetaLong (2023). Its kp [3.5, 1.5, 1.0] was tuned for the old
+        # velocity-error PID; today's PID acts on acceleration error, so the defaults stay (kf 1, kp 0, ki 0: the
+        # request is the planner's acceleration). No integrator also means no wind-up while the factory ignores
+        # positive requests the comma cannot add.
+        ret.longitudinalActuatorDelay = 0.25  # factory decel request to brake pressure: 140 ms median (Codex item 30)
+        ret.vEgoStopping = 0.05
+        ret.vEgoStarting = 0.1
+        ret.stopAccel = -2.0  # same as the default
+        ret.stoppingDecelRate = 2.0
+        ret.startingState = True
+        ret.startAccel = 0.5
+
     elif candidate == CAR.RAM_HD_5TH_GEN:
       ret.steerActuatorDelay = 0.2
 

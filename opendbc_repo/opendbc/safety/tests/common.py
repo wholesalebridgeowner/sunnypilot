@@ -905,6 +905,10 @@ class PandaSafetyTest(PandaSafetyTestBase):
             if {attr, current_test}.issubset({'TestVolkswagenMqbSafety', 'TestVolkswagenMqbStockSafety', 'TestVolkswagenMqbLongSafety'}):
               continue
 
+            # RamPilot longitudinal adds DAS_3 to the Ram DT TX list
+            if {attr, current_test}.issubset({'TestChryslerRamDTSafety', 'TestChryslerRamDTRamPilotLongSafety'}):
+              continue
+
             # overlapping TX addrs, but they're not actuating messages for either car
             if attr == 'TestHyundaiCanfdLKASteeringLongEV' and current_test.startswith('TestToyota'):
               tx = list(filter(lambda m: m[0] not in [0x160, ], tx))

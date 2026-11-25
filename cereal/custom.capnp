@@ -175,6 +175,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     laneTurnLeft @17;
     laneTurnRight @18;
     rampilotBlindSpotUnavailable @19;  # RamPilot: blind-spot support did not start this drive
+    rampilotLongBrakingUnavailable @20;  # RamPilot long: the Panda refuses the comma's braking; factory cruise only
   }
 }
 
@@ -281,6 +282,10 @@ struct CarStateSP @0xb86e6369214c01c8 {
   rangeMilesValid @14 :Bool;
   defPercent @15 :Float32;
   defPercentValid @16 :Bool;
+  # RamPilot long: the newest factory DAS_3 (or another one of a multi-frame update) is an emergency frame (collision
+  # brake prep, or a decel request stronger than -3.5 m/s^2); the Panda passes factory DAS_3 frames straight to the
+  # truck for 2 s after each one
+  rampilotFactoryEmergency @17 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

@@ -40,6 +40,7 @@ class CarStateSPFieldTests(unittest.TestCase):
       "idleFuelUsGalPerHour": (11, "Float32"), "idleFuelUsGalPerHourValid": (12, "Bool"),
       "rangeMiles": (13, "Float32"), "rangeMilesValid": (14, "Bool"),
       "defPercent": (15, "Float32"), "defPercentValid": (16, "Bool"),
+      "rampilotFactoryEmergency": (17, "Bool"),
     })
 
 
