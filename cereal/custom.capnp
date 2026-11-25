@@ -175,7 +175,7 @@ struct OnroadEventSP @0xda96579883444c35 {
     laneTurnLeft @17;
     laneTurnRight @18;
     rampilotBlindSpotUnavailable @19;  # RamPilot: blind-spot support did not start this drive
-    rampilotLongBrakingUnavailable @20;  # RamPilot long: the Panda refuses the comma's braking; factory cruise only
+    rampilotLongBrakingUnavailable @20;  # RamPilot long: the comma's braking is not reaching the truck; factory cruise only
   }
 }
 
@@ -282,10 +282,19 @@ struct CarStateSP @0xb86e6369214c01c8 {
   rangeMilesValid @14 :Bool;
   defPercent @15 :Float32;
   defPercentValid @16 :Bool;
-  # RamPilot long: the newest factory DAS_3 (or another one of a multi-frame update) is an emergency frame (collision
-  # brake prep, or a decel request stronger than -3.5 m/s^2); the Panda passes factory DAS_3 frames straight to the
+  # RamPilot long: the newest factory DAS_3 (or another one of a multi-frame update) is an emergency frame (collision or
+  # ACC brake prep, or a decel request stronger than -2.5 m/s^2); the Panda passes factory DAS_3 frames straight to the
   # truck for 2 s after each one
   rampilotFactoryEmergency @17 :Bool;
+  # RamPilot long, what reached the truck (the Panda returns each DAS_3 it transmits on bus 0 to the host as src 128):
+  # ms since the last bus-0 DAS_3 echo, and the frames in the last 0.5 s where the comma sent added braking but the
+  # truck got the factory frame instead (not counting factory frames that request braking or brake prep, which the
+  # Panda always forwards)
+  rampilotDas3EchoAgeMs @18 :Float32;
+  rampilotBrakingNotDelivered @19 :UInt16;
+  # factory DAS_3 frames received on bus 2 since the last bus-0 echo: with a long echo age, the host is receiving, so the
+  # echoes are missing rather than delayed by a host receive pause
+  rampilotFactorySinceEcho @20 :UInt16;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

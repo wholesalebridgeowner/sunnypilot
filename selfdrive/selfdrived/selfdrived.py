@@ -341,14 +341,14 @@ class SelfdriveD(CruiseHelper):
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
         self.events.add(EventName.relayMalfunction)
 
-    # RamPilot long: the Panda refused the comma's DAS_3 repeatedly while long control was active, so it passes factory
-    # cruise through until disengaged; openpilot still shows engaged, so say so
+    # RamPilot long: the comma's braking is not reaching the truck (the truck got the factory frame instead, or no DAS_3
+    # at all); openpilot still shows engaged, so say so
     if self.rampilot_long_monitor is not None:
-      panda_states = self.sm['pandaStates']
-      tx_blocked = panda_states[0].safetyTxBlocked if self.sm.updated['pandaStates'] and len(panda_states) else None
+      cs_sp = self.sm['carStateSP']
       clean = CS.cruiseState.enabled and not CS.brakePressed and not CS.gasPressed
-      if self.rampilot_long_monitor.update(self.sm.frame, self.enabled, self.sm['carControl'].longActive, clean, tx_blocked,
-                                           self.sm['carStateSP'].rampilotFactoryEmergency):
+      if self.rampilot_long_monitor.update(self.sm.frame, self.enabled, self.sm['carControl'].longActive, clean,
+                                           cs_sp.rampilotBrakingNotDelivered, cs_sp.rampilotDas3EchoAgeMs,
+                                           cs_sp.rampilotFactorySinceEcho, cs_sp.rampilotFactoryEmergency):
         self.events_sp.add(custom.OnroadEventSP.EventName.rampilotLongBrakingUnavailable)
 
     # Handle HW and system malfunctions

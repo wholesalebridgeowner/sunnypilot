@@ -160,3 +160,6 @@ class CarStateSP:
   defPercent: float = auto_field()
   defPercentValid: bool = auto_field()
   rampilotFactoryEmergency: bool = auto_field()  # RamPilot long: the newest factory DAS_3 is an emergency frame
+  rampilotDas3EchoAgeMs: float = auto_field()  # RamPilot long: ms since the last bus-0 DAS_3 echo
+  rampilotBrakingNotDelivered: int = auto_field()  # RamPilot long: added braking replaced by the factory frame, last 0.5 s
+  rampilotFactorySinceEcho: int = auto_field()  # RamPilot long: factory DAS_3 received since the last bus-0 echo

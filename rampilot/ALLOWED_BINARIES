@@ -6,8 +6,11 @@
 #     the safety-tree pin below. panda_h7.bin.signed and both bootstubs are never pinned.
 #   <git tree hash> opendbc_repo/opendbc/safety -- the safety code that firmware was built from:
 #     git rev-parse <commit>:opendbc_repo/opendbc/safety
-# The firmware pin and the safety-tree pin go in together, from a reviewed, twice-built firmware
-# (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file.
+#   <sha256> rampilot/panda-patches/<file> -- one line for every file in rampilot/panda-patches/: the Panda
+#     driver patches the laptop build applied to sunnyhaibin/panda 7eab6fd6 for that firmware.
+# The firmware pin, the safety-tree pin and the patch pins go in together, from a reviewed, twice-built
+# firmware (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file. A release without new
+# firmware changes no patch file.
 # Firmware below: built twice from 4b796bd5e8173b43c171fed56aa8985560ccba01 (local and fresh GitHub clone),
 # identical; debug-key signature, prefix 5df562c76918f49b; F4 bootstub unchanged.
 b62eb54b7f3131a339a097d8b9b26033ff28c879a741b92487f4e7814d887bae  selfdrive/ui/ui

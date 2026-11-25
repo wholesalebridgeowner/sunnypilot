@@ -36,7 +36,8 @@ STOCK_UI_SHA="$(sha256 selfdrive/ui/ui)"
 mkfw "$FW" $'stock f4 image\nwith the stock rules\n' 1e; mkfw "$H7" $'stock h7 image\n' 1a
 printf '\x00stock h7 bootstub' > panda/board/obj/bootstub.panda_h7.bin; printf '\x00stock f4 bootstub' > panda/board/obj/bootstub.panda.bin
 echo 'int chrysler_stock;' > "$SAFETY/modes/chrysler.h"; echo 'int honda_stock;' > "$SAFETY/modes/honda.h"
-echo '# stock tests' > "$SAFETY/tests/test_chrysler.py"
+echo '# stock tests' > "$SAFETY/tests/test_chrysler.py"; echo '// stock lateral' > "$SAFETY/lateral.h"
+echo '// stock safety' > "$SAFETY/safety.h"; echo '// stock declarations' > "$SAFETY/safety_declarations.h"
 STOCK_FW_SHA="$(sha256 "$FW")"
 g add -A && g commit -qm baseline
 BASE="$(git rev-parse HEAD)"
@@ -65,19 +66,25 @@ g add -A && g commit -qm "stock screen lost execute mode"; UIMODEONLY="$(git rev
 g checkout -qb bin-listed "$BASE"; mkdir -p selfdrive/x rampilot; printf '\x7fELF\x00x' > selfdrive/x/prog; pin selfdrive/x/prog
 g add -A && g commit -qm other; BINL="$(git rev-parse HEAD)"
 # Panda firmware candidates. fwpins writes rampilot/ALLOWED_BINARIES as a reviewed Phase A build would: the
-# firmware digest ($1; "-" leaves it out) and the safety tree ($2); empty means the true staged values.
+# firmware digest ($1; "-" leaves it out), the safety tree ($2; empty means the true staged values) and every
+# Panda driver patch present in rampilot/panda-patches/.
 mkfw "$W/rampilot-fw" $'rampilot f4 image\nwith the add-braking-only rule\n' ba; FW_SHA="$(sha256 "$W/rampilot-fw")"
 BOGUS_SHA="$(printf '%064d' 7)"
+PATCH=rampilot/panda-patches/0001-packet-aware-forwarding.patch
 fwpins() {
   mkdir -p rampilot; g add -A
   { [ "${1:-}" = - ] || printf '%s  %s\n' "${1:-$(sha256 "$FW")}" "$FW"
-    printf '%s  %s\n' "${2:-$(git write-tree --prefix="$SAFETY/")}" "$SAFETY"; } > rampilot/ALLOWED_BINARIES
+    printf '%s  %s\n' "${2:-$(git write-tree --prefix="$SAFETY/")}" "$SAFETY"
+    for f in rampilot/panda-patches/*; do [ ! -f "$f" ] || printf '%s  %s\n' "$(sha256 "$f")" "$f"; done; } > rampilot/ALLOWED_BINARIES
   g add -A
 }
 safety_edit() { echo 'int chrysler_rampilot_long;' >> "$SAFETY/modes/chrysler.h"; }
+hook_edit() { echo '// optional fwd_packet hook' >> "$SAFETY/safety.h"; echo '// fwd_packet declaration' >> "$SAFETY/safety_declarations.h"; }
 tests_edit() { echo '# rampilot tests' >> "$SAFETY/tests/test_chrysler.py"; }
+patch_add() { mkdir -p rampilot/panda-patches; printf 'Subject: packet-aware forwarding\n--- a/board/main.c\n+++ b/board/main.c\n' > "$PATCH"; }
 patch_fw() { printf "$2" | dd of="$FW" bs=1 seek="$1" conv=notrunc status=none; }  # $1 = offset, $2 = bytes
-g checkout -qb fw-ok "$BASE"; safety_edit; tests_edit; cp "$W/rampilot-fw" "$FW"; fwpins
+g checkout -qb fw-ok "$BASE"; safety_edit; hook_edit; tests_edit; patch_add; cp "$W/rampilot-fw" "$FW"; fwpins
+PATCH_SHA="$(sha256 "$PATCH")"
 # A note line shaped like a pin must be ignored.
 { printf '#%064d  %s\n' 0 "$FW"; cat rampilot/ALLOWED_BINARIES; } > "$W/pins"; cat "$W/pins" > rampilot/ALLOWED_BINARIES
 g add -A && g commit -qm fw-ok; FWOK="$(git rev-parse HEAD)"; FW_TREE="$(git rev-parse "$FWOK:$SAFETY")"
@@ -104,9 +111,23 @@ g checkout -qb fw-stocksig "$BASE"; safety_edit; mkfw "$FW" $'rampilot image wit
 FWSTOCKSIG_SHA="$(sha256 "$FW")"; fwpins; g commit -qm stocksig; FWSTOCKSIG="$(git rev-parse HEAD)"
 # Line-ending conversion on checkout: the blob matches every pin, the file Git writes does not.
 g checkout -qb fw-crlf "$FWOK"; printf '*.signed text eol=crlf\n' > .gitattributes; g add .gitattributes && g commit -qm crlf; FWCRLF="$(git rev-parse HEAD)"
+# The generic packet hook (safety.h, safety_declarations.h) and the Panda driver patches
+g checkout -qb safety-h-only "$BASE"; echo '// hook' >> "$SAFETY/safety.h"; g commit -qam safety-h; SAFEHONLY="$(git rev-parse HEAD)"
+g checkout -qb safety-decl-only "$BASE"; echo '// hook' >> "$SAFETY/safety_declarations.h"; g commit -qam safety-decl; SAFEDECLONLY="$(git rev-parse HEAD)"
+g checkout -qb fw-hook "$BASE"; hook_edit; cp "$W/rampilot-fw" "$FW"; fwpins; g commit -qm fw-hook; FWHOOK="$(git rev-parse HEAD)"
+g checkout -qb fw-lateral "$FWOK"; echo '// changed' >> "$SAFETY/lateral.h"; fwpins; g commit -qm lateral; FWLATERAL="$(git rev-parse HEAD)"
+g checkout -qb patch-nofw "$BASE"; patch_add; mkdir -p rampilot; printf '%s  %s\n' "$PATCH_SHA" "$PATCH" > rampilot/ALLOWED_BINARIES
+g add -A && g commit -qm patch-nofw; PATCHNOFW="$(git rev-parse HEAD)"
+g checkout -qb fw-patch-nopin "$FWOK"; echo 'Subject: extra' > rampilot/panda-patches/0002-extra.patch; g add -A && g commit -qm nopin; FWPATCHNOPIN="$(git rev-parse HEAD)"
+g checkout -qb fw-patch-badsha "$FWOK"; echo '+changed after review' >> "$PATCH"; g commit -qam badsha; FWPATCHBADSHA="$(git rev-parse HEAD)"
+g checkout -qb fw-patch-dup "$FWOK"; printf '%s  %s\n' "$PATCH_SHA" "$PATCH" >> rampilot/ALLOWED_BINARIES; g commit -qam dup; FWPATCHDUP="$(git rev-parse HEAD)"
+g checkout -qb fw-patch-stale "$FWOK"; printf '%s  %s\n' "$BOGUS_SHA" rampilot/panda-patches/0003-missing.patch >> rampilot/ALLOWED_BINARIES
+g commit -qam stale; FWPATCHSTALE="$(git rev-parse HEAD)"
+g checkout -qb fw-patch-mode "$FWOK"; chmod 755 "$PATCH"; g commit -qam mode; FWPATCHMODE="$(git rev-parse HEAD)"
 g checkout -q staging-tici
 for n in UIOK UIBAD UINOEXEC UIMODEONLY BINL FWOK FWNOPIN FWDUP FWBADSHA SAFEONLY SAFETESTONLY FWONLY FWTESTS FWBADTREE \
-         FWH7 FWBOOT FWBOOTF4 FWOTHER FWHONDA FWMODE FWNOVERS FWBADLEN FWSTOCKSIG FWCRLF; do
+         FWH7 FWBOOT FWBOOTF4 FWOTHER FWHONDA FWMODE FWNOVERS FWBADLEN FWSTOCKSIG FWCRLF SAFEHONLY SAFEDECLONLY FWHOOK \
+         FWLATERAL PATCHNOFW FWPATCHNOPIN FWPATCHBADSHA FWPATCHDUP FWPATCHSTALE FWPATCHMODE; do
   g branch -f rampilot-tici "${!n}"; g bundle create -q "$W/$n.bundle" "$BASE..rampilot-tici" 2>/dev/null
 done
 g branch -f rampilot-tici "$GOOD"
@@ -245,6 +266,16 @@ expect_refused "firmware with execute mode" "Git mode 100644" inst FWMODE --pand
 expect_refused "corrupted trailer (no VERS marker)" "no VERS marker" inst FWNOVERS --panda-sha256 "$FWNOVERS_SHA"
 expect_refused "corrupted length field" "length field" inst FWBADLEN --panda-sha256 "$FWBADLEN_SHA"
 expect_refused "firmware carrying the stock signature" "stock signature" inst FWSTOCKSIG --panda-sha256 "$FWSTOCKSIG_SHA"
+# The packet hook files follow the same lockstep; other safety files and loose patches stay refused.
+expect_refused "safety.h change without firmware" "without a pinned Panda firmware change: $SAFETY/safety.h" inst SAFEHONLY
+expect_refused "safety_declarations.h change without firmware" "without a pinned Panda firmware change: $SAFETY/safety_declarations.h" inst SAFEDECLONLY
+expect_refused "other top-level safety file with firmware" "protected paths: $SAFETY/lateral.h" inst FWLATERAL --panda-sha256 "$FW_SHA"
+expect_refused "Panda patch in a release without firmware" "changes rampilot/panda-patches without a pinned Panda firmware change" inst PATCHNOFW
+expect_refused "unpinned Panda patch" "rampilot/panda-patches/0002-extra.patch is not pinned exactly once" inst FWPATCHNOPIN --panda-sha256 "$FW_SHA"
+expect_refused "Panda patch that differs from its pin" "$PATCH is not pinned to its blob digest" inst FWPATCHBADSHA --panda-sha256 "$FW_SHA"
+expect_refused "Panda patch pinned twice" "$PATCH is not pinned exactly once" inst FWPATCHDUP --panda-sha256 "$FW_SHA"
+expect_refused "pin for a Panda patch the release does not contain" "0003-missing.patch, which the candidate does not contain" inst FWPATCHSTALE --panda-sha256 "$FW_SHA"
+expect_refused "Panda patch with execute mode" "$PATCH must be a regular file with Git mode 100644" inst FWPATCHMODE --panda-sha256 "$FW_SHA"
 # Device check: the Panda's own report must be the F4 signature of the checked-out or the stock F4 file.
 expect_refused "firmware install refused until pandad reports the Panda" "PandaSignatures is missing" inst FWOK --panda-sha256 "$FW_SHA"
 sigbytes 1a > "$PARAMS_DIR/PandaSignatures"   # an H7-type Panda on its stock H7 firmware
@@ -262,11 +293,17 @@ expect_refused "firmware that differs on disk after checkout" "checked-out $FW d
 [ "$(head)" = "$BASE" ] && [ "$(git -C "$OP_DIR" rev-parse --abbrev-ref HEAD)" = staging-tici ] && [ "$(sha256 "$OP_DIR/$FW")" = "$STOCK_FW_SHA" ] &&
   [ -z "$(git -C "$OP_DIR" status --porcelain --untracked-files=no)" ] && [ "$(cat "$PARAMS_DIR/DisableUpdates")" = 0 ] && [ ! -e "$STATE_DIR/rollback.env" ] \
   && ok "failed on-disk check restores the baseline checkout and stock file" || bad "failed on-disk check restores the baseline checkout and stock file"
+# Firmware whose only source change is the packet hook in safety.h and safety_declarations.h, with no patches
+if out="$(inst FWHOOK --panda-sha256 "$FW_SHA" 2>&1)" && [[ "$out" == *"Panda patches pinned: 0"* ]]; then
+  ok "firmware with only the packet-hook safety change installs"
+else bad "firmware with only the packet-hook safety change installs"; echo "$out" | sed 's/^/     /'; fi
+expect_ok "rollback of the packet-hook firmware" bash "$DEV" rollback
 
 if out="$(inst FWOK --panda-sha256 "$FW_SHA" 2>&1)"; then ok "pinned firmware with its safety change installs"; else bad "pinned firmware with its safety change installs"; echo "$out" | sed 's/^/     /'; fi
 [[ "$out" == *"pinned Panda firmware ok: $FW sha256 $FW_SHA, built from $SAFETY tree $FW_TREE"* &&
    "$out" == *"signature babababababababa (stock 1e1e1e1e1e1e1e1e)"* && "$out" == *"panda-status (expect MATCH on babababababababa)"* &&
-   "$out" == *"Panda type ok: the Panda reports 1e1e1e1e1e1e1e1e"* ]] \
+   "$out" == *"Panda type ok: the Panda reports 1e1e1e1e1e1e1e1e"* &&
+   "$out" == *"Panda patch ok: $PATCH sha256 $PATCH_SHA"* && "$out" == *"Panda patches pinned: 1"* ]] \
   && ok "install reports the pin, both signatures and the panda-status check" || { bad "install reports the pin, both signatures and the panda-status check"; echo "$out" | sed 's/^/     /'; }
 [ "$(head)" = "$FWOK" ] && [ "$(sha256 "$OP_DIR/$FW")" = "$FW_SHA" ] && ok "checked-out firmware has the pinned bytes" || bad "checked-out firmware has the pinned bytes"
 st="$STATE_DIR/last/state.env"

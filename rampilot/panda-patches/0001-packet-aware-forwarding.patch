@@ -1,0 +1,36 @@
+RamPilot: packet-aware CAN forwarding, against github.com/sunnyhaibin/panda 7eab6fd61bae085e0fd44cccb79dc6451163029e
+
+The CAN receive interrupt (bxcan.h for the F4, fdcan.h for the H7) passes the received packet to the safety
+forwarding decision, safety_fwd_packet_hook(bus, packet) in opendbc/safety/safety.h, instead of the address alone, so
+a safety mode can decide by the message content. Chrysler RamPilot long uses it to pass every factory DAS_3 with a
+deceleration request or brake preparation straight to bus 0. Without this patch the firmware calls
+safety_fwd_hook(bus, addr), and the Chrysler mode never blocks the factory DAS_3 (plain factory cruise).
+
+Applied by panda-fw/tools/build_fw.sh in the extracted panda tree: git apply --check -p1, then git apply -p1.
+
+diff --git a/board/drivers/bxcan.h b/board/drivers/bxcan.h
+index 75bd05d..6a3b3b0 100644
+--- a/board/drivers/bxcan.h
++++ b/board/drivers/bxcan.h
+@@ -157,7 +157,7 @@ void can_rx(uint8_t can_number) {
+     can_set_checksum(&to_push);
+ 
+     // forwarding (panda only)
+-    int bus_fwd_num = safety_fwd_hook(bus_number, to_push.addr);
++    int bus_fwd_num = safety_fwd_packet_hook(bus_number, &to_push);
+     if (bus_fwd_num != -1) {
+       CANPacket_t to_send;
+ 
+diff --git a/board/drivers/fdcan.h b/board/drivers/fdcan.h
+index f3f8d99..dca3110 100644
+--- a/board/drivers/fdcan.h
++++ b/board/drivers/fdcan.h
+@@ -199,7 +199,7 @@ void can_rx(uint8_t can_number) {
+     can_set_checksum(&to_push);
+ 
+     // forwarding (panda only)
+-    int bus_fwd_num = safety_fwd_hook(bus_number, to_push.addr);
++    int bus_fwd_num = safety_fwd_packet_hook(bus_number, &to_push);
+     if (bus_fwd_num < 0) {
+       bus_fwd_num = bus_config[can_number].forwarding_bus;
+     }

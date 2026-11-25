@@ -28,7 +28,8 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt):
     self.das_3_counter_last: int | None = None  # factory COUNTER of the last copy sent
     self.das_3_frame_last = 0  # controller frame of the last copy sent
     self.long_state = rampilot_long.LongState()
-    self.long_confirm = False  # driver's resume/accel button or gas since the last decision
+    self.long_confirm = False  # driver's resume/accel button press or new gas press since the last decision
+    self.gas_pressed_prev = False
     self.accel = 0.  # braking the comma applied in the last copy
 
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -97,11 +98,17 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt):
       can_sends.append(MadsCarController.create_lkas_heartbit(self.packer, CS.lkas_heartbit, self.mads))
 
     # RamPilot long (Ram DT): one DAS_3 on bus 0 for each factory DAS_3 (50 Hz), each built from its own factory frame;
-    # the comma only adds braking (rampilot_long.py)
+    # the comma only adds braking (rampilot_long.py). A copy of a factory frame that requests braking or brake prep is
+    # still sent (an unchanged copy, which the Panda refuses while it forwards the factory frame): every attempt keeps
+    # the Panda's comma-sending timer fresh, so the next frame without factory braking is blocked and answered at once.
     if self.CP.openpilotLongitudinalControl:
-      # a driver confirm can come in a frame without a new factory DAS_3: keep it for the next decision
-      self.long_confirm |= CS.out.gasPressed or any(be.type in (ButtonType.resumeCruise, ButtonType.accelCruise)
-                                                    for be in CS.out.buttonEvents)
+      # A driver confirm is a fresh action: a resume/accel button press (not the release of a button already held) or the
+      # start of a gas press. It can come in a frame without a new factory DAS_3, so it is kept for the next decision,
+      # which uses it up; a confirm used up by the decision that starts a hold is ignored (rampilot_long.py).
+      gas_press = CS.out.gasPressed and not self.gas_pressed_prev
+      self.gas_pressed_prev = CS.out.gasPressed
+      self.long_confirm |= gas_press or any(be.pressed and be.type in (ButtonType.resumeCruise, ButtonType.accelCruise)
+                                            for be in CS.out.buttonEvents)
 
       if CS.das_3_count != self.das_3_count_sent:
         self.das_3_count_sent = CS.das_3_count
@@ -117,8 +124,11 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt):
           self.long_confirm = False
           overrides, self.long_state = rampilot_long.das_3_overrides(das_3, CC.longActive, CC.actuators.accel,
                                                                      self.long_state, inputs)
-          can_sends.append(chryslercan.create_das_3(self.packer, 0, das_3, das_3_raw, overrides))
+          copy = chryslercan.create_das_3(self.packer, 0, das_3, das_3_raw, overrides)
+          can_sends.append(copy)
           self.accel = float(overrides.get("ACC_DECEL", 0.))
+          if CS.das_3_delivery is not None:
+            CS.das_3_delivery.copy_sent(bytes(copy[1]), added_braking=bool(overrides))  # checked against the bus-0 echo
 
     self.frame += 1
 

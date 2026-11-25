@@ -51,17 +51,33 @@ class CarState(CarStateBase, MadsCarState):
     self.das_3_count = 0  # factory DAS_3 frames parsed so far
     self.das_3_seen: list[bytes] = []  # raw bus 2 DAS_3 frames of the current update
     self.das_3_emergency = False  # factory emergency frame (rampilot_long.is_emergency); reported in carStateSP
+    # what reached the truck: bus-0 echoes of the DAS_3 the Panda transmitted (rampilot_long.Das3Delivery)
+    self.das_3_delivery: rampilot_long.Das3Delivery | None = None
     # driver's resume and accel (+) buttons, reported as button events with RamPilot long (they release its stop hold)
     self.resume_button = 0
     self.accel_button = 0
 
-    if CP.carFingerprint in RAM_DT:
-      self.observe_can = self.observe_ram_dt
+    # all of the RamPilot long DAS_3 work runs only with openpilot long on (no extra parsing or CPU with it off)
+    self.rampilot_long = CP.carFingerprint in RAM_DT and CP.openpilotLongitudinalControl
+    if self.rampilot_long:
+      self.das_3_delivery = rampilot_long.Das3Delivery()
+      self.observe_can = self.observe_ram_dt_long
+    elif CP.carFingerprint in RAM_DT:
+      self.observe_can = self.observe_display_data
 
-  def observe_ram_dt(self, packets, now_nanos, packet_valid):
+  def observe_ram_dt_long(self, packets, now_nanos, packet_valid):
     self.observe_display_data(packets, now_nanos, packet_valid)
-    self.das_3_seen = [bytes(data) for _, frames in packets for address, data, bus in frames
-                       if bus == 2 and address == RAM_DT_DAS_3_ADDR and len(data) == 8]
+    self.das_3_seen = []
+    delivery = self.das_3_delivery
+    for stamp, frames in packets:
+      for address, data, bus in frames:
+        if address == RAM_DT_DAS_3_ADDR and bus in (2, rampilot_long.DAS_3_ECHO_SRC) and len(data) == 8:
+          if bus == 2:
+            self.das_3_seen.append(bytes(data))
+          delivery.observe(stamp, bytes(data), bus)
+    now = now_nanos if now_nanos is not None else max((stamp for stamp, _ in packets), default=None)
+    if now is not None:
+      delivery.tick(now)
 
   def update_das_3(self, cp_cam) -> None:
     seen, self.das_3_seen = self.das_3_seen, []
@@ -191,10 +207,12 @@ class CarState(CarStateBase, MadsCarState):
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
     self.button_counter = cp.vl["CRUISE_BUTTONS"]["COUNTER"]
 
-    if self.CP.carFingerprint in RAM_DT:
+    if self.rampilot_long:
       self.update_das_3(cp_cam)
-      if self.CP.openpilotLongitudinalControl:
-        ret_sp.rampilotFactoryEmergency = self.das_3_emergency  # logged: when the Panda's factory window was open
+      ret_sp.rampilotFactoryEmergency = self.das_3_emergency  # logged: when the Panda's factory window was open
+      ret_sp.rampilotDas3EchoAgeMs = self.das_3_delivery.echo_age_ms()
+      ret_sp.rampilotBrakingNotDelivered = self.das_3_delivery.not_delivered_recent()
+      ret_sp.rampilotFactorySinceEcho = min(self.das_3_delivery.factory_since_echo, 0xFFFF)
 
     MadsCarState.update_mads(self, ret, can_parsers)
 

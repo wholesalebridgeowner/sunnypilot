@@ -26,18 +26,27 @@ static const ChryslerAddrs *chrysler_addrs;
 
 // RamPilot longitudinal (Ram DT only, param CHRYSLER_PARAM_RAMPILOT_LONG). The factory cruise module (DASM, bus 2)
 // keeps computing DAS_3. While controls are allowed, the comma's DAS_3 replaces the factory frame on bus 0, and it
-// may only add braking to a fresh factory frame: never less deceleration, never more engine torque.
+// may only add braking to a fresh factory frame: never less deceleration, never more engine torque. A factory frame
+// with a deceleration request or brake preparation is never replaced: it reaches bus 0 itself.
 #define CHRYSLER_ACC_DECEL_MIN 2558         // ACC_DECEL raw, -3.5 m/s^2 (0.004885 m/s^2 per bit, -16 m/s^2 offset)
-#define CHRYSLER_ACC_DECEL_INACTIVE 4094    // ACC_DECEL raw, +4.0 m/s^2
+#define CHRYSLER_ACC_DECEL_ZERO 3275        // ACC_DECEL raw, -0.002 m/s^2: the weakest deceleration the comma requests
 #define CHRYSLER_TORQUE_INACTIVE 2000       // ENGINE_TORQUE_REQUEST raw, 0 Nm (0.25 Nm per bit, -500 Nm offset)
 #define CHRYSLER_DAS_3_MAX_AGE 40000U       // us, newest factory frame a comma frame may copy: two frames at 50 Hz
 #define CHRYSLER_DAS_3_PREV_MAX_AGE 60000U  // us, the factory frame before it
+#define CHRYSLER_DAS_3_STOCK_EXPIRY 100000U // us, a stored factory frame older than this is forgotten
 #define CHRYSLER_DAS_3_TX_TIMEOUT 60000U    // us, after the comma's last attempt the factory frame is passed again
+#define CHRYSLER_DAS_3_DELIVERY_TIMEOUT 60000U  // us, longest time with no DAS_3 on bus 0 while the comma replaces it
 #define CHRYSLER_DAS_3_MAX_REFUSALS 3U      // refused attempts in a row that hand bus 0 back to the factory
 #define CHRYSLER_DAS_3_EMERGENCY_TIME 2000000U  // us, factory frames pass directly after a factory emergency frame
-// DAS_3 byte 6 bits that make a factory frame an emergency frame: COLLISION_BRK_PREP (0x01). ACC_BRK_PREP (0x02) is
-// left out: it can be routine ACC brake prefill (Codex item 56 measures it).
-#define CHRYSLER_DAS_3_EMERGENCY_BITS 0x01U
+// DAS_3 byte 6 bits that make a factory frame an emergency frame: COLLISION_BRK_PREP (0x01) and ACC_BRK_PREP (0x02).
+// In 9.9 h of recorded drives ACC_BRK_PREP appeared once, with cruise off and the driver braking hard.
+#define CHRYSLER_DAS_3_EMERGENCY_BITS 0x03U
+// ACC_DECEL raw, -2.5 m/s^2: a factory deceleration request stronger than this is an emergency frame. The factory's
+// hardest request in 9.9 h of recorded drives was raw 2834 (-2.16 m/s^2).
+#define CHRYSLER_ACC_DECEL_EMERGENCY 2764
+// DAS_3 byte 6 bits of brake preparation, COLLISION_BRK_PREP (0x01) and ACC_BRK_PREP (0x02): a factory frame with
+// either one, or with a deceleration request, always reaches bus 0 itself
+#define CHRYSLER_DAS_3_BRAKE_PREP_BITS 0x03U
 
 typedef struct {
   uint8_t data[8];        // bytes 0-7 (byte 7 is the checksum)
@@ -61,10 +70,11 @@ static bool chrysler_das_3_stock_forwarded = false;     // the fwd hook passed t
 static bool chrysler_das_3_stock_blocked = false;       // the fwd hook blocked the factory DAS_3 the rx hook gets next
 static bool chrysler_das_3_bus0_counter_valid = false;  // a DAS_3 reached bus 0 since init
 static uint8_t chrysler_das_3_bus0_counter = 0U;         // COUNTER of the last DAS_3 on bus 0, forwarded or the comma's
+static uint32_t chrysler_das_3_bus0_ts = 0U;             // time it reached bus 0 [us]
 static bool chrysler_das_3_tx_seen = false;             // the comma tried to send a DAS_3 within CHRYSLER_DAS_3_TX_TIMEOUT
 static uint32_t chrysler_das_3_tx_ts = 0U;               // time of its last attempt, accepted or not [us]
 static uint32_t chrysler_das_3_refusals = 0U;            // comma DAS_3 refused in a row while controls are allowed
-static bool chrysler_das_3_fallback = false;            // latched by refusals: the factory has bus 0 until disengaged
+static bool chrysler_das_3_fallback = false;            // latched by refusals or the delivery timeout; ends the engagement
 static bool chrysler_das_3_emergency_seen = false;      // a factory emergency frame arrived within CHRYSLER_DAS_3_EMERGENCY_TIME
 static uint32_t chrysler_das_3_emergency_ts = 0U;        // receive time of the last one [us]
 
@@ -132,6 +142,11 @@ static void chrysler_das_3_expire(void) {
   if (get_ts_elapsed(ts, chrysler_das_3_emergency_ts) > CHRYSLER_DAS_3_EMERGENCY_TIME) {
     chrysler_das_3_emergency_seen = false;
   }
+  for (int i = 0; i < 2; i++) {
+    if (get_ts_elapsed(ts, chrysler_das_3_stock[i].ts) > CHRYSLER_DAS_3_STOCK_EXPIRY) {
+      chrysler_das_3_stock[i].seen = false;
+    }
+  }
 }
 
 // the refusal count and latch last only while controls are allowed: the next engagement starts clean
@@ -140,6 +155,20 @@ static void chrysler_das_3_fallback_update(void) {
     chrysler_das_3_refusals = 0U;
     chrysler_das_3_fallback = false;
   }
+}
+
+// Hand bus 0 back to the factory: the latch ends the engagement. With controls not allowed the fwd hook passes the
+// factory DAS_3 and the host sees controls not allowed; engaging again needs a new factory ACC_ACTIVE rising edge.
+static void chrysler_das_3_fallback_set(void) {
+  chrysler_das_3_fallback = true;
+  controls_allowed = false;
+}
+
+// a DAS_3 with this COUNTER moves the truck's DAS_3 COUNTER forward: 1 to 7 steps ahead of the last DAS_3 on bus 0
+// (the forward half of the 4-bit ring), or no DAS_3 has reached bus 0 yet. A repeat (0) or a step back (8 to 15) doesn't.
+static bool chrysler_das_3_counter_ahead(uint8_t counter) {
+  const uint32_t step = ((uint32_t)counter + 16U - (uint32_t)chrysler_das_3_bus0_counter) & 0xFU;
+  return !chrysler_das_3_bus0_counter_valid || ((step >= 1U) && (step <= 7U));
 }
 
 // RamPilot longitudinal: the comma's DAS_3 may only add braking to a fresh factory DAS_3
@@ -180,17 +209,29 @@ static bool chrysler_rampilot_long_das_3_allowed(const CANPacket_t *msg) {
   }
   const ChryslerDas3 *stock = &match->frame;
 
+  bool exact = true;  // byte for byte the matched factory frame, checksum included
+  for (int i = 0; i < 8; i++) {
+    if (cmd.data[i] != stock->data[i]) {
+      exact = false;
+    }
+  }
+
   // after repeated refusals the factory has bus 0 until controls are not allowed
   bool violation = !chrysler_rampilot_long || !matched || chrysler_das_3_fallback;
 
-  // the truck's DAS_3 COUNTER only moves forward: 1 to 7 steps (the forward half of the 4-bit ring), so missed frames
-  // are tolerated while repeats and backward steps are refused
-  const uint32_t counter_step = ((uint32_t)cmd.counter + 16U - (uint32_t)chrysler_das_3_bus0_counter) & 0xFU;
-  violation |= chrysler_das_3_bus0_counter_valid && ((counter_step == 0U) || (counter_step > 7U));
+  // the truck's modules discard a frame with a bad checksum: that is no replacement for the factory frame
+  violation |= chrysler_compute_checksum(msg) != chrysler_get_checksum(msg);
+
+  // the truck's DAS_3 COUNTER only moves forward: missed frames are tolerated, repeats and backward steps are refused
+  violation |= !chrysler_das_3_counter_ahead(cmd.counter);
 
   // While factory emergency frames pass directly to bus 0, and while controls are not allowed, the comma may only
   // stand in for a factory frame the fwd hook blocked: the one that started the emergency, or the one that disengaged
   violation |= (chrysler_das_3_emergency_seen || !controls_allowed) && !match->blocked;
+
+  // While longitudinal actuation is not allowed (controls not allowed, or the driver presses the gas), only the factory
+  // frame itself. With controls not allowed it fills the gap the blocked factory frame left on bus 0.
+  violation |= !get_longitudinal_allowed() && !exact;
 
   if (controls_allowed) {
     // COUNTER, ACC_AVAILABLE, ACC_ACTIVE, ACC_FAULTED, COLLISION_BRK_PREP, ACC_BRK_PREP, GR_MAX_REQ,
@@ -203,22 +244,19 @@ static bool chrysler_rampilot_long_das_3_allowed(const CANPacket_t *msg) {
     const bool stock_decel = stock->decel_req != 0;
     const bool cmd_decel = cmd.decel_req != 0;
     if (stock_decel) {
-      // keep the factory request; the comma may only make it stronger
+      // keep the factory request; the comma may only make it stronger. (The fwd hook passes a factory frame with a
+      // deceleration request to bus 0 itself, so a copy of it is a repeat, refused by the COUNTER rule above.)
       violation |= cmd.decel_req != stock->decel_req;
       violation |= cmd.accel > stock->accel;
     } else if (cmd_decel) {
-      // deceleration the factory does not request: -3.5 to +4.0 m/s^2, with engine torque at most 0 Nm
+      // deceleration the factory does not request: -3.5 to 0 m/s^2, with engine torque at most 0 Nm
       violation |= cmd.decel_req != 1;
-      violation |= max_limit_check(cmd.accel, CHRYSLER_ACC_DECEL_INACTIVE, CHRYSLER_ACC_DECEL_MIN);
+      violation |= max_limit_check(cmd.accel, CHRYSLER_ACC_DECEL_ZERO, CHRYSLER_ACC_DECEL_MIN);
       violation |= cmd.engine_torque > MIN(CHRYSLER_TORQUE_INACTIVE, stock->engine_torque);
     } else {
       // no deceleration request: ACC_DECEL as the factory's
       violation |= cmd.accel != stock->accel;
     }
-
-    // the comma adds braking only while longitudinal actuation is allowed (not while the driver presses the gas)
-    const bool adds_braking = cmd_decel && (!stock_decel || (cmd.accel < stock->accel));
-    violation |= adds_braking && !get_longitudinal_allowed();
 
     // the comma alone never commands more than -3.5 m/s^2; a stronger factory request is copied
     violation |= cmd.accel < MIN(CHRYSLER_ACC_DECEL_MIN, stock->accel);
@@ -226,16 +264,12 @@ static bool chrysler_rampilot_long_das_3_allowed(const CANPacket_t *msg) {
     // engine torque never above the factory request
     violation |= cmd.engine_torque > stock->engine_torque;
     violation |= cmd.engine_torque_max > stock->engine_torque_max;
-  } else {
-    // controls not allowed: only an exact copy, which fills the gap the blocked factory frame left on bus 0
-    for (int i = 0; i < 8; i++) {
-      violation |= cmd.data[i] != stock->data[i];
-    }
   }
 
   if (!violation) {
     chrysler_das_3_bus0_counter = cmd.counter;
     chrysler_das_3_bus0_counter_valid = true;
+    chrysler_das_3_bus0_ts = ts;
   }
   return !violation;
 }
@@ -266,14 +300,15 @@ static void chrysler_rx_hook(const CANPacket_t *msg) {
       if (chrysler_das_3_stock_forwarded) {
         chrysler_das_3_bus0_counter = latest->frame.counter;
         chrysler_das_3_bus0_counter_valid = true;
+        chrysler_das_3_bus0_ts = latest->ts;
       }
       chrysler_das_3_stock_forwarded = false;
       chrysler_das_3_stock_blocked = false;
 
-      // a factory emergency frame (collision brake prep, or braking stronger than -3.5 m/s^2) opens a window in which
-      // the factory frames pass directly to bus 0; each one extends it
+      // a factory emergency frame (collision or ACC brake prep, or braking stronger than -2.5 m/s^2) opens a window in
+      // which the factory frames pass directly to bus 0; each one extends it
       const bool collision_prep = (latest->frame.data[6] & CHRYSLER_DAS_3_EMERGENCY_BITS) != 0U;
-      const bool hard_braking = (latest->frame.decel_req != 0) && (latest->frame.accel < CHRYSLER_ACC_DECEL_MIN);
+      const bool hard_braking = (latest->frame.decel_req != 0) && (latest->frame.accel < CHRYSLER_ACC_DECEL_EMERGENCY);
       if (collision_prep || hard_braking) {
         chrysler_das_3_emergency_ts = latest->ts;
         chrysler_das_3_emergency_seen = true;
@@ -375,16 +410,23 @@ static bool chrysler_tx_hook(const CANPacket_t *msg) {
     chrysler_das_3_tx_ts = microsecond_timer_get();
     chrysler_das_3_tx_seen = true;
     chrysler_das_3_fallback_update();
+    // before an accepted copy moves it: would this copy move the truck's DAS_3 COUNTER forward?
+    const bool ahead = chrysler_das_3_counter_ahead(chrysler_get_counter(msg));
     const bool allowed = chrysler_rampilot_long_das_3_allowed(msg);
 
-    // refusals in a row while controls are allowed, outside a factory emergency, hand bus 0 back to the factory
+    // Refusals in a row while controls are allowed, outside a factory emergency, hand bus 0 back to the factory. Only a
+    // refused copy that would have moved the truck forward counts: after one that is behind or a repeat, the truck
+    // already has that frame or a newer one.
     if (allowed) {
       chrysler_das_3_refusals = 0U;
-    } else if (controls_allowed && !chrysler_das_3_emergency_seen && (chrysler_das_3_refusals < CHRYSLER_DAS_3_MAX_REFUSALS)) {
+    } else if (controls_allowed && !chrysler_das_3_emergency_seen && ahead &&
+               (chrysler_das_3_refusals < CHRYSLER_DAS_3_MAX_REFUSALS)) {
       chrysler_das_3_refusals += 1U;
     } else {
     }
-    chrysler_das_3_fallback |= chrysler_das_3_refusals >= CHRYSLER_DAS_3_MAX_REFUSALS;
+    if (chrysler_das_3_refusals >= CHRYSLER_DAS_3_MAX_REFUSALS) {
+      chrysler_das_3_fallback_set();
+    }
 
     if (!allowed) {
       tx = false;
@@ -394,22 +436,53 @@ static bool chrysler_tx_hook(const CANPacket_t *msg) {
   return tx;
 }
 
-static bool chrysler_fwd_hook(int bus_num, int addr) {
+// A factory DAS_3 that requests braking (ACC_DECEL_REQ) or brake preparation (COLLISION_BRK_PREP, ACC_BRK_PREP) is
+// never blocked: the truck gets the first such frame directly, also when the host has stopped sending. So is one that
+// isn't 8 bytes. Without the packet (a caller with only the address) nothing tells them apart, so no factory DAS_3 is
+// blocked: plain factory cruise, and every comma copy is a repeat of a frame already on bus 0.
+static bool chrysler_das_3_factory_priority(const CANPacket_t *packet) {
+  bool priority = true;
+  if ((packet != NULL) && (GET_LEN(packet) == 8U)) {
+    ChryslerDas3 factory;
+    chrysler_das_3_decode(packet, &factory);
+    priority = (factory.decel_req != 0) || ((factory.data[6] & CHRYSLER_DAS_3_BRAKE_PREP_BITS) != 0U);
+  }
+  return priority;
+}
+
+static bool chrysler_fwd(int bus_num, int addr, const CANPacket_t *packet) {
   bool block_msg = false;
 
   // RamPilot longitudinal: while controls are allowed and the comma is sending DAS_3, its frame replaces the factory
-  // frame on bus 0. The factory frame is passed again if the comma goes quiet, after repeated refusals (until
-  // controls are not allowed), and during a factory emergency.
+  // frame on bus 0, except a factory frame with braking or brake preparation. The factory frame is passed again if the
+  // comma goes quiet, during a factory emergency, and after a fallback latch (repeated refusals, or no DAS_3 on bus 0
+  // for too long), which ends the engagement.
   if (chrysler_rampilot_long && (bus_num == 2) && (addr == (int)chrysler_addrs->DAS_3)) {
     chrysler_das_3_expire();
     chrysler_das_3_fallback_update();
-    block_msg = controls_allowed && chrysler_das_3_tx_seen && !chrysler_das_3_fallback && !chrysler_das_3_emergency_seen;
+    // while the comma replaces the factory frame, a DAS_3 must reach bus 0 at least every CHRYSLER_DAS_3_DELIVERY_TIMEOUT
+    const uint32_t delivery_age = get_ts_elapsed(microsecond_timer_get(), chrysler_das_3_bus0_ts);
+    if (controls_allowed && chrysler_das_3_tx_seen && chrysler_das_3_bus0_counter_valid &&
+        (delivery_age > CHRYSLER_DAS_3_DELIVERY_TIMEOUT)) {
+      chrysler_das_3_fallback_set();
+    }
+    const bool factory_priority = chrysler_das_3_factory_priority(packet);
+    block_msg = controls_allowed && chrysler_das_3_tx_seen && !chrysler_das_3_fallback && !chrysler_das_3_emergency_seen &&
+                !factory_priority;
     // the panda runs the rx hook on this frame next
     chrysler_das_3_stock_forwarded = !block_msg;
     chrysler_das_3_stock_blocked = block_msg;
   }
 
   return block_msg;
+}
+
+static bool chrysler_fwd_hook(int bus_num, int addr) {
+  return chrysler_fwd(bus_num, addr, NULL);
+}
+
+static bool chrysler_fwd_packet_hook(int bus_num, const CANPacket_t *msg) {
+  return chrysler_fwd(bus_num, (int)msg->addr, msg);
 }
 
 static safety_config chrysler_init(uint16_t param) {
@@ -480,7 +553,7 @@ static safety_config chrysler_init(uint16_t param) {
     {CHRYSLER_RAM_DT_ADDRS.CRUISE_BUTTONS, 2, 3, .check_relay = false},
     {CHRYSLER_RAM_DT_ADDRS.LKAS_COMMAND, 0, 8, .check_relay = true},
     {CHRYSLER_RAM_DT_ADDRS.DAS_6, 0, 8, .check_relay = true},
-    {CHRYSLER_RAM_DT_ADDRS.DAS_3, 0, 8, .check_relay = true, .disable_static_blocking = true},  // blocked in chrysler_fwd_hook
+    {CHRYSLER_RAM_DT_ADDRS.DAS_3, 0, 8, .check_relay = true, .disable_static_blocking = true},  // blocked in chrysler_fwd
   };
 
 #ifdef ALLOW_DEBUG
@@ -526,6 +599,7 @@ static safety_config chrysler_init(uint16_t param) {
   chrysler_das_3_stock_forwarded = false;
   chrysler_das_3_stock_blocked = false;
   chrysler_das_3_bus0_counter_valid = false;
+  chrysler_das_3_bus0_ts = 0U;
   chrysler_das_3_tx_seen = false;
   chrysler_das_3_tx_ts = 0U;
   chrysler_das_3_refusals = 0U;
@@ -561,6 +635,7 @@ const safety_hooks chrysler_hooks = {
   .rx = chrysler_rx_hook,
   .tx = chrysler_tx_hook,
   .fwd = chrysler_fwd_hook,
+  .fwd_packet = chrysler_fwd_packet_hook,
   .get_counter = chrysler_get_counter,
   .get_checksum = chrysler_get_checksum,
   .compute_checksum = chrysler_compute_checksum,

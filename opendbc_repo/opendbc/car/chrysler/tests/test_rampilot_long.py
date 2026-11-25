@@ -21,6 +21,7 @@ RAM_DT = CAR.RAM_1500_5TH_GEN
 DBC_NAME = CHRYSLER_DBC[RAM_DT][Bus.pt]
 DAS_3 = DBC(DBC_NAME).name_to_msg["DAS_3"]
 DT_NS = 10_000_000  # 100 Hz controller
+ECHO = rampilot_long.DAS_3_ECHO_SRC  # a frame the Panda transmitted on bus 0, returned to the host
 ButtonType = structs.CarState.ButtonEvent.Type
 
 # Factory fields the comma must never change
@@ -105,9 +106,12 @@ class Harness:
             CanData(*p.make_can_msg("CRUISE_BUTTONS", 0, {"ACC_Resume": int(self.resume_button),
                                                            "ACC_Accel": int(self.accel_button)}))]
 
-  def step(self, das_3_frames, long_active=False, accel=0.):
+  def step(self, das_3_frames, long_active=False, accel=0., echoes=(), rejected=()):
+    """`echoes`: DAS_3 frames the Panda transmitted on bus 0 since the last step, returned to the host as src 128.
+    `rejected`: comma copies the Panda refused, returned as src 192."""
     self.t += DT_NS
-    frames = self.pt_frames() + [CanData(DAS_3.address, d, 2) for d in das_3_frames]
+    frames = (self.pt_frames() + [CanData(DAS_3.address, d, 2) for d in das_3_frames] +
+              [CanData(DAS_3.address, d, ECHO) for d in echoes] + [CanData(DAS_3.address, d, 192) for d in rejected])
     self.CI.update([(self.t, frames)], now_nanos=self.t)
     CC = structs.CarControl()
     CC.enabled = long_active
@@ -217,27 +221,57 @@ class TestAddedBraking:
           assert_checksum_valid(out)
 
 
-class TestFactoryBrakingPreserved:
-  @pytest.mark.parametrize("factory_decel, accel, expected", [
-    (-2.5, -1.0, -2.5),  # factory stronger: pass-through
-    (-2.5, -2.0, -2.5),
-    (-2.5, -3.0, -3.0),  # comma stronger: comma's request
-    (-2.5, -6.0, -3.5),  # comma stronger, limited to ACCEL_MIN
-    (-4.0, -6.0, -4.0),  # factory stronger than ACCEL_MIN: never weaker than the factory
-    (-4.0, -3.8, -4.0),
-  ])
-  def test_stronger_of_the_two(self, harness, factory_decel, accel, expected):
-    factory = harness.factory({**BRAKING, "ACC_DECEL": factory_decel})
-    out, _ = harness.send_one(factory, True, accel)
-    got = decode(out)
-    assert got["ACC_DECEL"] == raw_decel(expected)
-    assert got["ACC_DECEL_REQ"] == 1
-    assert got["ENGINE_TORQUE_REQUEST"] <= decode(factory)["ENGINE_TORQUE_REQUEST"]
+class TestFactoryBrakingFrames:
+  """The Panda never blocks a factory frame that requests braking or brake prep: the comma adds nothing to it, still
+  sends an unchanged copy (refused by the Panda), and keeps its braking and hold state for the next frame."""
 
-  def test_factory_decel_req_value_kept(self, harness):
-    factory = harness.factory({**BRAKING, "ACC_DECEL_REQ": 3})  # a value the factory has not been seen to use
-    out, _ = harness.send_one(factory, True, -3.0)
-    assert decode(out)["ACC_DECEL_REQ"] == 3
+  @pytest.mark.parametrize("fields", [
+    {"ACC_DECEL_REQ": 1, "ACC_DECEL": -0.3}, {"ACC_DECEL_REQ": 1, "ACC_DECEL": -2.5},
+    {"ACC_DECEL_REQ": 1, "ACC_DECEL": -4.0}, {"ACC_DECEL_REQ": 3, "ACC_DECEL": -1.0},
+    {"ACC_DECEL_REQ": 1, "ACC_DECEL": 4.0},  # a request with no deceleration value is still a request
+    {"COLLISION_BRK_PREP": 1}, {"ACC_BRK_PREP": 1},
+    {"COLLISION_BRK_PREP": 1, "ACC_BRK_PREP": 1, "ACC_DECEL_REQ": 1, "ACC_DECEL": -1.0},
+  ])
+  @pytest.mark.parametrize("accel", [-6.0, -3.0, -1.0, 0.5])
+  def test_pass_through(self, harness, fields, accel):
+    factory = harness.factory({**CRUISING, **fields})
+    out, applied = harness.send_one(factory, True, accel)
+    assert out == factory
+    assert applied == 0.
+
+  def test_raw_and_parsed_tests_agree(self):
+    rng = random.Random(7)
+    p = CANPacker(DBC_NAME)
+    for _ in range(2000):
+      values = {**CRUISING, "ACC_DECEL_REQ": rng.choice([0, 0, 1, 2, 7]), "COLLISION_BRK_PREP": rng.choice([0, 0, 1]),
+                "ACC_BRK_PREP": rng.choice([0, 0, 1]), "ACC_DECEL": rng.uniform(-16, 4), "COUNTER": rng.randrange(16)}
+      dat = p.make_can_msg("DAS_3", 2, values)[1]
+      parsed = {name: get_raw_value(dat, sig) * sig.factor + sig.offset for name, sig in DAS_3.sigs.items()}
+      assert rampilot_long.factory_brakes_raw(dat) == rampilot_long.factory_brakes(parsed)
+
+  def test_braking_state_carries_over(self, harness):
+    assert run(harness, [(True, -0.5), (True, -0.1)]) == [True, True]  # braking, held by the keep rule
+    assert run(harness, [(True, -0.1)] * 25, BRAKING) == [False] * 25  # 0.5 s of factory braking frames
+    assert run(harness, [(True, -0.1)]) == [True]  # no restart of the hysteresis: -0.1 keeps braking
+
+  def test_no_braking_state_is_started_by_them(self, harness):
+    assert run(harness, [(True, -0.1)] * 10, BRAKING) == [False] * 10
+    assert run(harness, [(True, -0.1)]) == [False]  # -0.1 does not start braking
+
+  def test_copies_keep_coming_through_a_long_factory_braking_stretch(self, harness):
+    sent = []
+    for _ in range(100):  # 2 s of factory braking at 100 Hz updates, one factory frame per 20 ms
+      factory = harness.factory(BRAKING)
+      _, out = harness.step([factory], True, -2.0)
+      assert out == [factory]
+      sent += out
+      _, out = harness.step([], True, -2.0)
+      assert out == []
+    counters = [decode(o)["COUNTER"] for o in sent]
+    assert all((b - a) % 16 == 1 for a, b in zip(counters, counters[1:], strict=False))
+    factory = harness.factory(CRUISING)  # the factory lets go: the comma's braking applies on this very frame
+    out, _ = harness.send_one(factory, True, -2.0)
+    assert decode(out)["ACC_DECEL"] == raw_decel(-2.0) and decode(out)["COUNTER"] == (counters[-1] + 1) % 16
 
 
 class TestCopiedFields:
@@ -306,7 +340,7 @@ class TestRate:
     assert out == frames[1:]  # pass-through: each copy is its own factory frame, byte for byte
 
     frames = [harness.factory({**CRUISING, "GR_MAX_REQ": 3}),  # 13: skipped
-              harness.factory({**BRAKING, "GR_MAX_REQ": 4, "ACC_BRK_PREP": 1}),  # 14
+              harness.factory({**CRUISING, "GR_MAX_REQ": 4, "ENGINE_TORQUE_REQUEST": 120.}),  # 14
               harness.factory({**CRUISING, "GR_MAX_REQ": 5, "ENGINE_TORQUE_REQUEST": 90.})]  # 15
     actuators, out = harness.step(frames, True, -2.0)
     assert [decode(o)["COUNTER"] for o in out] == [14, 15]
@@ -318,22 +352,28 @@ class TestRate:
       assert got["ACC_DECEL_REQ"] == 1
       assert got["ENGINE_TORQUE_REQUEST"] == min(decode(factory)["ENGINE_TORQUE_REQUEST"], raw_torque(0.))
       assert got["ENGINE_TORQUE_REQUEST_MAX"] == 0
-    assert decode(out[0])["ACC_BRK_PREP"] == 1 and decode(out[1])["ACC_BRK_PREP"] == 0
+    assert (decode(out[0])["GR_MAX_REQ"], decode(out[1])["GR_MAX_REQ"]) == (4, 5)
     assert actuators.accel == pytest.approx(-2.0)
 
-  def test_batch_state_carried_from_the_first_frame_to_the_second(self, harness):
-    # -0.3 starts braking on the factory frame that does not brake. On a factory frame braking at -0.2 it only
-    # continues braking (start needs -0.45 there), so the second copy depends on the first frame's decision.
-    braking = {**BRAKING, "ACC_DECEL": -0.2}
-    first, second = harness.factory(CRUISING), harness.factory(braking)
-    _, out = harness.step([first, second], True, -0.3)
-    assert [decode(o)["ACC_DECEL"] for o in out] == [raw_decel(-0.3)] * 2
+    # a batch with a factory braking frame: that copy is unchanged, the other carries the comma's braking
+    frames = [harness.factory(CRUISING), harness.factory({**BRAKING, "ACC_BRK_PREP": 1}), harness.factory(CRUISING)]
+    _, out = harness.step(frames, True, -2.0)
+    assert out[0] == frames[1]
+    assert decode(out[1])["ACC_DECEL"] == raw_decel(-2.0) and decode(out[1])["COUNTER"] == 2
 
-    h = Harness()  # the other order: nothing starts on the first frame, the second starts fresh
-    first, second = h.factory(braking), h.factory(CRUISING)
-    _, out = h.step([first, second], True, -0.3)
-    assert out[0] == first
-    assert decode(out[1])["ACC_DECEL"] == raw_decel(-0.3)
+  def test_batch_state_carried_from_the_first_frame_to_the_second(self, harness):
+    # In a hold, a resume press between factory frames: the first frame of the next batch uses it up and releases the
+    # hold, so the second frame must pass through too (with the state from before the batch it would still hold).
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3
+    harness.speed_kph = 0.
+    out, _ = harness.send_one(harness.factory(CRUISING), True, 0.5)
+    assert decode(out)["ACC_DECEL"] == raw_decel(rampilot_long.HOLD_ACCEL)
+    harness.resume_button = True
+    harness.step([], True, 0.5)
+    first, second = harness.factory(CRUISING), harness.factory(CRUISING)
+    _, out = harness.step([first, second], True, 0.5)
+    assert out == [first, second]
 
   def test_batch_older_frame_with_a_backward_counter_is_skipped(self, harness):
     run(harness, [(True, 1.0)] * 6)  # counters 0-5 answered
@@ -387,7 +427,19 @@ class TestLongOff:
       on.step(frames, True, -1.0)
       off.step(frames, True, -1.0)
       assert on.CI.CS.out.to_dict() == off.CI.CS.out.to_dict()
-      assert on.CI.CS.das_3 == off.CI.CS.das_3
+
+  def test_no_das_3_history_without_long(self):
+    h = Harness(alpha_long=False)
+    CS = h.CI.CS
+    assert CS.observe_can == CS.observe_display_data  # the hook as it was before RamPilot long
+    assert not CS.rampilot_long and CS.das_3_delivery is None
+    for _ in range(20):
+      h.step([h.factory(CRUISING), h.factory(BRAKING)], True, -2.0, echoes=[h.factory(CRUISING, counter=0)])
+      assert (CS.das_3, CS.das_3_raw, CS.das_3_frames, CS.das_3_seen, CS.das_3_count) == (None, None, [], [], 0)
+      sp = h.CI.CS.out_sp  # no RamPilot long fields set
+      assert (sp.rampilotFactoryEmergency, sp.rampilotDas3EchoAgeMs, sp.rampilotBrakingNotDelivered,
+              sp.rampilotFactorySinceEcho) == (False, 0., 0, 0)
+    assert "DAS_3" in h.CI.can_parsers[Bus.cam].vl  # parsed as before for the cruise state, nothing more
 
 
 class TestCarState:
@@ -431,9 +483,11 @@ class TestCarState:
     for values, emergency in (
       (CRUISING, False),
       ({**CRUISING, "COLLISION_BRK_PREP": 1}, True),
-      ({**CRUISING, "ACC_BRK_PREP": 1}, False),  # ordinary brake prep is not an emergency
-      ({**BRAKING, "ACC_DECEL": decel(2557)}, True),  # -3.509 m/s^2: stronger than -3.5
-      ({**BRAKING, "ACC_DECEL": decel(2558)}, False),  # -3.504 m/s^2: the Panda's limit itself
+      ({**CRUISING, "ACC_BRK_PREP": 1}, True),  # ACC brake prep alone is an emergency frame
+      ({**BRAKING, "ACC_DECEL": decel(2763)}, True),  # -2.5027 m/s^2: stronger than -2.5
+      ({**BRAKING, "ACC_DECEL": decel(2764)}, False),  # -2.4979 m/s^2: the Panda's limit itself
+      ({**BRAKING, "ACC_DECEL": -2.16}, False),  # the strongest factory request in the recorded drives
+      ({**BRAKING, "ACC_DECEL": -1.5}, False),
       ({**BRAKING, "ACC_DECEL": decel(2000), "ACC_DECEL_REQ": 0}, False),  # no decel request
     ):
       h.step([h.factory(values)])
@@ -453,7 +507,14 @@ class TestCarState:
     assert not h.CI.CS.out_sp.rampilotFactoryEmergency
 
   def test_emergency_threshold_is_the_pandas(self):
-    assert raw_decel(rampilot_long.EMERGENCY_DECEL) == 2558
+    assert raw_decel(rampilot_long.EMERGENCY_DECEL) == rampilot_long.EMERGENCY_DECEL_RAW == 2764
+    sig = DAS_3.sigs["ACC_DECEL"]
+    frame = {name: 0. for name in DAS_3.sigs} | {"ACC_DECEL_REQ": 1.}
+    for raw in range(4096):  # every raw value: the parsed-value test equals the Panda's raw test
+      assert rampilot_long.is_emergency(frame | {"ACC_DECEL": raw * sig.factor + sig.offset}) == (raw < 2764), raw
+    assert rampilot_long.is_emergency(frame | {"ACC_DECEL_REQ": 0., "ACC_BRK_PREP": 1.})
+    assert rampilot_long.is_emergency(frame | {"ACC_DECEL_REQ": 0., "COLLISION_BRK_PREP": 1.})
+    assert not rampilot_long.is_emergency(frame | {"ACC_DECEL_REQ": 0., "ACC_DECEL": -10.})
 
   def test_only_camera_bus(self):
     h = Harness()
@@ -546,12 +607,9 @@ class TestHysteresis:
     assert decode(out)["ACC_DECEL_REQ"] == 1
     assert applied == -0.25
 
-  def test_start_needs_margin_below_the_factory(self, harness):
-    # factory braking at -1.5: the comma starts only at -1.75 or below
-    assert run(harness, [(True, -1.6), (True, -1.7)], BRAKING) == [False, False]
-    factory = harness.factory(BRAKING)
-    out, _ = harness.send_one(factory, True, -1.8)
-    assert decode(out)["ACC_DECEL"] == raw_decel(-1.8)
+  def test_nothing_added_to_a_factory_braking_frame(self, harness):
+    # the Panda forwards a factory frame that requests braking: the comma's copy is unchanged however hard it asks
+    assert run(harness, [(True, -1.6), (True, -1.8), (True, -6.0)], BRAKING) == [False, False, False]
 
   def test_keeps_braking_down_to_minus_0_05(self, harness):
     assert run(harness, [(True, -0.5), (True, -0.2), (True, -0.1), (True, -0.06)]) == [True] * 4
@@ -562,9 +620,11 @@ class TestHysteresis:
     # once stopped, the start threshold applies again
     assert run(harness, [(True, -0.2), (True, -0.1)]) == [False, False]
 
-  def test_stops_when_the_factory_brakes_as_hard(self, harness):
+  def test_factory_braking_frames_pause_and_keep_the_braking(self, harness):
     assert run(harness, [(True, -1.0)]) == [True]
-    assert run(harness, [(True, -1.0), (True, -1.6)], BRAKING) == [False, False]  # -1.6 is past -1.5 but not -1.75
+    assert run(harness, [(True, -1.0), (True, -1.6)], BRAKING) == [False, False]  # the factory brakes: forwarded
+    assert run(harness, [(True, -1.0)]) == [True]  # the comma's braking is back on the next frame
+    assert run(harness, [(True, -0.04)]) == [False]  # and ends by the keep rule as usual
 
   def test_stops_when_long_is_left_or_factory_cruise_is_off(self, harness):
     assert run(harness, [(True, -1.0), (False, -1.0), (True, -0.2)]) == [True, False, False]
@@ -612,10 +672,36 @@ class TestHold:
     self.assert_holding(harness, accel=2.0)
     self.assert_holding(harness, accel=-0.1)
 
-  def test_hold_uses_the_stronger_factory_braking(self, harness):
+  def test_hold_survives_factory_braking(self, harness):
     self.stop_with_comma_braking(harness)
-    self.assert_holding(harness, {**BRAKING, "ACC_DECEL": -2.5}, decel=-2.5)
-    self.assert_holding(harness, {**BRAKING, "ACC_DECEL": -1.0}, decel=rampilot_long.HOLD_ACCEL)
+    for values in ({**BRAKING, "ACC_DECEL": -2.5}, {**BRAKING, "ACC_DECEL": -1.0}, {**CRUISING, "ACC_BRK_PREP": 1},
+                   {**CRUISING, "COLLISION_BRK_PREP": 1}):
+      for _ in range(5):
+        self.assert_passing_through(harness, values)  # the factory brakes the stopped truck: forwarded to it
+    for _ in range(20):
+      self.assert_holding(harness)  # the factory lets go at the standstill: the comma's hold is back
+
+  def test_confirm_during_factory_braking_releases_the_hold(self, harness):
+    self.stop_with_comma_braking(harness)
+    self.assert_passing_through(harness, BRAKING)
+    harness.resume_button = True
+    self.assert_passing_through(harness, BRAKING)  # a fresh press, used up by this frame's decision
+    harness.resume_button = False
+    for _ in range(10):
+      self.assert_passing_through(harness)  # released: no hold when the factory lets go
+
+  def test_stop_during_factory_braking_starts_no_hold(self, harness):
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3  # the comma adds braking
+    assert run(harness, [(True, -1.5)] * 2, BRAKING) == [False] * 2  # then the factory brakes too
+    harness.speed_kph = 0.
+    assert run(harness, [(True, -1.5)] * 2, BRAKING) == [False] * 2  # the truck stops on the factory's braking
+    # the factory lets go at the standstill: its own stop, so no hold; the comma brakes only while its planner asks
+    factory = harness.factory(CRUISING)
+    out, _ = harness.send_one(factory, True, -1.5)
+    assert decode(out)["ACC_DECEL"] == raw_decel(-1.5)
+    for _ in range(10):
+      self.assert_passing_through(harness)
 
   def test_hold_below_0_3_m_s_without_standstill(self, harness):
     harness.speed_kph = 20.
@@ -641,6 +727,70 @@ class TestHold:
     setattr(harness, button, False)
     for _ in range(10):
       self.assert_passing_through(harness)
+
+  @pytest.mark.parametrize("button", ["resume_button", "accel_button"])
+  def test_button_held_across_the_stop_then_released_keeps_the_hold(self, harness, button):
+    harness.speed_kph = 20.
+    setattr(harness, button, True)  # pressed while still braking toward the stop, and held
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3
+    harness.speed_kph = 0.
+    self.assert_holding(harness, accel=-1.5)  # the comma's stop: hold starts
+    self.assert_holding(harness)
+    setattr(harness, button, False)  # the release of a button pressed before the hold is not a confirm
+    for _ in range(50):
+      self.assert_holding(harness)
+    setattr(harness, button, True)  # a fresh press after the hold started releases it
+    self.assert_passing_through(harness)
+
+  def test_stale_confirm_from_before_the_stop_keeps_the_hold(self, harness):
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3
+    harness.speed_kph, harness.resume_button = 0., True
+    _, out = harness.step([], True, -1.5)  # pressed as the truck stops, in a frame with no factory DAS_3
+    assert out == []
+    self.assert_holding(harness, accel=-1.5)  # the decision that starts the hold drops the pending press
+    harness.resume_button = False
+    for _ in range(50):
+      self.assert_holding(harness)
+
+  def test_stale_confirm_after_a_data_gap_keeps_the_hold(self, harness):
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3
+    harness.resume_button = True
+    harness.step([], True, -1.5)  # pressed while braking
+    harness.resume_button = False
+    for _ in range(5):
+      harness.step([], True, -1.5)  # 50 ms without factory frames, still moving
+    harness.speed_kph = 0.
+    self.assert_holding(harness, accel=-1.5)
+    for _ in range(20):
+      self.assert_holding(harness)
+
+  def test_gas_held_through_the_stop_then_released(self, harness):
+    # With the gas pressed the comma adds no braking (the Panda refuses it), so the truck did not stop on the comma's
+    # braking and no hold starts. Releasing the gas at the stop is not a confirm and starts nothing either.
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 2) == [True] * 2
+    harness.gas = True
+    assert run(harness, [(True, -1.5)] * 2) == [False] * 2
+    harness.speed_kph = 0.
+    assert run(harness, [(True, -1.5)] * 2) == [False] * 2
+    harness.gas = False
+    assert run(harness, [(True, 0.5)] * 20) == [False] * 20
+
+  def test_gas_tap_before_the_stop_does_not_release_a_later_hold(self, harness):
+    harness.speed_kph = 20.
+    assert run(harness, [(True, -1.5)] * 2) == [True] * 2
+    harness.gas = True
+    run(harness, [(True, -1.5)])
+    harness.gas = False
+    assert run(harness, [(True, -1.5)] * 3) == [True] * 3
+    harness.speed_kph = 0.
+    self.assert_holding(harness, accel=-1.5)
+    for _ in range(50):
+      self.assert_holding(harness)
+    harness.gas = True  # a new gas press after the hold started
+    self.assert_passing_through(harness)
 
   def test_button_press_between_factory_frames_releases(self, harness):
     self.stop_with_comma_braking(harness)
@@ -733,11 +883,16 @@ class TestDecisionUnit:
   FACTORY = {name: 0. for name in DAS_3.sigs} | {"ACC_ACTIVE": 1., "ENGINE_TORQUE_REQUEST": 100.,
                                                  "ENGINE_TORQUE_REQUEST_MAX": 1., "ACC_DECEL": 4.}
 
-  def test_confirm_at_the_stop_moment_does_not_hold(self):
+  def test_confirm_at_the_stop_moment_is_stale_and_dropped(self):
     moving = rampilot_long.LongState(braking=True, stopped=False)
-    _, state = rampilot_long.das_3_overrides(self.FACTORY, True, -1.0, moving,
+    overrides, state = rampilot_long.das_3_overrides(self.FACTORY, True, 0.5, moving,
+                                                     rampilot_long.StandstillInputs(stopped=True, confirm=True))
+    assert state.hold and overrides["ACC_DECEL"] == rampilot_long.HOLD_ACCEL
+    _, state = rampilot_long.das_3_overrides(self.FACTORY, True, 0.5, state, rampilot_long.StandstillInputs(stopped=True))
+    assert state.hold  # nothing pending carries over
+    _, state = rampilot_long.das_3_overrides(self.FACTORY, True, 0.5, state,
                                              rampilot_long.StandstillInputs(stopped=True, confirm=True))
-    assert not state.hold
+    assert not state.hold  # a confirm after the hold started releases it
 
   def test_hold_entered_on_the_stop_edge_only(self):
     moving = rampilot_long.LongState(braking=True, stopped=False)
@@ -846,3 +1001,173 @@ class TestButtons:
   def test_hold_accel_is_the_stop_accel(self):
     CP, _ = get_params(RAM_DT, True)
     assert CP.stopAccel == rampilot_long.HOLD_ACCEL
+
+  def test_cancel_goes_to_the_factory_cruise_module(self):
+    # what openpilot does to factory cruise after it disengages (controlsd sets cruiseControl.cancel)
+    h = Harness()
+    for _ in range(10):
+      h.step([])
+    CC = structs.CarControl()
+    CC.cruiseControl.cancel = True
+    _, sends = h.CI.apply(CC.as_reader(), structs.CarControlSP(), h.t)
+    buttons = [s for s in sends if s[0] == DBC(DBC_NAME).name_to_msg["CRUISE_BUTTONS"].address]
+    assert len(buttons) == 1 and buttons[0][2] == 2 and buttons[0][1][0] & 0x01  # ACC_Cancel to the DASM (bus 2)
+
+
+class TestDelivery:
+  """What reached the truck: bus-0 DAS_3 echoes (src 128) compared with the comma's copies and the factory frames."""
+
+  def drive(self, h, steps, accel=-2.0, echo="copy", same_step=False, values=CRUISING):
+    """`echo`: what the Panda transmits for each factory frame: the comma's copy, the factory frame, or nothing.
+    The echo arrives with the next step, or with the factory frame itself when `same_step` (forwarded at once)."""
+    counts, pending = [], []
+    for _ in range(steps):
+      factory = h.factory(values)
+      now_echo = [factory] if echo == "factory" and same_step else []
+      _, out = h.step([factory], True, accel, echoes=pending + now_echo)
+      pending = {"copy": out, "factory": [] if same_step else [factory], None: []}[echo]
+      counts.append(h.CI.CS.out_sp.rampilotBrakingNotDelivered)
+    return counts
+
+  def test_delivered_copies_count_nothing(self):
+    h = Harness()
+    assert self.drive(h, 50) == [0] * 50
+    assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == 0.
+
+  def test_factory_frame_instead_of_added_braking_is_counted(self):
+    h = Harness()
+    counts = self.drive(h, 6, echo="factory")
+    assert counts == [0, 1, 2, 3, 4, 5]  # each echo judged when it arrives with the next step
+
+  def test_forwarded_before_the_copy_is_counted(self):
+    h = Harness()
+    counts = self.drive(h, 6, echo="factory", same_step=True)
+    assert counts == [0, 1, 2, 3, 4, 5]  # judged when the copy is sent; shows in the next update
+
+  def test_pass_through_copies_never_count(self):
+    h = Harness()
+    assert self.drive(h, 30, accel=0.5, echo="factory") == [0] * 30
+    assert self.drive(h, 30, accel=0.5, echo="factory", same_step=True) == [0] * 30
+
+  def test_count_covers_the_last_0_5_s(self):
+    h = Harness()
+    assert self.drive(h, 3, echo="factory")[-1] == 2
+    counts = self.drive(h, 60)  # delivered from here on: the count drains as the 0.5 s window passes
+    assert counts[0] == 2 and counts[-1] == 0
+    assert counts.index(0) <= 51
+
+  def test_echo_age(self):
+    h = Harness()
+    self.drive(h, 5)
+    assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == 0.
+    for i in range(1, 13):
+      h.step([h.factory(CRUISING)], True, -2.0)  # nothing reaches the truck
+      assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == pytest.approx(i * 10.)
+    self.drive(h, 2)
+    assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == 0.
+
+  def test_forwarded_factory_braking_frames_never_count(self):
+    # The comma brakes before, during and after a stretch of factory braking frames. The Panda forwards those at once
+    # and refuses their copies (returned as src 192); nothing counts and the echo rules see a steady stream.
+    h = Harness()
+    counts = self.drive(h, 5)
+    rejected = []
+    for i in range(50):
+      factory = h.factory(BRAKING if i % 2 else {**CRUISING, "ACC_BRK_PREP": 1})
+      _, out = h.step([factory], True, -2.0, echoes=[factory], rejected=rejected)
+      assert out == [factory]  # an unchanged copy
+      rejected = out
+      sp = h.CI.CS.out_sp
+      counts.append(sp.rampilotBrakingNotDelivered)
+      assert (sp.rampilotDas3EchoAgeMs, sp.rampilotFactorySinceEcho) == (0., 0)
+    counts += self.drive(h, 30)  # the factory lets go: the comma's braking copies reach the truck again
+    assert counts == [0] * len(counts)
+
+  def test_added_braking_on_a_factory_braking_frame_never_counts(self):
+    # rule (a) on its own: even a copy that added braking to a factory braking/prep frame (the comma does not send
+    # one) is not a misdelivery when the truck gets that factory frame
+    p = CANPacker(DBC_NAME)
+    added = p.make_can_msg("DAS_3", 0, {**CRUISING, "COUNTER": 3, "ACC_DECEL_REQ": 1, "ACC_DECEL": -3.0,
+                                        "ENGINE_TORQUE_REQUEST": 0., "ENGINE_TORQUE_REQUEST_MAX": 0})[1]
+    for fields, counted in (({}, True), ({"ACC_DECEL_REQ": 1, "ACC_DECEL": -1.0}, False), ({"ACC_BRK_PREP": 1}, False),
+                            ({"COLLISION_BRK_PREP": 1}, False)):
+      d = rampilot_long.Das3Delivery()
+      d.tick(0)
+      factory = p.make_can_msg("DAS_3", 2, {**CRUISING, **fields, "COUNTER": 3})[1]
+      d.observe(1, factory, 2)
+      d.copy_sent(added, added_braking=True)
+      d.observe(2, factory, ECHO)
+      assert d.not_delivered_recent() == int(counted), fields
+
+  def test_factory_frames_since_the_last_echo(self):
+    h = Harness()
+    self.drive(h, 3)
+    assert h.CI.CS.out_sp.rampilotFactorySinceEcho == 0
+    for i in range(1, 6):
+      h.step([h.factory(CRUISING)], True, 0.5)  # the host receives factory frames, no echo
+      assert h.CI.CS.out_sp.rampilotFactorySinceEcho == i
+    for _ in range(10):
+      h.step([], True, 0.5)  # no factory frames either: the count does not grow
+    assert h.CI.CS.out_sp.rampilotFactorySinceEcho == 5
+    factory = h.factory(CRUISING)
+    h.step([factory], True, 0.5, echoes=[factory])
+    assert h.CI.CS.out_sp.rampilotFactorySinceEcho == 0
+
+  def test_host_pause_then_catch_up_batch(self):
+    h = Harness()
+    self.drive(h, 10, accel=0.5, echo="factory", same_step=True)
+    batch = []
+    for _ in range(8):  # 160 ms of frames held back by a host receive pause, then delivered in one batch
+      factory = h.factory(CRUISING)
+      batch += [CanData(DAS_3.address, factory, 2), CanData(DAS_3.address, factory, ECHO)]
+    h.t += 16 * DT_NS
+    h.CI.update([(h.t, h.pt_frames() + batch)], now_nanos=h.t)
+    sp = h.CI.CS.out_sp
+    assert (sp.rampilotDas3EchoAgeMs, sp.rampilotFactorySinceEcho) == (0., 0)
+
+  def test_echo_age_counts_from_start_without_echoes(self):
+    h = Harness()
+    for _ in range(15):
+      h.step([h.factory(CRUISING)], True, 0.5)
+    assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == pytest.approx(150.)
+
+  def test_refused_copies_and_other_buses_are_not_echoes(self):
+    h = Harness()
+    self.drive(h, 3)
+    for _ in range(12):
+      factory = h.factory(CRUISING)
+      h.CI.update([(h.t + DT_NS, [CanData(DAS_3.address, factory, 2), CanData(DAS_3.address, factory, 192),
+                                  CanData(DAS_3.address, factory, 0)])], now_nanos=h.t + DT_NS)
+      h.t += DT_NS
+    assert h.CI.CS.out_sp.rampilotDas3EchoAgeMs == pytest.approx(120.)
+
+  def test_unit_orders(self):
+    d = rampilot_long.Das3Delivery()
+    p = Harness().packer
+    factory = p.make_can_msg("DAS_3", 2, {**CRUISING, "COUNTER": 5})[1]
+    copy = p.make_can_msg("DAS_3", 0, {**CRUISING, "COUNTER": 5, "ACC_DECEL_REQ": 1, "ACC_DECEL": -2.0,
+                                       "ENGINE_TORQUE_REQUEST": 0., "ENGINE_TORQUE_REQUEST_MAX": 0})[1]
+    d.tick(0)
+    for order in ("echo first", "copy first"):
+      d.observe(1, factory, 2)
+      if order == "echo first":
+        d.observe(2, factory, ECHO)
+        d.copy_sent(copy, added_braking=True)
+      else:
+        d.copy_sent(copy, added_braking=True)
+        d.observe(2, factory, ECHO)
+    d.tick(3)
+    assert d.not_delivered_recent() == 2
+    d.observe(4, factory, 2)
+    d.copy_sent(copy, added_braking=True)
+    d.observe(5, copy, ECHO)  # the copy reached the truck
+    d.observe(6, factory, ECHO)  # a later duplicate for a judged counter is not counted again
+    assert d.not_delivered_recent() == 2
+    # a copy without added braking that still differs from the factory bytes (packed without the raw frame) never counts
+    d.observe(7, factory, 2)
+    d.copy_sent(copy, added_braking=False)
+    d.observe(8, factory, ECHO)
+    assert d.not_delivered_recent() == 2
+    d.tick(5 + rampilot_long.NOT_DELIVERED_WINDOW_NS + 1)
+    assert d.not_delivered_recent() == 0
+    assert d.echo_age_ms() == pytest.approx(rampilot_long.NOT_DELIVERED_WINDOW_NS / 1e6, abs=1e-3)

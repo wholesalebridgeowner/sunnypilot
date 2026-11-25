@@ -56,12 +56,13 @@ The Panda is the safety chip inside the comma; every message to the truck passes
 **What the installer accepts.** It accepts the firmware file only when all of these hold, and refuses the release otherwise:
 - `rampilot/ALLOWED_BINARIES` in the release pins the firmware's SHA-256, and pins the Git tree of `opendbc_repo/opendbc/safety` the firmware was built from.
 - The firmware file, its pin and the `--panda-sha256` digest you type are the same SHA-256, before the checkout and on disk after it.
-- The release changes the safety code `opendbc_repo/opendbc/safety/modes/chrysler.h` (its tests under `opendbc_repo/opendbc/safety/tests/` can change too), and that safety code matches the pinned tree exactly.
+- The release changes the safety code, and only these safety files: `modes/chrysler.h`, the packet-forwarding hook in `safety.h` and `safety_declarations.h`, and the tests under `tests/` (all in `opendbc_repo/opendbc/safety/`). That safety code matches the pinned tree exactly.
+- Every Panda driver patch in `rampilot/panda-patches/` is a plain file with its own SHA-256 pin in `rampilot/ALLOWED_BINARIES`, and every patch pin names a file in the release. These are the exact patches the laptop build applied to the Panda source for this firmware. The comma does not use them; the pins record where the firmware came from.
 - The file has the signed firmware layout (length field, `VERS` marker, 128-byte signature) and a signature different from stock.
 - Nothing else under `panda/` or `opendbc_repo/opendbc/safety/` changes. The firmware for the other Panda type (`panda_h7.bin.signed`) and both bootstub files stay stock.
 - The comma is the one this firmware was tested for: the Panda's own report (`PandaSignatures`) right now equals the signature of the F4 firmware file already on the comma, or of the stock F4 file. Any other report is refused. If the comma has not reported the Panda yet, the installer says so; wait a minute after start-up and run the install again.
 
-Safety code without the firmware is refused, and firmware without a safety code change is refused: the two always change together. The digital signature itself is checked on the laptop before the release is approved.
+Safety code without the firmware is refused, firmware without a safety code change is refused, and a release without new firmware that adds or changes a Panda patch is refused: firmware, safety code and patches always change together. The digital signature itself is checked on the laptop before the release is approved.
 
 **Install** (offroad, without `--reboot`, so the changed-files list can be read before the Panda changes):
 
@@ -70,7 +71,7 @@ cd /data/ram-diag/rampilot
 bash device.sh install rampilot.bundle <SHA> --panda-sha256 <APPROVED_PANDA_SHA256>
 ```
 
-Add `--ui-sha256 <APPROVED_UI_SHA256>` when the release also changes the screen. The installer does not flash the Panda. It prints the firmware's signature prefix and the stock one, and records both, with the firmware's SHA-256 and the safety tree, in the install record (`bash device.sh status`).
+Add `--ui-sha256 <APPROVED_UI_SHA256>` when the release also changes the screen. The installer does not flash the Panda. It prints the firmware's signature prefix and the stock one, and each pinned Panda patch with its SHA-256. It records both signature prefixes, with the firmware's SHA-256 and the safety tree, in the install record (`bash device.sh status`).
 
 **Restart and check** (truck still off):
 

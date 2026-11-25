@@ -211,12 +211,15 @@ typedef safety_config (*safety_hook_init)(uint16_t param);
 typedef void (*rx_hook)(const CANPacket_t *msg);
 typedef bool (*tx_hook)(const CANPacket_t *msg);  // returns true if the message is allowed
 typedef bool (*fwd_hook)(int bus_num, int addr);      // returns true if the message should be blocked from forwarding
+// optional: the forwarding decision with the received packet; returns true if the message should be blocked
+typedef bool (*fwd_packet_hook)(int bus_num, const CANPacket_t *msg);
 
 typedef struct {
   safety_hook_init init;
   rx_hook rx;
   tx_hook tx;
   fwd_hook fwd;
+  fwd_packet_hook fwd_packet;  // used instead of fwd when the caller has the packet; NULL: fwd decides by address
   get_checksum_t get_checksum;
   compute_checksum_t compute_checksum;
   get_counter_t get_counter;
@@ -319,6 +322,7 @@ extern int current_safety_param_sp;
 extern safety_config current_safety_config;
 
 int safety_fwd_hook(int bus_num, int addr);
+int safety_fwd_packet_hook(int bus_num, const CANPacket_t *packet);
 int set_safety_hooks(uint16_t mode, uint16_t param);
 
 extern const safety_hooks body_hooks;

@@ -38,12 +38,16 @@ UI_PATH=selfdrive/ui/ui
 # (panda/python/constants.py app_fn). rampilot/ALLOWED_BINARIES in the candidate pins both:
 #   <sha256>  panda/board/obj/panda.bin.signed
 #   <git tree hash>  opendbc_repo/opendbc/safety
-# Firmware and safety code change together or not at all, and only the SAFETY_ALLOW_RE files change. The H7
-# firmware, both bootstubs and every other panda/ path stay refused.
+#   <sha256>  rampilot/panda-patches/<file>   (one line for every Panda driver patch the firmware was built with)
+# Firmware, safety code and Panda patches change together or not at all, and only the SAFETY_ALLOW_RE safety
+# files change: chrysler.h, the generic packet hook in safety.h and safety_declarations.h, and the tests. The H7
+# firmware, both bootstubs and every other panda/ path stay refused. The device never applies the patches; their
+# pins record exactly which patches the laptop build applied to the Panda source.
 # pandad flashes the file at boot when the Panda's signature differs from the file's last 128 bytes.
 PANDA_FW=panda/board/obj/panda.bin.signed
 SAFETY_DIR=opendbc_repo/opendbc/safety
-SAFETY_ALLOW_RE='^opendbc_repo/opendbc/safety/(modes/chrysler\.h|tests/.+)$'
+SAFETY_ALLOW_RE='^opendbc_repo/opendbc/safety/(modes/chrysler\.h|safety\.h|safety_declarations\.h|tests/.+)$'
+PATCH_DIR=rampilot/panda-patches
 PANDA_SHA256="" PANDA_SIG_STOCK="" PANDA_SIG_CANDIDATE="" PANDA_SAFETY_TREE=""
 # pandad.py lines about the Panda in /data/log/swaglog.* (logmessaged writes INFO and above).
 PANDAD_LOG_RE='Panda [^ ]+ connected, version: |Panda firmware out of date|Done flashing|Flashed firmware not booting|Panda still not booting|Version mismatch after flashing|Error computing expected signature|Panda in DFU mode found|protocol mismatch'
@@ -196,13 +200,15 @@ check_fw_layout() {  # $1 = the firmware as hex: the signed layout of panda cryp
 # pinned firmware. The RSA signature itself is checked on the laptop (debug key VALID); the device tree has
 # no panda/certs, and the Panda's bootstub checks it again before it runs the file.
 check_candidate_panda() {  # $1 = sha, $2 = approved firmware digest, $3 = changed paths
-  local sha="$1" approved="$2" changed="$3" entry safety safety_src expected actual tree pinned_tree hex stock
+  local sha="$1" approved="$2" changed="$3" entry safety safety_src patches expected actual tree pinned_tree hex stock
   entry="$(git_op ls-tree "$sha" -- "$PANDA_FW")"
   safety="$(printf '%s\n' "$changed" | grep "^$SAFETY_DIR/" || true)"
   safety_src="$(printf '%s\n' "$safety" | grep -v "^$SAFETY_DIR/tests/" || true)"
+  patches="$(printf '%s\n' "$changed" | grep "^$PATCH_DIR/" || true)"
   if [ "$entry" = "$(git_op ls-tree "$BASELINE_SHA" -- "$PANDA_FW")" ]; then
     [ -z "$approved" ] || die "--panda-sha256 supplied but the candidate does not change $PANDA_FW"
     [ -z "$safety" ] || die "candidate changes $SAFETY_DIR without a pinned Panda firmware change: $(echo "$safety" | tr '\n' ' ')"
+    [ -z "$patches" ] || die "candidate changes $PATCH_DIR without a pinned Panda firmware change: $(echo "$patches" | tr '\n' ' ')"
     return 0
   fi
   [[ "$entry" == '100644 blob '* ]] || die "$PANDA_FW must be a regular file with Git mode 100644"
@@ -217,6 +223,7 @@ check_candidate_panda() {  # $1 = sha, $2 = approved firmware digest, $3 = chang
   pinned_tree="$(pin_lookup "$sha" "$SAFETY_DIR")"
   [[ "$pinned_tree" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || die "$SAFETY_DIR is not pinned exactly once in rampilot/ALLOWED_BINARIES"
   [ "$pinned_tree" = "$tree" ] || die "safety tree pin $pinned_tree does not match the candidate's $SAFETY_DIR tree $tree"
+  check_candidate_patches "$sha"
   hex="$(git_op cat-file blob "$sha:$PANDA_FW" | hex_of)"
   check_fw_layout "$hex"
   git_op cat-file -e "$BASELINE_SHA:$PANDA_FW" 2>/dev/null || die "baseline $BASELINE_SHA has no $PANDA_FW"
@@ -226,6 +233,27 @@ check_candidate_panda() {  # $1 = sha, $2 = approved firmware digest, $3 = chang
   PANDA_SIG_STOCK="${stock: -256:16}" PANDA_SIG_CANDIDATE="${hex: -256:16}"
   say "pinned Panda firmware ok: $PANDA_FW sha256 $actual, built from $SAFETY_DIR tree $tree"
   say "  signature $PANDA_SIG_CANDIDATE (stock $PANDA_SIG_STOCK)"
+}
+
+# Provenance of a firmware release: every file under rampilot/panda-patches/ is a regular file pinned exactly
+# once to its blob's SHA-256, and every patch pin names a file the candidate contains.
+check_candidate_patches() {  # $1 = sha
+  local sha="$1" line meta path pinned actual n=0
+  while IFS= read -r -d '' line; do
+    meta="${line%%$'\t'*}"; path="${line#*$'\t'}"
+    [[ "$meta" == '100644 blob '* ]] || die "$path must be a regular file with Git mode 100644"
+    pinned="$(pin_lookup "$sha" "$path")"
+    [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] || die "$path is not pinned exactly once in rampilot/ALLOWED_BINARIES"
+    actual="$(git_op cat-file blob "$sha:$path" | sha256sum | cut -c1-64)"
+    [ "$actual" = "$pinned" ] || die "$path is not pinned to its blob digest in rampilot/ALLOWED_BINARIES"
+    say "  Panda patch ok: $path sha256 $actual"; n=$((n + 1))
+  done < <(git_op ls-tree -r -z "$sha" -- "$PATCH_DIR/")
+  while IFS= read -r path; do
+    [ "$(git_op cat-file -t "$sha:$path" 2>/dev/null || true)" = blob ] ||
+      die "rampilot/ALLOWED_BINARIES pins $path, which the candidate does not contain"
+  done < <({ git_op cat-file blob "$sha:rampilot/ALLOWED_BINARIES" 2>/dev/null || true; } |
+           awk -v d="$PATCH_DIR/" '$1 !~ /^#/ && NF == 2 && index($2, d) == 1 {print $2}')
+  say "  Panda patches pinned: $n"
 }
 
 check_installed_ui() {

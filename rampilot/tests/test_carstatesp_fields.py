@@ -26,7 +26,7 @@ class CarStateSPFieldTests(unittest.TestCase):
   def test_same_names_and_types(self):
     py, capnp = struct_fields(), schema_fields()
     self.assertEqual(set(py), set(capnp))
-    kinds = {"float": "Float32", "bool": "Bool"}
+    kinds = {"float": "Float32", "bool": "Bool", "int": "UInt16"}
     for name, typ in py.items():
       self.assertEqual(kinds[typ], capnp[name][1], name)
 
@@ -41,6 +41,8 @@ class CarStateSPFieldTests(unittest.TestCase):
       "rangeMiles": (13, "Float32"), "rangeMilesValid": (14, "Bool"),
       "defPercent": (15, "Float32"), "defPercentValid": (16, "Bool"),
       "rampilotFactoryEmergency": (17, "Bool"),
+      "rampilotDas3EchoAgeMs": (18, "Float32"), "rampilotBrakingNotDelivered": (19, "UInt16"),
+      "rampilotFactorySinceEcho": (20, "UInt16"),
     })
 
 

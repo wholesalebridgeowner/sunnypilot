@@ -257,6 +257,11 @@ bool get_chrysler_das_3_emergency_seen(void){
   return chrysler_das_3_emergency_seen;
 }
 
+// stored factory DAS_3 frames: 0 the newest, 1 the one before
+bool get_chrysler_das_3_stock_seen(int i){
+  return chrysler_das_3_stock[i & 1].seen;
+}
+
 void set_mads_button_press(int c){
   mads_button_press = c;
 }

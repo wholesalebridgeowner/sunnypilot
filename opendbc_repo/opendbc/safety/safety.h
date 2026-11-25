@@ -258,7 +258,8 @@ static int get_fwd_bus(int bus_num) {
   return destination_bus;
 }
 
-int safety_fwd_hook(int bus_num, int addr) {
+// The forwarding decision for a message received on bus_num. packet is NULL when the caller only has the address.
+static int safety_fwd_decision(int bus_num, int addr, const CANPacket_t *packet) {
   bool blocked = relay_malfunction || current_safety_config.disable_forwarding;
 
   // Block messages that are being checked for relay malfunctions. Safety modes can opt out of this
@@ -274,11 +275,27 @@ int safety_fwd_hook(int bus_num, int addr) {
     }
   }
 
-  if (!blocked && (current_hooks->fwd != NULL)) {
-    blocked = current_hooks->fwd(bus_num, addr);
+  // then the safety mode decides: from the packet if the caller has it and the mode looks at it, else by address
+  if (!blocked) {
+    if ((packet != NULL) && (current_hooks->fwd_packet != NULL)) {
+      blocked = current_hooks->fwd_packet(bus_num, packet);
+    } else if (current_hooks->fwd != NULL) {
+      blocked = current_hooks->fwd(bus_num, addr);
+    } else {
+    }
   }
 
   return blocked ? -1 : destination_bus;
+}
+
+int safety_fwd_hook(int bus_num, int addr) {
+  return safety_fwd_decision(bus_num, addr, NULL);
+}
+
+// Forwarding decision with the received packet (the panda's CAN receive interrupt has it). Same checks as
+// safety_fwd_hook; a mode with a fwd_packet hook can also decide by the message's content.
+int safety_fwd_packet_hook(int bus_num, const CANPacket_t *packet) {
+  return safety_fwd_decision(bus_num, (int)packet->addr, packet);
 }
 
 // Given a CRC-8 poly, generate a static lookup table to use with a fast CRC-8
