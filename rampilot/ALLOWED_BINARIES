@@ -7,5 +7,9 @@
 #   <git tree hash> opendbc_repo/opendbc/safety -- the safety code that firmware was built from:
 #     git rev-parse <commit>:opendbc_repo/opendbc/safety
 # The firmware pin and the safety-tree pin go in together, from a reviewed, twice-built firmware
-# (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file. No firmware is pinned yet.
+# (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file.
+# Firmware below: built twice from 4b796bd5e8173b43c171fed56aa8985560ccba01 (local and fresh GitHub clone),
+# identical; debug-key signature, prefix 5df562c76918f49b; F4 bootstub unchanged.
 b62eb54b7f3131a339a097d8b9b26033ff28c879a741b92487f4e7814d887bae  selfdrive/ui/ui
+cb83532788165a18a1a357ade136b9f1a1b6c666ba93453b3c4e52a6a6b11196  panda/board/obj/panda.bin.signed
+87c37c2c08c6ad3b3ec120709428a758b50d83a3  opendbc_repo/opendbc/safety
