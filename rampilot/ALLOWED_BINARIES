@@ -11,8 +11,10 @@
 # The firmware pin, the safety-tree pin and the patch pins go in together, from a reviewed, twice-built
 # firmware (PANDA-FW-PLAN.md Phase A), in the same commit as the firmware file. A release without new
 # firmware changes no patch file.
-# Firmware below: built twice from 4b796bd5e8173b43c171fed56aa8985560ccba01 (local and fresh GitHub clone),
-# identical; debug-key signature, prefix 5df562c76918f49b; F4 bootstub unchanged.
+# Firmware below: built twice from 5c403ad6175a89a2140a0f22dfc307e974b5b96a (local and fresh GitHub clone)
+# with the pinned panda patch applied, identical; debug-key signature, prefix 3e2de15f5a5be198;
+# F4 bootstub unchanged.
 b62eb54b7f3131a339a097d8b9b26033ff28c879a741b92487f4e7814d887bae  selfdrive/ui/ui
-cb83532788165a18a1a357ade136b9f1a1b6c666ba93453b3c4e52a6a6b11196  panda/board/obj/panda.bin.signed
-87c37c2c08c6ad3b3ec120709428a758b50d83a3  opendbc_repo/opendbc/safety
+e0b82b8e824d8b01df5b52341914a657bbed3a125938fb5f50af02814af131b7  panda/board/obj/panda.bin.signed
+35898cc0233455fed6d4e8a785384fd405bb2078  opendbc_repo/opendbc/safety
+2386aad60c949a5929461307bbd99c641b6b97592079b113f8e25cf97f8fa655  rampilot/panda-patches/0001-packet-aware-forwarding.patch
