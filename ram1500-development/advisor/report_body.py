@@ -6,7 +6,8 @@ import statistics
 from collections import Counter
 
 HARD_BRAKE_DROP_MS = 3.0       # m/s lost within one second
-CAUSE_WORDS = {"brake": "with brake pedal down", "gas": "with gas pedal down", "cruise_off": "with cruise switching off",
+CAUSE_WORDS = {"brake": "with brake pedal down", "main_off": "with cruise main switch turned off",
+               "gas": "with gas pedal down", "cruise_off": "with cruise switching off",
                "gear": "out of Drive", "fault": "with a steering fault", "blinker": "with a turn signal on",
                "driver": "with driver steering detected", "none": "without an identified signal"}
 WHO_WORDS = {"driver": "with brake pedal down", "cruise": "with cruise active and no pedal press",

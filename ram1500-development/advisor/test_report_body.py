@@ -176,9 +176,16 @@ class ReportBodyTests(unittest.TestCase):
         lines = report_lines([drive(events=[event])], CLOSE)
         self.assertIn("Hard braking: 1 recorded (1 with no brake pedal press and cruise off for most of the episode).", lines)
 
+    def test_main_switch_loss_wording(self):
+        lines = report_lines([drive(events=[("steering_loss", {"cause": "main_off"}),
+                                            ("steering_loss", {"cause": "brake"})])], CLOSE)
+        self.assertIn("Comma steering switched off at about 11 mph or faster: 2 recorded. Main nearby signal: "
+                      "1 with brake pedal down, 1 with cruise main switch turned off.", lines)
+
     def test_no_advice_words(self):
         d = drive(events=[("steering_loss", {"cause": c}) for c in
-                          ("brake", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none", None)])
+                          ("brake", "main_off", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none",
+                           None)])
         text = "\n".join(report_lines([d], CLOSE))
         for word in ADVICE:
             self.assertNotIn(word, text)

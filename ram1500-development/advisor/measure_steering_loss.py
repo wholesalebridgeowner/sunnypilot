@@ -8,6 +8,8 @@ per tick. The evidence window extends 0.3 s before and after the edge. One `stee
 
     cause       the first of these that is in the evidence, in this order:
                 brake       the brake pedal was down
+                main_off    cruise availability (carState.cruiseState.available) went from on to off inside
+                            the window, both readings observed on adjacent Samples with valid CAN data
                 gas         the gas pedal was down
                 cruise_off  the truck's cruise was on just before the edge and off inside the window
                 gear        the gear left Drive
@@ -24,6 +26,14 @@ on through it, so it is never a cause here and is counted by measure_limit.py. A
 evidence, not proof of what the driver meant. The order of the causes decides the label when several are
 present; the full evidence list is kept so a reader can judge. In the 2026-11-21 audit of 27 recorded
 drives every loss at 5 m/s or more had a brake press within 0.3 s (118 of 118).
+
+Why main_off comes before gas. On the owner's truck MADS ties steering to the cruise main switch
+(MadsMainCruiseAllowed=1, MadsUnifiedEngagementMode=1), so switching the main off drops steering even with
+cruise not engaged. Case: route 401, segment 13, at 48 mph with the gas held. A raw
+main-switch button pulse (CRUISE_BUTTONS ACC_OnOff, about 140 ms) began 37 ms before steering went off,
+availability fell 5 ms before it, and a second pulse brought both back about 1.48 s later. The gas was down
+throughout and was labelled the cause before main_off existed. A brake press still comes first. What this
+sees is the fall of availability, not the button itself; on this truck the proven source is the main switch.
 """
 from __future__ import annotations
 
@@ -32,7 +42,14 @@ from collections import deque
 from measure_api import Measure
 from shared_rules import LOSS_MIN_SPEED_MS, LOSS_WINDOW_S
 
-CAUSES = ("brake", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none")
+CAUSES = ("brake", "main_off", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none")
+
+
+def _cruise_available(s) -> bool | None:
+    """Observed cruise availability, or None. samples.py fills `cruise_observation` only from a carState with
+    canValid True and observed enabled/gas/brake flags; its second item is the observed `available` flag."""
+    observation = s.cruise_observation
+    return observation[1] if observation is not None else None
 
 
 def _evidence(g) -> set:
@@ -64,11 +81,17 @@ class SteeringLoss(Measure):
         self._prev_control_epoch = None
         self._prev_v = 0.0
         self._prev_cruise = False
+        self._prev_available = None   # observed cruise availability on the previous Sample; None = unknown
 
     def on_evaluate(self, ctx, g) -> None:
         s = g.sample
         t = s.t
         found = _evidence(g)
+        available = _cruise_available(s)
+        # A fall needs both readings observed on adjacent Samples: an unknown reading or a gap breaks it.
+        if self._prev_available is True and available is False and not s.gap:
+            found.add("main_off")
+        self._prev_available = available
         self._recent.append((t, found))
         while self._recent and self._recent[0][0] < t - LOSS_WINDOW_S:
             self._recent.popleft()
@@ -113,6 +136,7 @@ class SteeringLoss(Measure):
         self._flush(ctx)
         self._recent.clear()
         self._prev_on, self._prev_v, self._prev_cruise = None, 0.0, False
+        self._prev_available = None
 
     def on_drive_end(self, ctx) -> None:
         self._flush(ctx)

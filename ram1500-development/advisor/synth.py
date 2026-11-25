@@ -11,9 +11,10 @@ SEC = 1_000_000_000
 
 
 def car_state(v=25.0, angle=0.0, torque=0.0, eps=0.0, pressed=False, brake=False, cruise=False,
-              gear="drive", left=False, right=False, gas=False, fault=False, can_valid=True):
+              gear="drive", left=False, right=False, gas=False, fault=False, can_valid=True, available=None):
+    # available=None leaves cruise availability unobserved, as before the field was added.
     return ns(vEgo=v, canValid=can_valid, steeringAngleDeg=angle, steeringTorque=torque, steeringTorqueEps=eps,
-              steeringPressed=pressed, brakePressed=brake, cruiseState=ns(enabled=cruise),
+              steeringPressed=pressed, brakePressed=brake, cruiseState=ns(enabled=cruise, available=available),
               gearShifter=gear, leftBlinker=left, rightBlinker=right, gasPressed=gas,
               steerFaultTemporary=fault, steerFaultPermanent=False)
 

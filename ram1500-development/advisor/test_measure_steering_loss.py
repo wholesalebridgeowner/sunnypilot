@@ -7,9 +7,10 @@ from device_params import blind_spot_enabled
 from measure_steering_loss import CAUSES, SteeringLoss
 from messages import drive_ready_data
 from pipeline import Pipeline, PipelineConfig
+from replay_report import replay_messages
 from samples import event_payload
-from schema_v2 import DATA
-from synth import SEC
+from schema_v2 import DATA, problems
+from synth import MS, SEC
 
 T0 = 1_000 * SEC
 
@@ -44,6 +45,57 @@ class TestSteeringLoss(unittest.TestCase):
 
     def test_gas_when_no_brake(self):
         recs = run(lat_until(10.0, gas=lambda t: 9.8 <= t < 10.5, cruise=lambda t: True))
+        self.assertEqual([r["cause"] for r in recs], ["gas"])
+
+    def test_main_switch_off_is_the_cause_ahead_of_gas(self):
+        # MADS steering-only with the gas held: cruise availability falls on the steering edge.
+        recs = run(lat_until(10.0, gas=lambda t: True, available=lambda t: t < 10.0))
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["cause"], "main_off")
+        self.assertEqual(recs[0]["evidence"], ["gas", "main_off"])
+
+    def test_brake_still_comes_before_main_off(self):
+        recs = run(lat_until(10.0, brake=lambda t: t >= 9.95, gas=lambda t: True, available=lambda t: t < 10.0))
+        self.assertEqual(recs[0]["cause"], "brake")
+        self.assertEqual(set(recs[0]["evidence"]), {"brake", "gas", "main_off"})
+
+    def test_main_off_with_cruise_engaged_names_the_switch(self):
+        recs = run(lat_until(10.0, cruise=lambda t: t < 10.0, available=lambda t: t < 10.0))
+        self.assertEqual(recs[0]["cause"], "main_off")
+        self.assertEqual(set(recs[0]["evidence"]), {"main_off", "cruise_off"})
+
+    def test_a_fall_inside_the_after_window_counts(self):
+        recs = run(lat_until(10.0, gas=lambda t: True, available=lambda t: t < 10.2))
+        self.assertEqual(recs[0]["cause"], "main_off")
+
+    def test_a_fall_outside_the_window_is_ignored(self):
+        for last_on in (9.5, 10.5):            # availability fell 0.5 s before or 0.5 s after the edge
+            with self.subTest(last_on=last_on):
+                recs = run(lat_until(10.0, gas=lambda t: True, available=lambda t: t < last_on))
+                self.assertEqual(recs[0]["cause"], "gas")
+                self.assertNotIn("main_off", recs[0]["evidence"])
+
+    def test_no_fall_without_an_observed_on_then_off(self):
+        cases = {"never on": lambda t: False,
+                 "on then unknown": lambda t: True if t < 10.0 else None,
+                 "unknown between on and off": lambda t: True if t < 9.9 else (None if t < 10.0 else False),
+                 "coming back on": lambda t: t >= 10.0}
+        for name, available in cases.items():
+            with self.subTest(name):
+                recs = run(lat_until(10.0, gas=lambda t: True, available=available))
+                self.assertEqual(recs[0]["cause"], "gas")
+
+    def test_a_reading_without_valid_can_data_is_not_used(self):
+        recs = run(lat_until(10.0, gas=lambda t: True, available=lambda t: t < 10.0,
+                             can_valid=lambda t: t < 10.0))
+        self.assertEqual(recs[0]["cause"], "gas")
+
+    def test_a_fall_across_a_data_gap_is_not_used(self):
+        def drive(t):
+            if 9.5 <= t < 9.9:
+                return {"skip": ("carState",)}            # 0.5 s without carState: a gap Sample at 9.9 s
+            return {"carControl": {"lat": t < 10.0}, "carState": {"gas": True, "available": t < 9.9}}
+        recs = run(drive)
         self.assertEqual([r["cause"] for r in recs], ["gas"])
 
     def test_cruise_off_only_counts_when_cruise_was_on(self):
@@ -128,6 +180,40 @@ class TestSteeringLoss(unittest.TestCase):
         rule = DATA["steering_loss"]
         self.assertEqual(set(rule), {"cause", "evidence", "vMs", "windowTruncated"})
         self.assertEqual(set(rule["cause"][1]), set(CAUSES))
+
+
+class TestRoute401MainSwitch(unittest.TestCase):
+    """Replay-shaped copy of the route 401, segment 13 loss (decoded rlog, 2026-11-25). carState and carControl
+    at 100 Hz, carState stamped 5.3 ms before each carControl. 21.5 m/s, gas down throughout, brake up, cruise
+    not engaged (MADS steering only). cruiseState.available fell 5.3 ms before latActive went off; it came back
+    at +1474.6 ms and latActive at about +1480 ms. Times are relative; the signal values are the log's."""
+
+    EDGE = T0 + 20 * SEC                       # carControl latActive goes False here
+
+    def events(self):
+        out = []
+        for k in range(-1000, 2000):          # -10 s .. +20 s around the edge
+            t_control = self.EDGE + k * 10 * MS
+            out.append(("carControl", t_control, synth.car_control(lat=not 0 <= k < 148)))
+            t_state = t_control - 5_300_000
+            available = not -5_300_000 <= t_state - self.EDGE < 1_474_600_000
+            out.append(("carState", t_state, synth.car_state(v=21.5, gas=True, available=available)))
+        return out
+
+    EXPECTED = {"cause": "main_off", "evidence": ["gas", "main_off"], "vMs": 21.5, "windowTruncated": False}
+
+    def test_replay_path_names_the_main_switch(self):
+        out = [m for m in replay_messages(self.events()) if m["type"] == "steering_loss"]
+        self.assertEqual([m["data"] for m in out], [self.EXPECTED])
+        self.assertEqual(problems(out[0]), [])
+
+    def test_live_agent_path_names_the_main_switch(self):
+        # The agent drains at 10 Hz and keeps the newest message of each stream per tick.
+        ticks = synth.ticks(300, 100.0, self.EDGE - 10 * SEC + 7 * MS)
+        batches = synth.tick_batches([(t, stream, msg) for stream, t, msg in self.events()], ticks)
+        p = Pipeline(PipelineConfig(measures=(SteeringLoss,)))
+        recs = [data for kind, data in synth.run(p, batches) if kind == "steering_loss"]
+        self.assertEqual(recs, [self.EXPECTED])
 
 
 class TestBlindSpotFlag(unittest.TestCase):
