@@ -8,7 +8,7 @@ from measure_steering_loss import CAUSES, SteeringLoss
 from messages import drive_ready_data
 from pipeline import Pipeline, PipelineConfig
 from replay_report import replay_messages
-from samples import event_payload
+from samples import SKIPPED_BUTTONS, event_payload
 from schema_v2 import DATA, problems
 from synth import MS, SEC
 
@@ -97,6 +97,46 @@ class TestSteeringLoss(unittest.TestCase):
             return {"carControl": {"lat": t < 10.0}, "carState": {"gas": True, "available": t < 9.9}}
         recs = run(drive)
         self.assertEqual([r["cause"] for r in recs], ["gas"])
+
+    @staticmethod
+    def press_at(t_press, kind="lkas", down=True):
+        return lambda t: ((kind, down),) if abs(t - t_press) < 0.05 else None
+
+    def test_lkas_button_is_the_cause_ahead_of_gas(self):
+        recs = run(lat_until(10.0, buttons=self.press_at(10.0)))
+        self.assertEqual([(r["cause"], r["evidence"]) for r in recs], [("lkas_button", ["lkas_button"])])
+        recs = run(lat_until(10.0, gas=lambda t: True, buttons=self.press_at(9.9)))
+        self.assertEqual([(r["cause"], r["evidence"]) for r in recs], [("lkas_button", ["gas", "lkas_button"])])
+
+    def test_a_release_alone_counts(self):
+        recs = run(lat_until(10.0, buttons=self.press_at(10.2, down=False)))
+        self.assertEqual(recs[0]["cause"], "lkas_button")
+
+    def test_brake_and_main_off_come_before_lkas_button(self):
+        recs = run(lat_until(10.0, brake=lambda t: t >= 9.95, buttons=self.press_at(10.0)))
+        self.assertEqual((recs[0]["cause"], recs[0]["evidence"]), ("brake", ["brake", "lkas_button"]))
+        recs = run(lat_until(10.0, available=lambda t: t < 10.0, buttons=self.press_at(10.0)))
+        self.assertEqual((recs[0]["cause"], recs[0]["evidence"]), ("main_off", ["lkas_button", "main_off"]))
+
+    def test_a_press_outside_the_window_is_ignored(self):
+        for t_press in (9.5, 10.5):
+            with self.subTest(t_press=t_press):
+                self.assertEqual(run(lat_until(10.0, buttons=self.press_at(t_press)))[0]["cause"], "none")
+
+    def test_other_buttons_and_invalid_can_data_do_not_count(self):
+        for kind in ("cancel", "mainCruise", "accelCruise", "setCruise"):
+            with self.subTest(kind=kind):
+                self.assertEqual(run(lat_until(10.0, buttons=self.press_at(10.0, kind)))[0]["cause"], "none")
+        recs = run(lat_until(10.0, buttons=self.press_at(10.0), can_valid=lambda t: abs(t - 10.0) >= 0.05))
+        self.assertEqual(recs[0]["cause"], "none")
+
+    def test_a_press_from_a_carstate_the_live_tick_skipped_counts(self):
+        # The agent passes the button types of the carState messages its tick skipped under SKIPPED_BUTTONS.
+        batches = synth.drive(synth.ticks(200, 100.0, T0), lambda i, t: {"carControl": {"lat": i < 100}})
+        batches[100][SKIPPED_BUTTONS] = (batches[100]["carState"][0], frozenset({"lkas"}))
+        p = Pipeline(PipelineConfig(measures=(SteeringLoss,)))
+        recs = [data for kind, data in synth.run(p, batches) if kind == "steering_loss"]
+        self.assertEqual([(r["cause"], r["evidence"]) for r in recs], [("lkas_button", ["lkas_button"])])
 
     def test_cruise_off_only_counts_when_cruise_was_on(self):
         recs = run(lat_until(10.0, cruise=lambda t: False))  # MADS steering without cruise: no cruise_off
@@ -214,6 +254,58 @@ class TestRoute401MainSwitch(unittest.TestCase):
         p = Pipeline(PipelineConfig(measures=(SteeringLoss,)))
         recs = [data for kind, data in synth.run(p, batches) if kind == "steering_loss"]
         self.assertEqual(recs, [self.EXPECTED])
+
+
+def lkas_case(edge_ns, *, v, press_ms, release_ms, steer_pressed_ms=(), cruise=True, cs_offset_ms=-6.3,
+              span_s=(-10, 20)):
+    """carState and carControl at 100 Hz around a steering edge at `edge_ns` (carControl latActive goes False
+    there and stays off). carState is stamped `cs_offset_ms` from each carControl. The LKAS press and release
+    are each in the one carState nearest their time; `steer_pressed_ms` are (from, to) intervals of hand steering.
+    Returns (stream, t_ns, message) events, the shape a log decoder hands the replay tool."""
+    out = []
+    first = int(round(cs_offset_ms * MS))
+    for k in range(span_s[0] * 100, span_s[1] * 100):
+        t_control = edge_ns + k * 10 * MS
+        out.append(("carControl", t_control, synth.car_control(lat=k < 0)))
+        rel_ms = (k * 10 * MS + first) / MS
+        buttons = None
+        if abs(rel_ms - press_ms) < 5:
+            buttons = (("lkas", True),)
+        elif abs(rel_ms - release_ms) < 5:
+            buttons = (("lkas", False),)
+        pressed = any(a <= rel_ms < b for a, b in steer_pressed_ms)
+        out.append(("carState", t_control + first, synth.car_state(v=v, cruise=cruise, available=True,
+                                                                     pressed=pressed, buttons=buttons)))
+    return out
+
+
+# Route 402 (2026-11-25), decoded rlog, times relative to latActive going False. Segment 12: 20.07 m/s, cruise
+# on, availability on throughout, no pedal; LKAS press in the carState at -6.3 ms, release at +73.8 ms; hand
+# steering blips end about 1 s before.
+ROUTE402_SEG12 = dict(v=20.07, press_ms=-6.3, release_ms=73.8,
+                      steer_pressed_ms=((-2267.0, -2196.1), (-2066.7, -1755.2), (-1276.7, -996.1)))
+ROUTE402_SEG12_RECORD = {"cause": "lkas_button", "evidence": ["lkas_button"], "vMs": 20.1, "windowTruncated": False}
+# Segment 63: 22.81 m/s, cruise on, availability on, no pedal; LKAS press in the carState at -5.3 ms, release at
+# +144.4 ms; hand steering on and off in the 3 s before, the last touch 30 ms long ending 275 ms before the edge
+# (shorter than the driver gate's minimum, so no driver evidence; the real replay agrees).
+ROUTE402_SEG63 = dict(v=22.81, press_ms=-5.3, release_ms=144.4, cs_offset_ms=-5.3,
+                      steer_pressed_ms=((-3000.0, -2186.0), (-2175.0, -2146.2), (-2135.0, -2095.5),
+                                        (-1845.6, -1386.4), (-1355.8, -1315.5), (-1295.0, -1205.8),
+                                        (-1194.3, -1154.6), (-1115.0, -1104.3), (-1065.4, -1026.3),
+                                        (-1014.7, -994.8), (-305.3, -275.1)))
+ROUTE402_SEG63_RECORD = {"cause": "lkas_button", "evidence": ["lkas_button"], "vMs": 22.8, "windowTruncated": False}
+
+
+class TestRoute402LkasButton(unittest.TestCase):
+    """The two route 402 losses the advisor sent as cause none, evidence []. Replay path here; the live agent
+    path (a tick that skips the carState with the press) is in test_agent.py."""
+
+    def test_segment_12_and_63_replay(self):
+        for case, record in ((ROUTE402_SEG12, ROUTE402_SEG12_RECORD), (ROUTE402_SEG63, ROUTE402_SEG63_RECORD)):
+            with self.subTest(vMs=record["vMs"]):
+                out = [m for m in replay_messages(lkas_case(T0 + 20 * SEC, **case)) if m["type"] == "steering_loss"]
+                self.assertEqual([m["data"] for m in out], [record])
+                self.assertEqual(problems(out[0]), [])
 
 
 class TestBlindSpotFlag(unittest.TestCase):

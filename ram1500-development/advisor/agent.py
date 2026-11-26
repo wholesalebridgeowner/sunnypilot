@@ -9,7 +9,9 @@ The advisor's automatic suggestion path remains locked (applier.py).
 
 The agent only builds batches from its sockets: the newest message of each
 stream since the previous tick. Everything after the batch happens in the
-per-drive Pipeline (pipeline.py), which the replay tool uses too.
+per-drive Pipeline (pipeline.py), which the replay tool uses too. The one
+exception: the carState messages a tick skips are read for their button events
+only, because a button press is in a single carState message (samples.SKIPPED_BUTTONS).
 
 A drive, in order:
 
@@ -45,7 +47,7 @@ from owner_apply import OwnerApplier
 from owner_receiver import OwnerReceiver
 import parking_live
 from pipeline import STREAMS, Pipeline, PipelineConfig
-from samples import event_payload, get
+from samples import SKIPPED_BUTTONS, event_payload, get, observed_buttons
 from settings_snapshot import changed_keys, nnlc_model_token, read_settings, reread_watched
 from uplink import Uplink
 
@@ -235,6 +237,22 @@ class Agent:
                                                     nnlc_fuzzy=fuzzy,
                                                     blind_spot=self._decoded(blind_spot_enabled, "car")))
 
+    def _skipped_buttons(self, raws) -> frozenset:
+        """Button types in the carState messages this tick skipped (all but the newest). A press or release is
+        in one carState message only, so the newest alone would miss most of them. Same rules as a Sample: a
+        valid event with canValid True. A message that cannot be decoded is passed over. About 7 us a message
+        on a desktop (route 402 messages, 2026-11-25); measured agent CPU before this: 3.9% mean, 6.2% peak."""
+        names = set()
+        for raw in raws:
+            try:
+                decoded = self.decode("carState", raw)
+            except Exception:
+                continue
+            if len(decoded) > 2 and decoded[2] is False:
+                continue
+            names |= observed_buttons(decoded[1])
+        return frozenset(names)
+
     def _drain(self, now: float) -> None:
         """Empty every socket, decode the newest message of each stream, and hand the batch to the pipeline."""
         batch = {}
@@ -243,7 +261,10 @@ class Agent:
         car_state_unreadable = False
         for stream, sock in self.socks.items():
             newest = None
+            skipped = [] if stream == "carState" else None
             while (raw := sock.receive(non_blocking=True)) is not None:
+                if skipped is not None and newest is not None:
+                    skipped.append(newest)
                 newest = raw
             if newest is None:
                 continue
@@ -267,6 +288,9 @@ class Agent:
                 self.latest_state[stream] = (now, msg, t_ns, valid)
             if stream == "carState":
                 car_state_valid = valid
+                buttons = self._skipped_buttons(skipped)
+                if buttons:
+                    batch[SKIPPED_BUTTONS] = (t_ns, buttons)
         if batch:
             self._send(self.pipeline.ingest_tick(batch))
         if self.parking is not None:

@@ -26,6 +26,8 @@ from measure_swings import WheelSwings
 from pipeline import STREAMS
 from synth import MS, SEC
 from test_measure_set import BLOCKS, drive as eventful_drive, road
+from test_measure_steering_loss import (ROUTE402_SEG12, ROUTE402_SEG12_RECORD, ROUTE402_SEG63, ROUTE402_SEG63_RECORD,
+                                        lkas_case)
 from test_settings_snapshot import BUNDLE
 from uplink import Uplink
 
@@ -472,12 +474,14 @@ class ListeningTests(AgentFixture):
         self.end()
         self.assertEqual(self.uplink.data("steering_loss"), [])
 
-    def test_decodes_only_the_newest_message_of_each_stream(self):
+    def test_decodes_the_newest_message_of_each_stream_and_skipped_car_states_for_buttons(self):
+        # Only the newest message of a stream goes into the batch. The four carState messages before it are
+        # decoded too, for their button events only (a press is in one carState message).
         self.drive()
         for batch in self.ticks(5):
             self.feed(batch)
         self.agent.tick()
-        self.assertEqual(sorted(self.decoded), sorted(synth.EVERY_TICK))
+        self.assertEqual(sorted(self.decoded), sorted(synth.EVERY_TICK + ("carState",) * 4))
         self.assertTrue(all(sock.queue == [] for sock in self.socks.values()))     # and every socket was emptied
 
     def test_a_message_that_cannot_be_decoded_is_that_stream_missing_for_the_tick(self):
@@ -1174,6 +1178,36 @@ class PrivacyTests(AgentFixture):
                     dict(good, driveId="drive on tuesday"), dict(good, id="1795000000"), dict(good, v=1),
                     dict(good, type="note"), dict(good, extra=1), changed(trimmed=["delay"])):
             self.assertNotEqual(schema_v2.problems(bad), [], bad)
+
+
+class LkasButtonLiveTests(AgentFixture):
+    """Route 402 LKAS losses through the live agent: carState at 100 Hz, ticks every 0.1 s. The press is in one
+    carState message, which most tick phases skip; the record must name the button at every phase."""
+
+    def run_case(self, case, phase_ms):
+        self.uplink = FakeUplink()
+        self.agent = self.make_agent()
+        self.drive()
+        edge = T0 + 20 * SEC
+        events = sorted(((t, stream, msg) for stream, t, msg in lkas_case(edge, **case)), key=lambda e: e[0])
+        tick_ns, i = edge - 10 * SEC + int(phase_ms * MS), 0
+        while tick_ns < edge + 20 * SEC:
+            while i < len(events) and events[i][0] <= tick_ns:
+                t_ns, stream, msg = events[i]
+                self.socks[stream].queue.append((t_ns, msg))
+                i += 1
+            self.agent.tick()
+            tick_ns += 100 * MS
+            self.mono.t = round(self.mono.t + 0.1, 6)
+        self.end()
+        return self.uplink.data("steering_loss")
+
+    def test_segments_12_and_63_at_every_tick_phase(self):
+        for case, record in ((ROUTE402_SEG12, ROUTE402_SEG12_RECORD), (ROUTE402_SEG63, ROUTE402_SEG63_RECORD)):
+            for phase_ms in range(0, 100, 10):
+                for extra in (0, 3, 7):
+                    with self.subTest(vMs=record["vMs"], phase_ms=phase_ms + extra):
+                        self.assertEqual(self.run_case(case, phase_ms + extra), [record])
 
 
 if __name__ == "__main__":

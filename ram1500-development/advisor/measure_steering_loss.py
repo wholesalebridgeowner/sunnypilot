@@ -10,6 +10,9 @@ per tick. The evidence window extends 0.3 s before and after the edge. One `stee
                 brake       the brake pedal was down
                 main_off    cruise availability (carState.cruiseState.available) went from on to off inside
                             the window, both readings observed on adjacent Samples with valid CAN data
+                lkas_button the steering-wheel LKAS button was pressed or released inside the window (a
+                            carState button event with valid CAN data; live, also from the carState
+                            messages the agent's tick skipped, counted at the time of that tick)
                 gas         the gas pedal was down
                 cruise_off  the truck's cruise was on just before the edge and off inside the window
                 gear        the gear left Drive
@@ -34,6 +37,14 @@ main-switch button pulse (CRUISE_BUTTONS ACC_OnOff, about 140 ms) began 37 ms be
 availability fell 5 ms before it, and a second pulse brought both back about 1.48 s later. The gas was down
 throughout and was labelled the cause before main_off existed. A brake press still comes first. What this
 sees is the fall of availability, not the button itself; on this truck the proven source is the main switch.
+
+Why lkas_button comes after main_off and before gas. The LKAS button switches MADS steering off directly.
+Case: route 402, segment 12, at 45 mph, no pedal: the LKAS press is in the carState 6 ms before steering
+went off, MADS went to disabled 2 ms before, cruise availability stayed on, the release came 74 ms after.
+It was labelled none before lkas_button existed. Both switches act on MADS directly; main_off stays first
+because it was there first and a press of both inside 0.3 s has not been seen. The owner uses the button on
+purpose, to keep cruise and steer himself (Mark, 2026-11-25), so an lkas_button record is the driver's choice,
+not a fault: the nightly report counts it on its own line and leaves it out of the steering losses.
 """
 from __future__ import annotations
 
@@ -42,7 +53,7 @@ from collections import deque
 from measure_api import Measure
 from shared_rules import LOSS_MIN_SPEED_MS, LOSS_WINDOW_S
 
-CAUSES = ("brake", "main_off", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none")
+CAUSES = ("brake", "main_off", "lkas_button", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none")
 
 
 def _cruise_available(s) -> bool | None:
@@ -57,6 +68,8 @@ def _evidence(g) -> set:
     found = set()
     if s.brake_pressed:
         found.add("brake")
+    if s.lkas_button:
+        found.add("lkas_button")
     if s.gas_pressed:
         found.add("gas")
     if not s.gear_drive:

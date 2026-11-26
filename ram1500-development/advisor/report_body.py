@@ -6,6 +6,7 @@ import statistics
 from collections import Counter
 
 HARD_BRAKE_DROP_MS = 3.0       # m/s lost within one second
+DRIVER_OFF_CAUSE = "lkas_button"   # a deliberate switch-off by the driver, reported apart from losses
 CAUSE_WORDS = {"brake": "with brake pedal down", "main_off": "with cruise main switch turned off",
                "gas": "with gas pedal down", "cruise_off": "with cruise switching off",
                "gear": "out of Drive", "fault": "with a steering fault", "blinker": "with a turn signal on",
@@ -201,11 +202,17 @@ def report_lines(drives: list, closing_line: str) -> list:
         lines.append(f"Steering-limit warning episodes recorded: {warnings}.")
     elif n and legacy_coverage["warnings"] == n:
         lines.append("Steering-limit warning episodes: 0 in received older summaries.")
+    # The owner turns steering off with the lane-keep button on purpose (to keep cruise and steer himself,
+    # 2026-11-25): those records are counted on their own line, never as a loss.
+    by_driver = [row for row in losses if row.get("cause") == DRIVER_OFF_CAUSE]
+    losses = [row for row in losses if row.get("cause") != DRIVER_OFF_CAUSE]
     if losses:
         lines.append(f"Comma steering switched off at about 11 mph or faster: {len(losses)} recorded. "
                      f"Main nearby signal: {_breakdown(losses, 'cause', CAUSE_WORDS)}.")
     elif n and measured["loss"] == n:
         lines.append("Comma steering switched off at about 11 mph or faster: none recorded.")
+    if by_driver:
+        lines.append(f"Driver turned Comma steering off with the lane-keep button: {len(by_driver)}.")
     if changes or old_changes:
         details = []
         completed = [c for c in changes if c.get("outcome") == "completed"]

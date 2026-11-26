@@ -14,6 +14,8 @@ drive and its replay can then only come from the inputs.
 A batch holds the newest message of each stream that arrived since the
 previous batch. Messages come back as (type, data); the caller adds the
 envelope. Nothing crosses drives: build a new Pipeline for every drive.
+A live batch can also hold samples.SKIPPED_BUTTONS: (t_ns, button types) read
+from the carState messages the tick skipped; they go to the tick's Sample.
 
 A message is the decoded body of its stream, read by attribute name (or by
 key, for a dict). For onroadEvents that is the alert list: any iterable of
@@ -28,7 +30,7 @@ from dataclasses import dataclass
 import measure_set
 from gates import GateTracker
 from measure_api import Context, Measure
-from samples import JOINED, StreamJoiner
+from samples import JOINED, SKIPPED_BUTTONS, StreamJoiner
 from shared_rules import DT_CAP_S, FRESH_LEAD_QLOG_S, FRESH_MODEL_QLOG_S, FRESH_S, WINDOW_S
 
 STREAMS = ("carState", "carControl", "controlsState", "carOutput", "radarState", "drivingModelData",
@@ -151,7 +153,9 @@ class Pipeline:
                 self._joiner.offer(stream, t_ns, msg)
         sample = None
         if car is not None:
-            sample = self._joiner.sample(car[0], car[1])       # carState goes last
+            skipped = batch.get(SKIPPED_BUTTONS)
+            sample = self._joiner.sample(car[0], car[1],       # carState goes last
+                                         skipped[1] if skipped is not None else frozenset())
         if sample is None:
             self._joiner.models_after(None)
         else:

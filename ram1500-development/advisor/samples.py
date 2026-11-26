@@ -30,6 +30,10 @@ LANE_CHANGE_DIRECTIONS = {"none": 0, "left": 1, "right": 2}
 GEAR_DRIVE = "drive"
 MODEL_STREAM = "drivingModelData"
 ALERT_STREAM = "onroadEvents"
+# Batch key, not a stream: (t_ns, frozenset of button types) from the carState messages a live tick skipped.
+# A button press or release is in one carState message only; the agent keeps the newest carState of a tick
+# and would miss most of them. Replay batches hold every carState and never carry this key.
+SKIPPED_BUTTONS = "carStateSkippedButtons"
 
 
 def _ns(seconds: float) -> int:
@@ -80,6 +84,20 @@ class _InvalidMeasurement:
         return get(self.payload, name)
 
 
+def observed_buttons(car_state) -> frozenset:
+    """Types of the button events (press or release) of one carState, as strings. Empty for an invalid event,
+    a carState without canValid True, or one that carries no readable button list."""
+    if isinstance(car_state, _InvalidMeasurement) or _observed_bool(get(car_state, "canValid")) is not True:
+        return frozenset()
+    buttons = get(car_state, "buttonEvents")
+    if buttons is None:
+        return frozenset()
+    try:
+        return frozenset(str(get(b, "type")) for b in buttons)
+    except TypeError:
+        return frozenset()
+
+
 def event_payload(event, stream):
     if stream in ("carControl", "carState", "controlsState") and not event.valid:
         if stream == "carControl":
@@ -128,6 +146,8 @@ class Sample:
     control_epoch: int = 0                    # changes when continuity of latActive observations breaks
     cruise_observation: tuple | None = None
     curvature_observation_ns: int | None = None  # original controlsState stamp for pre-lane-change context
+    lkas_button: bool = False                 # an LKAS button press or release: in this carState, or live, in
+                                              # a carState the agent's tick skipped (see SKIPPED_BUTTONS)
 
 
 @dataclass(slots=True)
@@ -216,8 +236,9 @@ class StreamJoiner:
         return held[1]
 
     # --- Samples out --------------------------------------------------------
-    def sample(self, t_ns: int, car_state) -> Sample | None:
-        """The Sample of a new carState; None when it is not new or carries no finite speed."""
+    def sample(self, t_ns: int, car_state, skipped_buttons=frozenset()) -> Sample | None:
+        """The Sample of a new carState; None when it is not new or carries no finite speed.
+        `skipped_buttons`: button types the agent read from the carState messages its tick skipped."""
         if self._last_car_state_ns is not None and t_ns <= self._last_car_state_ns:
             return None
         self._last_car_state_ns = t_ns
@@ -280,6 +301,7 @@ class StreamJoiner:
             lane_change_state=_code(get(model, "meta", "laneChangeState"), LANE_CHANGE_STATES),
             alerts=alerts,
             missing=tuple(short for stream, short in JOINED if found[stream] is None),
+            lkas_button="lkas" in observed_buttons(car_state) or "lkas" in skipped_buttons,
         )
 
     def models_after(self, sample_ns: int | None) -> list:

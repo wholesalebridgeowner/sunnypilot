@@ -182,10 +182,23 @@ class ReportBodyTests(unittest.TestCase):
         self.assertIn("Comma steering switched off at about 11 mph or faster: 2 recorded. Main nearby signal: "
                       "1 with brake pedal down, 1 with cruise main switch turned off.", lines)
 
+    def test_lane_keep_button_is_the_drivers_choice_not_a_loss(self):
+        # Mark, 2026-11-25: "I use the lane keep button so I have cruise but still steer".
+        lines = report_lines([drive(events=[("steering_loss", {"cause": "lkas_button"}),
+                                            ("steering_loss", {"cause": "brake"}),
+                                            ("steering_loss", {"cause": "lkas_button"})])], CLOSE)
+        self.assertIn("Comma steering switched off at about 11 mph or faster: 1 recorded. Main nearby signal: "
+                      "1 with brake pedal down.", lines)
+        self.assertIn("Driver turned Comma steering off with the lane-keep button: 2.", lines)
+        only = report_lines([drive(events=[("steering_loss", {"cause": "lkas_button"})])], CLOSE)
+        self.assertIn("Comma steering switched off at about 11 mph or faster: none recorded.", only)
+        self.assertIn("Driver turned Comma steering off with the lane-keep button: 1.", only)
+        self.assertFalse(any("lane-keep" in line for line in report_lines([drive()], CLOSE)))
+
     def test_no_advice_words(self):
         d = drive(events=[("steering_loss", {"cause": c}) for c in
-                          ("brake", "main_off", "gas", "cruise_off", "gear", "fault", "blinker", "driver", "none",
-                           None)])
+                          ("brake", "main_off", "lkas_button", "gas", "cruise_off", "gear", "fault", "blinker",
+                           "driver", "none", None)])
         text = "\n".join(report_lines([d], CLOSE))
         for word in ADVICE:
             self.assertNotIn(word, text)
